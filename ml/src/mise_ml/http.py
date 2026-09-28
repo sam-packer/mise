@@ -8,7 +8,10 @@ from urllib.parse import urlencode, urlsplit
 import httpx
 
 from mise_ml.config import CACHE, ResolveConfig
-from mise_ml.util import stable_hash
+from mise_ml.log import get, num
+from mise_ml.util import atomic_write, stable_hash
+
+log = get(__name__)
 
 
 class FetchError(RuntimeError):
@@ -26,12 +29,10 @@ IDENTIFIED_HOSTS = {
     "query.wikidata.org",
     "commons.wikimedia.org",
 }
-# The Art Institute of Chicago asks for this header. Without it, Cloudflare answers the
-# IIIF image server with a 403 challenge page.
-HOST_HEADERS = {
-    "api.artic.edu": {"AIC-User-Agent": USER_AGENT},
-    "www.artic.edu": {"AIC-User-Agent": USER_AGENT},
-}
+# The Art Institute of Chicago asks for this header on its API.
+HOST_HEADERS = {"api.artic.edu": {"AIC-User-Agent": USER_AGENT}}
+# After this many failed requests in a row, a host gets no more calls in this run.
+BREAKER_LIMIT = 10
 
 # API errors in a 200 body, by host: (codes to retry with backoff, codes that mean "not found").
 # Deezer 4: over quota; 800: no data (an unknown ISRC). Last.fm 8, 11, 16: temporary;
@@ -82,9 +83,35 @@ class CachedClient:
         self.limiter = RateLimiter(cfg.min_interval, cfg.default_interval)
         self.hits = 0
         self.requests = 0
+        self.failures: dict[str, int] = {}
+        self.guard = threading.Lock()
         self.client = httpx.Client(
             timeout=cfg.timeout, follow_redirects=True, headers={"User-Agent": USER_AGENT}
         )
+
+    def _check(self, url: str) -> str:
+        """The host of url. A host that the breaker stopped raises FetchError at once."""
+        host = urlsplit(url).hostname or ""
+        if self.failures.get(host, 0) >= BREAKER_LIMIT:
+            raise FetchError(f"{host}: stopped for this run after {BREAKER_LIMIT} failures")
+        return host
+
+    def _result(self, host: str, ok: bool) -> None:
+        """Count failures in a row for each host. Any success resets the count.
+
+        A blocked host (Cloudflare, an outage) would otherwise cost minutes of backoff for
+        every item. Its items count as errors, so the next run tries them again.
+        """
+        with self.guard:
+            if ok:
+                self.failures[host] = 0
+                return
+            self.failures[host] = self.failures.get(host, 0) + 1
+            if self.failures[host] == BREAKER_LIMIT:
+                log.warning(
+                    f"{host}: {num(BREAKER_LIMIT)} failed requests in a row; no more calls "
+                    "to it in this run (its items count as errors and the next run retries them)"
+                )
 
     def _path(self, key: str, suffix: str) -> Path:
         host = urlsplit(key).hostname or "unknown"
@@ -158,10 +185,33 @@ class CachedClient:
     ) -> Any | None:
         path = self._path(key, ".json")
         if path.exists():
-            self.hits += 1
-            cached = json.loads(path.read_text(encoding="utf-8"))
-            return cached["body"]
+            try:
+                cached = json.loads(path.read_text(encoding="utf-8"))
+            except ValueError:
+                cached = None  # a file cut short by a hard kill: ask again
+            if cached is not None:
+                self.hits += 1
+                return cached["body"]
+        host = self._check(url)
         self.requests += 1
+        try:
+            body, status = self._json_network(url, headers, secret, post)
+        except FetchError:
+            self._result(host, False)
+            raise
+        self._result(host, True)
+        if post is not None and isinstance(body, dict) and body.get("errors"):
+            return body  # post_json raises; an error answer is never cached
+        atomic_write(path, json.dumps({"url": key, "status": status, "body": body}).encode())
+        return body
+
+    def _json_network(
+        self,
+        url: str,
+        headers: dict[str, str] | None,
+        secret: dict[str, str] | None,
+        post: Any,
+    ) -> tuple[Any, int]:
         retry, not_found = API_ERRORS.get(urlsplit(url).hostname or "", (set(), set()))
         for attempt in range(self.cfg.retries):
             resp = self._fetch(url, headers, secret, post)
@@ -185,14 +235,7 @@ class CachedClient:
             time.sleep(5 * 2**attempt)
         else:
             raise FetchError(f"{url}: API error {body['error']}")
-        if post is not None and isinstance(body, dict) and body.get("errors"):
-            return body  # post_json raises; an error answer is never cached
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps({"url": key, "status": resp.status_code, "body": body}),
-            encoding="utf-8",
-        )
-        return body
+        return body, resp.status_code
 
     def get_bytes(self, url: str) -> bytes | None:
         """Raw bytes, or None for a 404. Anything else raises FetchError.
@@ -202,13 +245,18 @@ class CachedClient:
         miss = self._path(url, ".404")
         if miss.exists():
             return None
-        resp = self._fetch(url)
+        host = self._check(url)
+        try:
+            resp = self._fetch(url)
+            if resp.status_code not in (200, 404) or (resp.status_code == 200 and not resp.content):
+                raise FetchError(f"{url}: HTTP {resp.status_code}, {len(resp.content)} bytes")
+        except FetchError:
+            self._result(host, False)
+            raise
+        self._result(host, True)
         if resp.status_code == 404:
-            miss.parent.mkdir(parents=True, exist_ok=True)
-            miss.write_text("")
+            atomic_write(miss, b"")
             return None
-        if resp.status_code != 200 or not resp.content:
-            raise FetchError(f"{url}: HTTP {resp.status_code}, {len(resp.content)} bytes")
         return resp.content
 
     def close(self) -> None:

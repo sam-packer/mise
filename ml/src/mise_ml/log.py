@@ -7,6 +7,7 @@ logging_redirect_tqdm, so a log line never breaks a bar.
 
 import contextlib
 import logging
+import os
 import shutil
 import time
 from collections.abc import Iterable, Iterator
@@ -147,8 +148,15 @@ def session(step: str) -> Iterator[logging.Logger]:
         try:
             yield log
         except KeyboardInterrupt:
-            log.warning("stopped by the user; a rerun continues where this run stopped")
-            raise SystemExit(130) from None
+            from mise_ml.threads import STOP
+
+            STOP.set()
+            log.warning("stopping; finished work is saved, and a rerun continues from there")
+            log.info("full log: %s", path.relative_to(ML_ROOT).as_posix())
+            logging.shutdown()
+            # Pool threads can sit in a network call or a backoff sleep for a minute, and
+            # the interpreter would wait for them at exit. Every write is safe to cut.
+            os._exit(130)
         except SystemExit:
             raise
         except Exception as e:

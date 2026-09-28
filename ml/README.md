@@ -200,7 +200,10 @@ image, except poems.
   IMDb id. Films run with 8 workers.
 - **song:** Deezer finds the track by ISRC. If that fails, the Deezer search API finds it by
   artist and title. A match needs the same artist and a title that starts with the catalog
-  title, ignoring "(feat. ...)" parts. `resolve` prefers the original album over a live, remix,
+  title, ignoring "(feat. ...)" parts. An artist credit such as "Dave feat. Stormzy" or
+  "Galantis, JVKE" matches when the full credit or the lead artist is the Deezer artist or one
+  of its contributors. So "Simon & Garfunkel" stays whole, and "Tyla feat. Gunna" matches
+  "Tyla". The catalog keeps the full credit as the creator. `resolve` prefers the original album over a live, remix,
   or compilation album, and it rejects another version of the song. Deezer gives the album
   cover, the album name, and the track link, which is the primary link. The Spotify, Apple
   Music, and YouTube links are search URLs for the artist and title. The preview is the path
@@ -217,9 +220,26 @@ image, except poems.
 - **art:** for Met objects, Wikidata gives the Commons image (P18), 200 objects for each
   SPARQL query. `resolve` prefers a file with "MET" in its name, and it downloads the 960 px
   Commons thumbnail. An object without a Commons image gets its image from the Met Collection
-  API. Chicago images come from its IIIF server at 843 px. Cleveland images are the `web`
-  images from its API.
+  API. Chicago images come from Commons too: Wikidata maps the Chicago artwork ID (P4610) to
+  the image, 200 ids for each query. Chicago's own IIIF image server answers this pipeline with
+  a Cloudflare 403, so a Chicago object without a Commons image is dropped
+  (`no_commons_image`). Measured: 546 of the 625 Chicago candidates have one, for a target of
+  500. Cleveland images are the `web` images from its API.
 - **poem:** no media. The primary link is a Poetry Foundation search.
+
+**A blocked host.** After 10 failed requests in a row to one host, `resolve` makes no more
+calls to that host in this run, and it logs one warning. Those items count as errors, and the
+next run tries them again. So one blocked host cannot stall a run.
+
+**Stop and resume.** Press Ctrl+C to stop any step, on Windows too. The step stops in about a
+second, and a rerun continues from there. Every file write is safe to cut: a new file replaces
+the old one only when it is complete. A progress file (`resolved.jsonl`, the LLM caches) can
+end in half a line after a hard kill. The next run skips that line with a warning and redoes
+its work. A damaged image file is fetched again.
+
+**Format.** `data/curated/resolve.meta.json` holds the resolve format. When the format is
+newer than the file, `resolve` removes the drop records that the new code can fix, once. For
+format 2, these are songs without a Deezer match and Chicago art.
 
 Each image becomes a WebP file with 800 px on the long edge. `resolve` records `w`, `h`, and the
 average OKLab `tone`. To resolve some categories only, name them: `uv run mise-ml resolve song`.
