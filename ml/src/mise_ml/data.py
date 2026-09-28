@@ -3,8 +3,8 @@ from typing import Any
 
 import numpy as np
 
-from moodml.color import hex_palette_to_oklab, rgb255_palette_to_oklab
-from moodml.config import (
+from mise_ml.color import hex_palette_to_oklab, rgb255_palette_to_oklab
+from mise_ml.config import (
     CATEGORIES,
     EVAL_FEELINGS,
     PAT,
@@ -13,8 +13,8 @@ from moodml.config import (
     RESOLVED,
     TeacherConfig,
 )
-from moodml.util import hash_fraction, iter_jsonl
-from moodml.vocab import Vocab, labels_path
+from mise_ml.util import hash_fraction, iter_jsonl
+from mise_ml.vocab import Vocab, labels_path
 
 SPLITS = ("train", "val", "heldout", "eval")
 

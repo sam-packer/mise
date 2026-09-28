@@ -8,8 +8,8 @@ import platform
 from pathlib import Path
 from typing import Any
 
-from moodml import config
-from moodml.util import sha256_file, write_json
+from mise_ml import config
+from mise_ml.util import sha256_file, write_json
 
 PACKAGES = (
     "torch",
@@ -84,7 +84,7 @@ def gpu() -> dict[str, Any]:
 
 
 def write_run_json() -> None:
-    from moodml.fetch import load_sources
+    from mise_ml.fetch import load_sources
 
     sources = []
     for src in load_sources():
@@ -109,6 +109,7 @@ def write_run_json() -> None:
     write_json(
         config.RUN_JSON,
         {
+            "project": {"name": "mise-ml", "version": importlib.metadata.version("mise-ml")},
             "seed": config.SEED,
             "python": platform.python_version(),
             "platform": platform.platform(),

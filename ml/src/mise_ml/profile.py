@@ -3,8 +3,8 @@ import functools
 import random
 from typing import Any
 
-from moodml.color import parse_hex
-from moodml.config import (
+from mise_ml.color import parse_hex
+from mise_ml.config import (
     IMG,
     MOODS,
     PAT,
@@ -15,10 +15,10 @@ from moodml.config import (
     SEED,
     ProfileConfig,
 )
-from moodml.data import load_eval_texts
-from moodml.llm import Job, LocalLLM, Record, Request, Unit, sha
-from moodml.util import hash_fraction, iter_jsonl, make_deterministic, sha256_file, word_count
-from moodml.vocab import Vocab, labels_path, load_vocab
+from mise_ml.data import load_eval_texts
+from mise_ml.llm import Job, LocalLLM, Record, Request, Unit, sha
+from mise_ml.util import hash_fraction, iter_jsonl, make_deterministic, sha256_file, word_count
+from mise_ml.vocab import Vocab, labels_path, load_vocab
 
 FEELING_RULES = """A feeling is a sentence about a scene or a moment, 6 to 30 words, lower case, \
 casual, in the first person or as a scene. Examples:
@@ -29,7 +29,7 @@ casual, in the first person or as a scene. Examples:
 Never write a bare list of mood words such as "calm, cozy, nostalgic". Never name a title, \
 an artist, or a genre."""
 
-ITEM_SYSTEM = f"""You write mood profiles for a moodboard app. A user types a feeling. \
+ITEM_SYSTEM = f"""You write mood profiles for mise, a mood app. A user types a feeling. \
 The app answers with a film, a book, a song, a poem, and an artwork that fit it.
 
 {FEELING_RULES}
@@ -42,21 +42,22 @@ setting, the pace, and the colors and light it suggests. Do not retell the plot.
 - q1, q2, q3: three different feelings a person might type when this work is the right \
 answer. Follow the feeling rules. Use three different situations."""
 
-MOODS_SYSTEM = f"""You write feelings that people type into a moodboard app.
+MOODS_SYSTEM = f"""You write feelings that people type into mise, a mood app.
 
 {FEELING_RULES}
 
 Write varied, specific, believable moments. Mix quiet and loud, happy and sad, ordinary and \
 rare. Do not repeat a structure twice in a row."""
 
-PAT_SYSTEM = f"""You turn short color-palette names into feelings for a moodboard app.
+PAT_SYSTEM = f"""You turn short color-palette names into feelings for mise, a mood app.
 
 {FEELING_RULES}
 
 For each numbered palette name, write one feeling that a person could type when that palette \
 is the right answer. Keep the mood of the name, but write a moment, not a description of colors."""
 
-LABEL_SYSTEM = """You design the look of a moodboard page for a feeling that a user typed.
+LABEL_SYSTEM = """You design the look of a page in mise, a mood app, for a feeling that a \
+user typed.
 
 For each numbered feeling, choose:
 - c1 to c5: a palette of five colors as #rrggbb, in dominance order. c1 is the page \

@@ -1,4 +1,4 @@
-# Raw sources for `uv run moodml fetch`. Paths are relative to data/raw/.
+# Raw sources for `uv run mise-ml fetch`. Paths are relative to data/raw/.
 # fetch downloads each missing file and checks its size and SHA-256.
 # A mismatch stops fetch: the source changed upstream.
 # Nothing under data/ is committed. fetch rebuilds it from these sources.

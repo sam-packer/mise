@@ -1,28 +1,45 @@
-# moodml
+# mise-ml
 
-This package builds the real mood bundle for moodboard. It downloads public datasets, curates a
-catalog, finds images and links, labels everything with a local LLM, trains a Qwen3 teacher,
-distills it into a small MiniLM student, and writes the bundle to `out/bundle/` in the format of
-spec §4.
+This package builds the real mood bundle for mise. It downloads public datasets, curates a
+catalog, finds images and links, labels everything with a local LLM, trains a teacher, distills
+it into a small student, and writes the bundle to `out/bundle/` in the format of spec §4.
+
+The pipeline uses three models. All three run on your GPU and are pinned to a revision:
+
+| Model | Role | Trained? |
+|---|---|---|
+| `Qwen/Qwen3.5-9B` | the labeler: writes item profiles, feelings, palettes, and labels | no |
+| `Qwen/Qwen3-Embedding-8B` | the teacher backbone: turns each text into a 4,096-value embedding | no, frozen |
+| `sentence-transformers/all-MiniLM-L6-v2` | the student: the only model that ships to the browser | yes, fully |
+
+The teacher is the embedding backbone plus small trained heads. Similarity ranking is the job
+the embedding model is built for. The student learns to copy the teacher and fits in 24 MiB.
 
 ## Reproduce
 
-You need an NVIDIA GPU with about 24 GB or more (the defaults suit an RTX 5090 with 32 GB), uv,
-and an internet connection. You need no API key and no account.
+You need an NVIDIA GPU with 32 GB (the defaults suit an RTX 5090), uv, about 60 GB of free
+disk (estimate), and an internet connection. You need no API key and no account.
 
 ```
 uv sync
-uv run moodml all
+uv run mise-ml all
 ```
 
 `all` runs every step in order. Each step skips work that is already done, so you can stop
-`all` at any time and start it again. When it ends, copy `out/bundle/` over
-`../static/bundle/`.
+`all` at any time and start it again. No step needs an argument.
 
 Before `all` starts, it checks for a CUDA GPU, for `../scripts/stub/vocab.json`, and for
 `eval_feelings.jsonl`. It names each missing item and stops before any long work.
 
-To run one step, use `uv run moodml <step>`. `uv run moodml --help` lists the steps.
+At the end, `all` checks the ship rule (see "eval" below):
+
+- If the student passes, `all` runs `install`, which puts the new bundle into
+  `../static/bundle/`. The web app then uses it.
+- If the student fails, `all` stops. It prints why and the path of `out/eval_report.json`. To
+  use the student anyway, run `uv run mise-ml install`.
+
+To run one step, use `uv run mise-ml <step>`. To see the steps in run order, run
+`uv run mise-ml` with no step.
 
 ## Steps
 
@@ -34,11 +51,12 @@ The times are estimates for an RTX 5090, except where the text says "measured".
 | `curate` | `data/raw/` | `data/curated/catalog.jsonl`, `pat.jsonl` | 12 s (measured) |
 | `resolve` | `catalog.jsonl` | `data/curated/resolved.jsonl`, `data/img/` | about 3 h |
 | `profile` | `resolved.jsonl`, `eval_feelings.jsonl`, vocab | `data/curated/profiles.jsonl`, `moods.jsonl`, `pat_sentences.jsonl`, `labels-<vocab>.jsonl` | 4–10 h |
-| `train-teacher` | the curated files | `data/models/teacher.pt`, `teacher_outputs.pt` | 20–40 min |
+| `train-teacher` | the curated files | `data/models/teacher.pt`, `teacher_outputs.pt` | 30–60 min |
 | `train-student` | teacher outputs | `data/models/student/` | 20–40 min |
 | `export` | student, curated files, images | `out/bundle/` | 5 min |
 | `eval --judge` | teacher, student, bundle | `data/curated/judgments.jsonl` | 1–2 h |
 | `eval` | all of the above | `out/eval_report.json`, `out/run.json` | 5 min |
+| `install` | `out/bundle/` | `../static/bundle/` | seconds |
 
 ### fetch
 
@@ -108,7 +126,7 @@ drops items without an image, except poems.
 - **poem:** no media. The primary link is a Poetry Foundation search.
 
 Each image becomes a WebP file with 800 px on the long edge. `resolve` records `w`, `h`, and the
-average OKLab `tone`. To resolve some categories only, name them: `uv run moodml resolve song`.
+average OKLab `tone`. To resolve some categories only, name them: `uv run mise-ml resolve song`.
 
 ### profile (§9.2)
 
@@ -145,10 +163,18 @@ differ from an uninterrupted run.
 
 ### train-teacher (§9.3)
 
-- The backbone is `Qwen/Qwen3-0.6B`, frozen, in bf16, at a pinned revision. Each text goes into
-  a fixed prompt template. The feature is the mean of the final hidden states and the last-token
-  state, concatenated (2,048 values). `data/features/` caches the features by text, so a second
-  run encodes only new texts.
+- The backbone is `Qwen/Qwen3-Embedding-8B`, frozen, in bf16 (about 15 GB of weights), at a
+  pinned revision. It loads with `AutoModel`. The encoding follows the model card:
+  - A query (a feeling) gets a one-sentence instruction:
+    `Instruct: Given a feeling someone describes as a scene or a moment, retrieve films, books,
+    songs, poems, and artworks that share its mood\nQuery:<feeling>`.
+  - An item text gets no instruction.
+  - The tokenizer adds `<|endoftext|>` at the end and pads on the left. The feature is the
+    hidden state of that last token (4,096 values), L2-normalized.
+- `data/features/` caches the features by text. The file names hold the model id and revision,
+  so features from another backbone are never reused. A second run encodes only new texts.
+- The feature pass encodes about 60,000–75,000 texts, in batches of 64, at most 256 tokens
+  each. Estimate: 15–40 min on an RTX 5090. The head training after it takes 5–15 min.
 - The retrieval heads project queries and items to 384 dims. The loss is InfoNCE with in-batch
   negatives. After the first 3 epochs, each query also gets 8 hard negatives from the top 50
   items of its own category. The step mines them again at the start of each epoch.
@@ -178,6 +204,12 @@ differ from an uninterrupted run.
   `model/` (the model and the tokenizer files), `items.json`, `vectors.bin`, `vocab.json`, and
   `img/`. The int8 graph computes the item vectors, so items and queries use one code path.
   Songs carry `album`. The manifest version is a hash of the model and the vectors.
+
+### install
+
+`install` copies `out/bundle/` to a new folder next to `../static/bundle/`. When the copy is
+complete, it swaps the new folder in and deletes the old one. So a failed copy never leaves half
+a bundle. It prints the manifest version and the item count of each category.
 
 ### eval (§9.5)
 
@@ -222,10 +254,14 @@ JSON object per line with one field, `text`:
   cuDNN, and `CUBLAS_WORKSPACE_CONFIG=:4096:8`. A small check ran every training op (MiniLM
   forward and backward with SDPA attention, the teacher heads, hard-negative mining, the losses)
   twice in strict mode. No op raised an error, and the gradient sums matched exactly.
-- Two paths use warn-only mode, because nobody has run them in strict mode yet: the Qwen3.5
-  generate path (`profile`, `eval --judge`) and the frozen Qwen3 feature pass. Warn-only mode
-  keeps the deterministic kernels and prints a warning for an op that has none.
-- The Hugging Face models are pinned to a revision in `src/moodml/config.py`.
+- The teacher feature pass runs in strict mode too. Qwen3-Embedding-8B is a standard
+  transformer with SDPA attention and no linear-attention layers, so the Triton kernel caveat
+  of Qwen3.5 does not apply. A strict-mode forward of a small random Qwen3 model, with left
+  padding and last-token pooling, ran twice and gave identical results.
+- The Qwen3.5 generate path (`profile`, `eval --judge`) uses warn-only mode, because nobody has
+  run it in strict mode yet. Warn-only mode keeps the deterministic kernels and prints a warning
+  for an op that has none.
+- The Hugging Face models are pinned to a revision in `src/mise_ml/config.py`.
 - `out/run.json` records the seed, the Python and package versions, the GPU, the model ids and
   revisions, all configs, the SHA-256 of each source and each curated file, the PoetryDB content
   hash, the bundle files, and the ship decision.
@@ -234,7 +270,7 @@ JSON object per line with one field, `text`:
 
 ## Configuration
 
-The defaults are dataclasses in `src/moodml/config.py`: `CurateConfig`, `ResolveConfig`,
+The defaults are dataclasses in `src/mise_ml/config.py`: `CurateConfig`, `ResolveConfig`,
 `ProfileConfig`, `TeacherConfig`, `StudentConfig`, and `ExportConfig`. Change a value there to
 change a run. If `profile` runs out of GPU memory, lower `ProfileConfig.batch_size`.
 

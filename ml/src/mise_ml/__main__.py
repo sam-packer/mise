@@ -1,17 +1,18 @@
 import argparse
 
-from moodml.config import CATEGORIES
+from mise_ml.config import CATEGORIES
 
 STEPS = {
     "fetch": "download the raw sources and verify their checksums",
     "curate": "apply the curation rules; write data/curated/catalog.jsonl",
     "resolve": "resolve media and links, download images (cached, resumable)",
     "profile": "local LLM pass: item profiles, moods, PAT sentences, labels (resumable)",
-    "train-teacher": "cache Qwen3 features and train the teacher heads",
+    "train-teacher": "cache Qwen3-Embedding-8B features and train the teacher heads",
     "train-student": "distill the teacher into MiniLM",
     "export": "export ONNX, quantize, and write out/bundle",
     "eval": "report recall@10, palette delta E, choice accuracy, latency; write out/run.json",
-    "all": "run every step in order and skip work that is already done",
+    "install": "copy out/bundle into ../static/bundle for the web app",
+    "all": "run every step above in order, skip finished work, install if the student ships",
 }
 
 
@@ -19,7 +20,7 @@ def preflight() -> None:
     """Name everything that is missing before hours of work start."""
     import torch
 
-    from moodml.config import EVAL_FEELINGS, VOCAB_PATH
+    from mise_ml.config import EVAL_FEELINGS, VOCAB_PATH
 
     problems = []
     if not torch.cuda.is_available():
@@ -34,12 +35,23 @@ def preflight() -> None:
 
 
 def run_all() -> None:
-    from moodml import curate, evaluate, export, fetch, profile, resolve, student, teacher
-    from moodml import provenance as pv
-    from moodml.config import (
+    from mise_ml import (
+        curate,
+        evaluate,
+        export,
+        fetch,
+        install,
+        profile,
+        resolve,
+        student,
+        teacher,
+    )
+    from mise_ml import provenance as pv
+    from mise_ml.config import (
         BUNDLE,
         CATALOG,
         EVAL_FEELINGS,
+        EVAL_REPORT,
         MODELS,
         PAT,
         PAT_SENTENCES,
@@ -52,7 +64,7 @@ def run_all() -> None:
         StudentConfig,
         TeacherConfig,
     )
-    from moodml.vocab import labels_path, load_vocab
+    from mise_ml.vocab import labels_path, load_vocab
 
     preflight()
     fetch.run()
@@ -93,12 +105,21 @@ def run_all() -> None:
     print("== eval --judge")
     evaluate.judge()
     print("== eval")
-    evaluate.run()
+    report = evaluate.run()
+    if not report["ship"]["ok"]:
+        gap = report["ship"]["gap"] * 100
+        raise SystemExit(
+            f"Stop: the student is {gap:.1f} points below the teacher on {report['ship']['metric']}"
+            f" (the limit is 5), so `all` does not install it.\nReport: {EVAL_REPORT}\n"
+            "To use the student anyway, run: uv run mise-ml install"
+        )
+    print("== install")
+    install.run()
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="moodml", description="moodboard ML pipeline")
-    sub = parser.add_subparsers(dest="step", required=True, metavar="step")
+    parser = argparse.ArgumentParser(prog="mise-ml", description="mise ML pipeline")
+    sub = parser.add_subparsers(dest="step", metavar="step")
     for name, text in STEPS.items():
         p = sub.add_parser(name, help=text, description=text)
         if name == "resolve":
@@ -110,17 +131,23 @@ def main() -> None:
     args = parser.parse_args()
 
     match args.step:
+        case None:
+            print("usage: uv run mise-ml <step>   (no step needs an argument)\n")
+            print("Steps, in run order:")
+            for name, text in STEPS.items():
+                print(f"  {name:<14} {text}")
+            print("\nFrom zero: uv sync, then uv run mise-ml all")
         case "all":
             run_all()
         case "resolve":
-            from moodml import resolve
+            from mise_ml import resolve
 
             unknown = set(args.categories) - set(CATEGORIES)
             if unknown:
                 parser.error(f"unknown categories: {', '.join(sorted(unknown))}")
             resolve.run(args.categories or None)
         case "eval":
-            from moodml import evaluate
+            from mise_ml import evaluate
 
             if args.judge:
                 evaluate.judge()
@@ -131,7 +158,7 @@ def main() -> None:
             module = {"train-teacher": "teacher", "train-student": "student"}.get(
                 args.step, args.step
             )
-            importlib.import_module(f"moodml.{module}").run()
+            importlib.import_module(f"mise_ml.{module}").run()
 
 
 if __name__ == "__main__":

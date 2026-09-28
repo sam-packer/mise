@@ -10,7 +10,7 @@ from urllib.parse import quote_plus
 import numpy as np
 import pandas as pd
 
-from moodml.config import (
+from mise_ml.config import (
     CATALOG,
     MUSE_KAGGLE,
     MUSE_ZENODO,
@@ -20,7 +20,7 @@ from moodml.config import (
     SPOTIFY_TRACKS,
     CurateConfig,
 )
-from moodml.util import slugify, write_jsonl
+from mise_ml.util import slugify, write_jsonl
 
 TITLE_YEAR_RE = re.compile(r"^(.*?)\s*\((\d{4})\)\s*$")
 TRAILING_ARTICLE_RE = re.compile(r"^(.*), (The|A|An|Les|La|Le|L'|Il|El|Die|Das|Der)$")

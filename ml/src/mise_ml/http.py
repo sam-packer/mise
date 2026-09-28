@@ -7,15 +7,15 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from moodml.config import CACHE, ResolveConfig
-from moodml.util import stable_hash
+from mise_ml.config import CACHE, ResolveConfig
+from mise_ml.util import stable_hash
 
 
 class FetchError(RuntimeError):
     pass
 
 
-USER_AGENT = "moodboard-catalog/0.1 (class project; me@telesphoreo.me)"
+USER_AGENT = "mise-catalog/0.1 (class project; me@telesphoreo.me)"
 
 
 class RateLimiter:

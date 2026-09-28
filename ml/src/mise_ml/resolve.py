@@ -11,10 +11,10 @@ import numpy as np
 from PIL import Image
 from tqdm import tqdm
 
-from moodml.color import image_tone
-from moodml.config import CATALOG, CATEGORIES, IMG, RESOLVE_DROPPED, RESOLVED, ResolveConfig
-from moodml.http import CachedClient
-from moodml.util import append_jsonl, iter_jsonl, sort_jsonl
+from mise_ml.color import image_tone
+from mise_ml.config import CATALOG, CATEGORIES, IMG, RESOLVE_DROPPED, RESOLVED, ResolveConfig
+from mise_ml.http import CachedClient
+from mise_ml.util import append_jsonl, iter_jsonl, sort_jsonl
 
 Record = dict[str, Any]
 Result = tuple[Record | None, str]

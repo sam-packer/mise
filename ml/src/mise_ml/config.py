@@ -99,10 +99,10 @@ class ProfileConfig:
 
 @dataclass(frozen=True)
 class TeacherConfig:
-    backbone: str = "Qwen/Qwen3-0.6B"
-    revision: str = "c1899de289a04d12100db370d81485cdf75e47ca"
-    max_length: int = 160
-    encode_batch: int = 256
+    backbone: str = "Qwen/Qwen3-Embedding-8B"
+    revision: str = "1d8ad4ca9b3dd8059ad90a75d4983776a23d44af"
+    max_length: int = 256
+    encode_batch: int = 64
     dims: int = 384
     hidden: int = 1024
     dropout: float = 0.1

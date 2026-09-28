@@ -1,4 +1,5 @@
 import dataclasses
+import gc
 
 import numpy as np
 import torch
@@ -6,12 +7,12 @@ import torch.nn.functional as F
 from torch import nn
 from tqdm import tqdm
 
-from moodml.config import MODELS, SEED, TeacherConfig
-from moodml.data import load_catalog, load_queries, recall_at_k
-from moodml.features import ITEM_TEMPLATE, QUERY_TEMPLATE, FeatureStore, shared_encoder
-from moodml.heads import ChoiceHeads, Mlp, palette_loss
-from moodml.util import make_deterministic
-from moodml.vocab import load_vocab
+from mise_ml.config import MODELS, SEED, TeacherConfig
+from mise_ml.data import load_catalog, load_queries, recall_at_k
+from mise_ml.features import ITEM_TEMPLATE, QUERY_TEMPLATE, FeatureStore, shared_encoder
+from mise_ml.heads import ChoiceHeads, Mlp, palette_loss
+from mise_ml.util import make_deterministic
+from mise_ml.vocab import load_vocab
 
 CHECKPOINT = MODELS / "teacher.pt"
 OUTPUTS = MODELS / "teacher_outputs.pt"
@@ -32,11 +33,11 @@ class Teacher(nn.Module):
 
 
 def query_store(cfg: TeacherConfig) -> FeatureStore:
-    return FeatureStore("qwen-queries", QUERY_TEMPLATE, cfg)
+    return FeatureStore("queries", QUERY_TEMPLATE, cfg)
 
 
 def item_store(cfg: TeacherConfig) -> FeatureStore:
-    return FeatureStore("qwen-items", ITEM_TEMPLATE, cfg)
+    return FeatureStore("items", ITEM_TEMPLATE, cfg)
 
 
 def load_teacher() -> tuple[Teacher, dict]:
@@ -68,6 +69,7 @@ class Trainer:
         )
         self.fq = torch.tensor(query_store(cfg).get(self.qs.texts), dtype=torch.float32, device=dev)
         shared_encoder.cache_clear()
+        gc.collect()
         torch.cuda.empty_cache()
 
         def t(a: np.ndarray) -> torch.Tensor:

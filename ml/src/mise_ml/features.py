@@ -1,4 +1,9 @@
-"""Frozen Qwen3 features, computed once and cached on disk by text."""
+"""Frozen Qwen3-Embedding features, computed once and cached on disk by text.
+
+The encoding follows the Qwen3-Embedding model card: queries get a one-sentence
+instruction, documents (items) get none, the tokenizer appends <|endoftext|>, padding is on
+the left, the feature is the last-token hidden state, and it is L2-normalized.
+"""
 
 import functools
 import json
@@ -6,20 +11,19 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 
-from moodml.config import FEATURES, TeacherConfig
-from moodml.util import warn_only_determinism
+from mise_ml.config import FEATURES, TeacherConfig
+from mise_ml.util import slugify
 
-QUERY_TEMPLATE = (
-    "Instruct: Imagine this moment. Think of its colors, its light, its sound, and the films, "
-    "books, songs, poems and paintings that feel like it.\nMoment: {text}\nFeeling:"
+QUERY_TASK = (
+    "Given a feeling someone describes as a scene or a moment, retrieve films, books, songs, "
+    "poems, and artworks that share its mood"
 )
-ITEM_TEMPLATE = (
-    "Instruct: Imagine this work. Think of its colors, its light, its sound, and the moments "
-    "in a life that feel like it.\nWork: {text}\nFeeling:"
-)
+QUERY_TEMPLATE = f"Instruct: {QUERY_TASK}\nQuery:{{text}}"
+ITEM_TEMPLATE = "{text}"
 
 
 class QwenEncoder:
@@ -36,12 +40,11 @@ class QwenEncoder:
 
     @torch.inference_mode()
     def encode(self, texts: list[str], template: str) -> np.ndarray:
-        """Mean of the final hidden states concatenated with the last-token state."""
-        order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
-        dim = self.model.config.hidden_size * 2
-        out = np.zeros((len(texts), dim), dtype=np.float16)
+        """Last-token pooling with left padding, then L2 normalization."""
+        order = sorted(range(len(texts)), key=lambda i: (len(texts[i]), texts[i]))
+        out = np.zeros((len(texts), self.model.config.hidden_size), dtype=np.float16)
         step = self.cfg.encode_batch
-        for start in tqdm(range(0, len(order), step), desc="qwen features"):
+        for start in tqdm(range(0, len(order), step), desc="embedding features"):
             idx = order[start : start + step]
             batch = self.tokenizer(
                 [template.format(text=texts[i]) for i in idx],
@@ -50,11 +53,9 @@ class QwenEncoder:
                 max_length=self.cfg.max_length,
                 return_tensors="pt",
             ).to("cuda")
-            hidden = self.model(**batch).last_hidden_state.float()
-            mask = batch["attention_mask"].unsqueeze(-1).float()
-            mean = (hidden * mask).sum(1) / mask.sum(1)
-            last = hidden[:, -1]
-            out[idx] = torch.cat([mean, last], dim=-1).cpu().numpy().astype(np.float16)
+            hidden = self.model(**batch, use_cache=False).last_hidden_state
+            last = F.normalize(hidden[:, -1].float(), p=2, dim=-1)
+            out[idx] = last.cpu().numpy().astype(np.float16)
         return out
 
 
@@ -64,13 +65,18 @@ def shared_encoder(cfg: TeacherConfig) -> QwenEncoder:
 
 
 class FeatureStore:
-    """One array file plus a text list per template. Missing texts are encoded on demand."""
+    """One array file plus a text list per template. Missing texts are encoded on demand.
+
+    The file name holds the model id and revision, so features of another backbone are
+    never reused.
+    """
 
     def __init__(self, name: str, template: str, cfg: TeacherConfig) -> None:
         self.template = template
         self.cfg = cfg
-        self.array_path: Path = FEATURES / f"{name}.npy"
-        self.text_path: Path = FEATURES / f"{name}.json"
+        stem = f"{slugify(cfg.backbone)}-{cfg.revision[:12]}-{name}"
+        self.array_path: Path = FEATURES / f"{stem}.npy"
+        self.text_path: Path = FEATURES / f"{stem}.json"
 
     def _load(self) -> tuple[list[str], np.ndarray | None]:
         if not self.array_path.exists():
@@ -83,8 +89,7 @@ class FeatureStore:
         index = {t: i for i, t in enumerate(known)}
         missing = list(dict.fromkeys(t for t in texts if t not in index))
         if missing:
-            with warn_only_determinism():
-                new = shared_encoder(self.cfg).encode(missing, self.template)
+            new = shared_encoder(self.cfg).encode(missing, self.template)
             array = new if array is None else np.concatenate([array, new])
             for t in missing:
                 index[t] = len(index)

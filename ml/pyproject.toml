@@ -1,7 +1,7 @@
 [project]
-name = "moodml"
+name = "mise-ml"
 version = "0.1.0"
-description = "Catalog pipeline and teacher-student mood model for moodboard"
+description = "Catalog pipeline and teacher-student mood model for mise"
 readme = "README.md"
 authors = [
     { name = "Telesphoreo", email = "me@telesphoreo.me" }
@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.scripts]
-moodml = "moodml.__main__:main"
+mise-ml = "mise_ml.__main__:main"
 
 [build-system]
 requires = ["uv_build>=0.12.1,<0.13.0"]

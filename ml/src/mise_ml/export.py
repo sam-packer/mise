@@ -11,11 +11,11 @@ import torch
 from onnxruntime.quantization import QuantType, quantize_dynamic
 from transformers import PreTrainedTokenizerBase
 
-from moodml.config import BUNDLE, IMG, OUT, SEED, VOCAB_PATH, ExportConfig, StudentConfig
-from moodml.data import Catalog, load_catalog
-from moodml.student import OUTPUT_NAMES, STUDENT_DIR, Student, load_student
-from moodml.util import make_deterministic, sha256_file, write_json
-from moodml.vocab import load_vocab
+from mise_ml.config import BUNDLE, IMG, OUT, SEED, VOCAB_PATH, ExportConfig, StudentConfig
+from mise_ml.data import Catalog, load_catalog
+from mise_ml.student import OUTPUT_NAMES, STUDENT_DIR, Student, load_student
+from mise_ml.util import make_deterministic, sha256_file, write_json
+from mise_ml.vocab import load_vocab
 
 INPUT_NAMES = ("input_ids", "attention_mask", "token_type_ids")
 ITEM_FIELDS = (
@@ -164,7 +164,7 @@ def write_bundle(
     absent = [n for n in names if not (IMG / n).exists()]
     if absent:
         raise SystemExit(
-            f"{len(absent)} images are missing from {IMG}; run `uv run moodml resolve`"
+            f"{len(absent)} images are missing from {IMG}; run `uv run mise-ml resolve`"
         )
     problems = validate_items(items)
     if problems:

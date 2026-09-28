@@ -1,4 +1,3 @@
-import contextlib
 import hashlib
 import json
 import os
@@ -97,20 +96,3 @@ def make_deterministic(seed: int, warn_only: bool = False) -> None:
 
 def word_count(text: str) -> int:
     return len(text.split())
-
-
-@contextlib.contextmanager
-def warn_only_determinism() -> Iterator[None]:
-    """Keep deterministic kernels but only warn for ops that lack one.
-
-    For the forward-only passes of large models that were never run in strict mode here.
-    """
-    import torch
-
-    enabled = torch.are_deterministic_algorithms_enabled()
-    warn = torch.is_deterministic_algorithms_warn_only_enabled()
-    torch.use_deterministic_algorithms(enabled, warn_only=True)
-    try:
-        yield
-    finally:
-        torch.use_deterministic_algorithms(enabled, warn_only=warn)

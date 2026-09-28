@@ -10,12 +10,12 @@ from torch import nn
 from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
 
-from moodml.config import MODELS, SEED, StudentConfig
-from moodml.data import load_catalog, recall_at_k
-from moodml.heads import ChoiceHeads, kl_logits
-from moodml.teacher import OUTPUTS as TEACHER_OUTPUTS
-from moodml.util import make_deterministic
-from moodml.vocab import load_vocab
+from mise_ml.config import MODELS, SEED, StudentConfig
+from mise_ml.data import load_catalog, recall_at_k
+from mise_ml.heads import ChoiceHeads, kl_logits
+from mise_ml.teacher import OUTPUTS as TEACHER_OUTPUTS
+from mise_ml.util import make_deterministic
+from mise_ml.vocab import load_vocab
 
 STUDENT_DIR = MODELS / "student"
 OUTPUT_NAMES = ("embedding", "palette", "light", "typeface", "scent")

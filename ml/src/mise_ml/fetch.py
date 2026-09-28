@@ -9,9 +9,9 @@ from urllib.parse import quote
 import httpx
 from tqdm import tqdm
 
-from moodml.config import RAW, SOURCES, CurateConfig, ResolveConfig
-from moodml.http import USER_AGENT, CachedClient, FetchError
-from moodml.util import sha256_file, write_jsonl
+from mise_ml.config import RAW, SOURCES, CurateConfig, ResolveConfig
+from mise_ml.http import USER_AGENT, CachedClient, FetchError
+from mise_ml.util import sha256_file, write_jsonl
 
 POETRYDB = "https://poetrydb.org"
 

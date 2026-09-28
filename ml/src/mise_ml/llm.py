@@ -19,8 +19,8 @@ from PIL import Image
 from tqdm import tqdm
 from transformers import AutoModelForImageTextToText, AutoProcessor, LogitsProcessor
 
-from moodml.config import DATA, ProfileConfig
-from moodml.util import append_jsonl, iter_jsonl, write_jsonl
+from mise_ml.config import DATA, ProfileConfig
+from mise_ml.util import append_jsonl, iter_jsonl, write_jsonl
 
 Record = dict[str, Any]
 LLM_CACHE = DATA / "llm"

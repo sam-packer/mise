@@ -1,3 +1,4 @@
+import gc
 import statistics
 import time
 from collections import defaultdict
@@ -8,7 +9,7 @@ import numpy as np
 import torch
 from transformers import AutoModel, AutoTokenizer
 
-from moodml.config import (
+from mise_ml.config import (
     BUNDLE,
     CATEGORIES,
     EVAL_REPORT,
@@ -18,11 +19,11 @@ from moodml.config import (
     StudentConfig,
     TeacherConfig,
 )
-from moodml.data import Catalog, load_catalog, load_eval_texts, load_queries, recall_at_k
-from moodml.export import onnx_run, onnx_session
-from moodml.features import shared_encoder
-from moodml.llm import Job, Record, Request, Unit, sha
-from moodml.profile import (
+from mise_ml.data import Catalog, load_catalog, load_eval_texts, load_queries, recall_at_k
+from mise_ml.export import onnx_run, onnx_session
+from mise_ml.features import shared_encoder
+from mise_ml.llm import Job, Record, Request, Unit, sha
+from mise_ml.profile import (
     FEELING_RULES,
     array_of,
     chunks,
@@ -31,16 +32,16 @@ from moodml.profile import (
     obj,
     parse_numbered,
 )
-from moodml.provenance import write_run_json
-from moodml.student import Student, encode_texts, load_student
-from moodml.teacher import item_store, load_teacher, query_store
-from moodml.util import iter_jsonl, make_deterministic, write_json
-from moodml.vocab import load_vocab
+from mise_ml.provenance import write_run_json
+from mise_ml.student import Student, encode_texts, load_student
+from mise_ml.teacher import item_store, load_teacher, query_store
+from mise_ml.util import iter_jsonl, make_deterministic, write_json
+from mise_ml.vocab import load_vocab
 
 SHIP_MARGIN = 0.05
 SEP = "\x1f"
 
-JUDGE_SYSTEM = f"""You judge picks for a moodboard app. A user typed a feeling, and the app \
+JUDGE_SYSTEM = f"""You judge picks for mise, a mood app. A user typed a feeling, and the app \
 shows works that should feel like it.
 
 {FEELING_RULES}
@@ -142,7 +143,8 @@ def judge() -> None:
         top_by_category(student_outputs(texts, catalog)[0], catalog, k),
         top_by_category(baseline_outputs(texts, catalog), catalog, k),
     ]
-    shared_encoder.cache_clear()
+    shared_encoder.cache_clear()  # free the 8B teacher before the 9B labeler loads
+    gc.collect()
     torch.cuda.empty_cache()
     keys = [
         SEP.join((text, cat, catalog.items[i]["id"]))
@@ -211,7 +213,7 @@ def label_metrics(out: Outputs, rows: np.ndarray, qs: Any, offset: int) -> dict[
     return metrics
 
 
-def run() -> None:
+def run() -> dict[str, Any]:
     make_deterministic(SEED)
     vocab = load_vocab()
     catalog = load_catalog()
@@ -264,3 +266,4 @@ def run() -> None:
     verdict = "SHIP" if report["ship"]["ok"] else "DO NOT SHIP"
     print(f"{verdict}: teacher - student {key} = {gap * 100:.1f} points (limit 5) -> {EVAL_REPORT}")
     write_run_json()
+    return report

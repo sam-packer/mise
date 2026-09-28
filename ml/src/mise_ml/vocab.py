@@ -3,7 +3,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from moodml.config import CURATED, VOCAB_PATH
+from mise_ml.config import CURATED, VOCAB_PATH
 
 LIGHT_NOTES = {
     "dawn": "pale first light, soft pink and blue",
