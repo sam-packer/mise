@@ -4,8 +4,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
 from mise_ml import log as logs
-from mise_ml.config import CATEGORIES
+from mise_ml.config import CATEGORIES, ML_ROOT
 
 STEPS = {
     "fetch": "download the raw sources and verify their checksums",
@@ -145,6 +147,8 @@ def print_steps() -> None:
 
 
 def main() -> None:
+    # API keys live in ml/.env (see ml/.env.example). A variable set in the shell wins.
+    load_dotenv(ML_ROOT / ".env", override=False)
     parser = argparse.ArgumentParser(prog="mise-ml", description="mise ML pipeline")
     sub = parser.add_subparsers(dest="step", metavar="step")
     for name, text in STEPS.items():
