@@ -21,7 +21,7 @@ from mise_ml.config import (
     RESOLVED,
     ResolveConfig,
 )
-from mise_ml.http import CachedClient
+from mise_ml.http import CachedClient, FetchError
 from mise_ml.log import elapsed, get, num, progress
 from mise_ml.util import append_jsonl, iter_jsonl, sort_jsonl
 
@@ -98,7 +98,12 @@ class Resolver:
         for start in range(0, len(ids), 200):
             values = " ".join(f'"{i}"' for i in ids[start : start + 200])
             query = urlencode({"query": DIRECTOR_QUERY.format(ids=values), "format": "json"})
-            body = self.http.get_json(f"{WIKIDATA}?{query}") or {}
+            try:
+                body = self.http.get_json(f"{WIKIDATA}?{query}") or {}
+            except FetchError as e:
+                batch = len(ids[start : start + 200])
+                log.warning(f"film: Wikidata failed for {batch} films, no directors ({e})")
+                continue
             for b in body.get("results", {}).get("bindings", []):
                 name = b["directorLabel"]["value"]
                 if not re.fullmatch(r"Q\d+", name):  # an entity without an English label
@@ -187,8 +192,10 @@ class Resolver:
         return {**r, "image": image, "links": {"primary": f"{OPENLIBRARY}{work}"}}, "ok"
 
     def art(self, r: Record) -> Result:
-        obj = self.http.get_json(f"{MET}/{r['source']['met']}") or {}
-        if not obj.get("isPublicDomain"):
+        obj = self.http.get_json(f"{MET}/{r['source']['met']}")
+        if obj is None:
+            return None, "met_not_found"
+        if obj.get("isPublicDomain") is not True:
             return None, "not_public_domain"
         url = obj.get("primaryImageSmall") or obj.get("primaryImage")
         if not url:

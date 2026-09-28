@@ -15,7 +15,7 @@ class FetchError(RuntimeError):
     pass
 
 
-USER_AGENT = "mise-catalog/0.1 (class project; me@telesphoreo.me)"
+USER_AGENT = "mise-catalog/0.1 (class project; +https://github.com/sam-packer/mise)"
 
 
 class RateLimiter:
@@ -66,7 +66,8 @@ class CachedClient:
             except httpx.HTTPError:
                 time.sleep(2**attempt)
                 continue
-            if resp.status_code == 429 or resp.status_code >= 500:
+            # 403 too: bot protection (the Met) answers 403 for a while under load.
+            if resp.status_code in (403, 429) or resp.status_code >= 500:
                 retry_after = resp.headers.get("retry-after", "")
                 time.sleep(float(retry_after) if retry_after.isdigit() else 5 * 2**attempt)
                 continue
@@ -74,6 +75,11 @@ class CachedClient:
         raise FetchError(url)
 
     def get_json(self, url: str) -> Any | None:
+        """The JSON body, or None for a 404. Anything else raises FetchError.
+
+        Only real answers (JSON with 200, or 404) are cached. A block page, a non-JSON 200,
+        or any other status raises, so the caller counts an error and a rerun retries it.
+        """
         path = self._path(url, ".json")
         if path.exists():
             self.hits += 1
@@ -81,31 +87,37 @@ class CachedClient:
             return cached["body"]
         self.requests += 1
         resp = self._fetch(url)
-        body = None
-        if resp.status_code == 200:
+        if resp.status_code == 404:
+            body = None
+        elif resp.status_code == 200:
             try:
                 body = resp.json()
-            except ValueError:
-                body = None
-        if resp.status_code in (200, 404):
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(
-                json.dumps({"url": url, "status": resp.status_code, "body": body}),
-                encoding="utf-8",
-            )
+            except ValueError as e:
+                raise FetchError(f"{url}: HTTP 200 without JSON") from e
+        else:
+            raise FetchError(f"{url}: HTTP {resp.status_code}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps({"url": url, "status": resp.status_code, "body": body}),
+            encoding="utf-8",
+        )
         return body
 
     def get_bytes(self, url: str) -> bytes | None:
-        """Fetch raw bytes. Only 404s are cached; the caller stores what it keeps."""
+        """Raw bytes, or None for a 404. Anything else raises FetchError.
+
+        Only 404s are cached; the caller stores what it keeps.
+        """
         miss = self._path(url, ".404")
         if miss.exists():
             return None
         resp = self._fetch(url)
-        if resp.status_code != 200 or not resp.content:
-            if resp.status_code == 404:
-                miss.parent.mkdir(parents=True, exist_ok=True)
-                miss.write_text("")
+        if resp.status_code == 404:
+            miss.parent.mkdir(parents=True, exist_ok=True)
+            miss.write_text("")
             return None
+        if resp.status_code != 200 or not resp.content:
+            raise FetchError(f"{url}: HTTP {resp.status_code}, {len(resp.content)} bytes")
         return resp.content
 
     def close(self) -> None:
