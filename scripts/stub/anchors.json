@@ -1,0 +1,478 @@
+{
+	"lights": {
+		"dawn": [
+			"waking up before sunrise with the whole day still ahead of me",
+			"the first pale light over the sea on a beach at dawn",
+			"walking home at six in the morning as the sky turns pink",
+			"a fresh start, the kettle on and the world not awake yet"
+		],
+		"golden-hour": [
+			"a warm summer evening with the sun low over the fields",
+			"a summer road trip with the windows down and the sun setting ahead",
+			"a picnic in the park late in the afternoon, everyone glowing",
+			"the last warm light on the last day of summer"
+		],
+		"overcast": [
+			"a grey rainy sunday with nowhere to be",
+			"a cold cloudy afternoon walking along an empty beach",
+			"standing at a funeral under a flat white sky",
+			"a damp monday morning commute and everyone quiet on the bus"
+		],
+		"neon": [
+			"2am in the city, neon signs reflected in the wet street",
+			"a packed club with music you can feel in your chest",
+			"a late-night noodle bar under buzzing signs",
+			"a music festival at night with lasers and strangers dancing"
+		],
+		"candle": [
+			"a snowy night by the fire with a mug of hot chocolate",
+			"a candlelit dinner with someone i love",
+			"christmas eve with the family and the tree lights on",
+			"a power cut during a storm and the house lit by candles"
+		],
+		"moonlight": [
+			"walking alone under a full moon on a cold clear night",
+			"a dark and stormy night, the moon behind racing clouds",
+			"lying awake at 3am with moonlight on the floor",
+			"driving home on an empty road at night with the windows down"
+		],
+		"desk-lamp": [
+			"studying late at night with cold coffee and a desk lamp",
+			"writing a letter alone in a quiet room",
+			"reading in bed while the rain falls outside",
+			"working late on something that matters to me"
+		],
+		"fluorescent": [
+			"waiting for test results in a hospital hallway",
+			"an empty office after everyone has gone home",
+			"a laundromat at midnight with the machines humming",
+			"a convenience store at 4am under flat white lights"
+		]
+	},
+	"typefaces": {
+		"cormorant-garamond": [
+			"reading old love letters by candlelight",
+			"a slow sunday morning in a paris apartment with the windows open"
+		],
+		"eb-garamond": [
+			"a quiet library in winter with snow falling outside",
+			"rereading a favourite novel in an armchair by the fire"
+		],
+		"playfair-display": [
+			"dressing up for a glamorous night at the opera",
+			"champagne on a rooftop at a wedding reception"
+		],
+		"libre-baskerville": [
+			"a rainy afternoon in a secondhand bookshop",
+			"writing in my journal at the kitchen table with tea"
+		],
+		"lora": [
+			"a cosy cabin weekend with books and soup",
+			"a letter from my grandmother arriving in the post"
+		],
+		"crimson-pro": [
+			"late autumn walks through a university town",
+			"a candlelit evening reading poetry aloud"
+		],
+		"fraunces": [
+			"baking bread on a lazy saturday with the radio on",
+			"a warm and quirky little cafe on a cold morning"
+		],
+		"dm-serif-display": [
+			"a stylish dinner party with friends and too much wine",
+			"walking into an art gallery opening in my best coat"
+		],
+		"instrument-serif": [
+			"a calm modern morning with coffee and nothing planned",
+			"a quiet gallery on a weekday afternoon"
+		],
+		"newsreader": [
+			"reading the sunday paper in bed with coffee",
+			"a thoughtful morning train ride into the city"
+		],
+		"spectral": [
+			"a misty morning by a lake, everything soft and grey",
+			"remembering someone gently on a quiet afternoon"
+		],
+		"cardo": [
+			"visiting an old stone church on a cold afternoon",
+			"reading ancient myths by lamplight"
+		],
+		"old-standard-tt": [
+			"finding old photographs of my grandparents in the attic",
+			"a dusty antique shop on a rainy afternoon"
+		],
+		"im-fell-english": [
+			"a dark and stormy night in an old house on the moors",
+			"a ghost story told around the fire on a winter night"
+		],
+		"bodoni-moda": [
+			"a fashion show in milan and everyone dressed in black",
+			"a sleek hotel bar late at night"
+		],
+		"gloock": [
+			"a dramatic breakup and slamming the door behind me",
+			"a bold red lipstick night out in the city"
+		],
+		"yeseva-one": [
+			"a romantic weekend in a pink hotel by the sea",
+			"a bouquet of peonies and a first date that went well"
+		],
+		"abril-fatface": [
+			"a loud and happy birthday party with a huge cake",
+			"a cabaret show with feathers and brass"
+		],
+		"prata": ["afternoon tea in a grand old hotel", "a slow waltz at a winter ball"],
+		"gilda-display": [
+			"an elegant summer wedding in a garden",
+			"a quiet perfume shop on a spring morning"
+		],
+		"source-serif-4": [
+			"a clear-headed morning organising my life",
+			"reading essays on a long flight"
+		],
+		"alegreya": [
+			"a folk tale told to children at bedtime",
+			"an autumn market with apples and wool"
+		],
+		"vollkorn": [
+			"a hearty family dinner in a farmhouse kitchen",
+			"a harvest supper with bread and cider"
+		],
+		"young-serif": [
+			"a sunny vintage kitchen with lemon cake on the table",
+			"a friendly neighbourhood bakery on a saturday"
+		],
+		"literata": [
+			"reading on my phone in bed until very late",
+			"a long quiet train journey with a good book"
+		],
+		"cinzel": [
+			"standing in the ruins of an ancient temple at sunset",
+			"a solemn ceremony in a marble hall"
+		],
+		"inter": [
+			"a clean and productive morning at my desk",
+			"an airport at dawn, everything efficient and calm"
+		],
+		"space-grotesk": [
+			"a tech startup office buzzing late at night",
+			"stargazing and thinking about rockets and space"
+		],
+		"dm-sans": [
+			"a bright new apartment with nothing on the walls yet",
+			"a fresh start on the first day of a new job"
+		],
+		"work-sans": [
+			"a busy weekday running errands in the city",
+			"a friendly co-working space on a monday"
+		],
+		"archivo": ["a protest march with everyone shouting together", "a train station at rush hour"],
+		"manrope": [
+			"a calm minimalist scandinavian morning",
+			"a clean white kitchen and a good espresso"
+		],
+		"syne": ["an experimental art show in a warehouse", "a strange dream that felt like a gallery"],
+		"outfit": ["a sunny morning jog along the river", "a clear blue day at a modern beach house"],
+		"karla": ["a relaxed weekend coffee with an old friend", "a scrapbook of summer photos"],
+		"josefin-sans": [
+			"a 1920s cocktail party with jazz",
+			"a vintage train poster of a seaside town"
+		],
+		"jost": [
+			"a bauhaus apartment filled with afternoon light",
+			"a geometric modern museum on a sunny day"
+		],
+		"figtree": [
+			"a cheerful spring morning with the windows open",
+			"a farmers market on a bright saturday"
+		],
+		"bricolage-grotesque": [
+			"a chaotic and joyful house party",
+			"a zine made with friends at the kitchen table"
+		],
+		"ibm-plex-sans": [
+			"a late shift in a quiet office with the servers humming",
+			"filling out forms in a government building"
+		],
+		"hanken-grotesk": [
+			"a neat notebook and a plan for the week",
+			"a modern library on a sunday afternoon"
+		],
+		"unbounded": [
+			"a huge summer music festival with fireworks",
+			"a skate park at sunset with loud music"
+		],
+		"poiret-one": ["an art deco hotel lobby on new year's eve", "a glamorous 1930s train journey"],
+		"italiana": [
+			"a lemon grove on the amalfi coast in summer",
+			"a slow lunch in a sunny italian piazza"
+		],
+		"ibm-plex-mono": [
+			"coding alone at 2am with the city asleep",
+			"reading technical notes in a quiet lab"
+		],
+		"space-mono": [
+			"a retro sci-fi movie night with friends",
+			"watching the stars from the roof and thinking about the future"
+		],
+		"jetbrains-mono": [
+			"fixing a bug late at night with the screen glowing",
+			"a hackathon weekend fuelled by pizza"
+		],
+		"courier-prime": [
+			"typing a screenplay in a small apartment at night",
+			"a detective story in a smoky office"
+		],
+		"cutive-mono": [
+			"finding an old typed letter in a drawer",
+			"a quiet newsroom long after deadline"
+		],
+		"vt323": [
+			"playing old video games in the basement at midnight",
+			"a glitchy old computer humming in the dark"
+		],
+		"major-mono-display": [
+			"a cold futuristic city at night",
+			"a lonely space station orbiting a dark planet"
+		],
+		"caveat": [
+			"a handwritten note left on the fridge",
+			"doodling in the margins on a lazy school afternoon"
+		],
+		"dancing-script": [
+			"a sweet summer romance at the seaside",
+			"a birthday card from someone who loves me"
+		],
+		"great-vibes": ["a fairytale wedding with lace and roses", "a love letter sealed with wax"],
+		"pinyon-script": [
+			"a victorian ballroom lit by chandeliers",
+			"an old wedding invitation in my grandmother's drawer"
+		],
+		"la-belle-aurore": [
+			"a diary entry written half asleep",
+			"scribbling a poem on a napkin in a cafe"
+		],
+		"reenie-beanie": [
+			"a messy summer camp friendship bracelet kind of day",
+			"notes passed between best friends in class"
+		],
+		"mrs-saint-delafield": [
+			"signing a love letter goodbye at a train station",
+			"an elegant farewell note left on the pillow"
+		],
+		"bebas-neue": ["the loud confident feeling before a big game", "a city billboard at rush hour"],
+		"monoton": [
+			"a retro roller disco under neon lights",
+			"a glowing motel sign on a desert highway at night"
+		],
+		"unifrakturmaguntia": [
+			"a gothic cathedral on a stormy night",
+			"a medieval castle and a heavy thunderstorm"
+		],
+		"limelight": ["an old cinema lobby with velvet curtains", "a speakeasy with jazz and gin"],
+		"press-start-2p": [
+			"an arcade on a summer night with pockets full of coins",
+			"beating a video game level with my little brother"
+		],
+		"fredoka": ["a kids birthday party with balloons and cake", "a silly happy day at the zoo"],
+		"shrikhand": [
+			"a colourful street festival with music and food",
+			"a tropical holiday with mango and bright shirts"
+		],
+		"creepster": ["a haunted house on halloween night", "a creepy b-movie marathon in the dark"]
+	},
+	"scents": {
+		"earl-grey": [
+			"a rainy afternoon with a cup of tea and a book",
+			"a quiet english morning with toast and tea"
+		],
+		"hot-cocoa": [
+			"a snowy december and i just made warm hot chocolate",
+			"coming inside after sledding with cold cheeks"
+		],
+		"pine-snow": [
+			"a walk through a snowy forest in the morning",
+			"cutting down a christmas tree in the cold"
+		],
+		"woodsmoke": [
+			"a cabin in the woods with a fire going",
+			"a cold autumn night and smoke from the chimneys"
+		],
+		"gingerbread": [
+			"baking christmas cookies with family",
+			"a christmas market with lights and warm spices"
+		],
+		"clementine": [
+			"christmas morning opening presents in pyjamas",
+			"peeling a clementine by the fire in december"
+		],
+		"mint-frost": [
+			"waiting for the bus on a freezing winter morning",
+			"a crisp first frost and my breath in the air"
+		],
+		"snowfall": [
+			"the silence when snow falls at night in the city",
+			"standing alone in a snowy field"
+		],
+		"petrichor": [
+			"the first rain after a long hot summer",
+			"walking through the city after a thunderstorm"
+		],
+		"rain-garden": ["a spring shower in the garden", "watching the rain from a greenhouse"],
+		"ozone-storm": [
+			"a dark and stormy night with thunder and lightning",
+			"the air before a storm breaks"
+		],
+		"sea-fog": ["a foggy morning at the harbour", "a lonely grey coast in winter"],
+		"sea-salt": ["a day at the beach with salty hair", "sailing on a windy afternoon"],
+		"dawn-dew": [
+			"walking barefoot on the grass at sunrise",
+			"an early morning hike before anyone else is awake"
+		],
+		"coconut-sun": ["lying on a tropical beach with a cold drink", "a summer holiday by the sea"],
+		"cut-grass": [
+			"a lazy summer saturday in the backyard",
+			"running through the sprinklers as a kid"
+		],
+		"chlorine": [
+			"a long summer afternoon at the public pool",
+			"swim practice early in the morning"
+		],
+		"peach": ["a hot italian summer and a first love", "eating fruit on the porch in july"],
+		"strawberry": ["a picnic in the park with friends", "strawberry picking on a sunny day"],
+		"cherry-cola": [
+			"a summer road trip with snacks and loud music",
+			"a drive-in movie on a warm night"
+		],
+		"wildflower": [
+			"a walk through meadows in early summer",
+			"lying in a field and watching the clouds"
+		],
+		"bonfire": [
+			"a bonfire on the beach with friends at night",
+			"the last night of summer camp around the campfire"
+		],
+		"jasmine-night": [
+			"a warm summer night in a foreign city",
+			"fireworks over the water on a humid night"
+		],
+		"orange-blossom": [
+			"a sleepy afternoon in a sunny mediterranean town",
+			"a spring wedding in the south of spain"
+		],
+		"fig-leaf": ["a hot afternoon in a greek garden", "shade under a fig tree in august"],
+		"tomato-vine": [
+			"picking vegetables in my grandparents' garden",
+			"a summer lunch outside with bread and tomatoes"
+		],
+		"lilac": ["the first warm day of spring with the windows open", "a new beginning in april"],
+		"rose-honey": [
+			"a romantic afternoon in an old rose garden",
+			"a warm sunlit courtyard in the south of france"
+		],
+		"peony-champagne": [
+			"getting ready for a wedding with my best friends",
+			"a celebration with flowers and champagne"
+		],
+		"iris-powder": ["my grandmother's dressing table", "an elegant old theatre before the show"],
+		"lavender-linen": ["clean sheets drying in the sun", "a calm sunny morning in provence"],
+		"warm-sheets": [
+			"waking up next to someone i love",
+			"a lazy morning in bed with sunlight on the sheets"
+		],
+		"autumn-leaves": [
+			"a walk through the park in october",
+			"kicking through piles of leaves in the afternoon"
+		],
+		"baked-apple": [
+			"a cosy autumn evening with apple pie",
+			"a chilly november walk home to a warm kitchen"
+		],
+		"moss-forest": ["a hike through a wet green forest", "a quiet rainy morning in the woods"],
+		"mountain-air": [
+			"standing on top of a mountain after a long climb",
+			"a clear morning in the alps"
+		],
+		"desert": ["driving through the desert at noon", "a storm rolling over the desert at dusk"],
+		"cinnamon-kitchen": [
+			"a kitchen full of family cooking together",
+			"sunday morning cinnamon rolls"
+		],
+		"bread": ["baking bread slowly on a rainy saturday", "walking past a bakery at dawn"],
+		"soup": [
+			"a big family dinner with everyone talking at once",
+			"being looked after when i'm sick with soup"
+		],
+		"lemon-cake": [
+			"a sunny afternoon baking with my mom",
+			"a bright kitchen with the windows open"
+		],
+		"vanilla-milk": [
+			"a quiet night when everyone else is asleep",
+			"a warm drink before bed as a child"
+		],
+		"espresso": ["a busy cafe on a monday morning", "reading the news with a strong coffee"],
+		"diner": ["a late-night diner after a long drive", "pancakes at 3am with friends"],
+		"matcha": ["a calm rainy morning in kyoto", "meditating in a quiet room"],
+		"saffron-market": [
+			"wandering a busy spice market abroad",
+			"a festival of food and colour in the street"
+		],
+		"marigold": [
+			"remembering the people we lost with flowers and candles",
+			"day of the dead with family"
+		],
+		"old-books": ["an afternoon in an old library", "finding a note inside a secondhand book"],
+		"ink": ["studying for exams late at night", "drawing in my sketchbook at the kitchen table"],
+		"tobacco-leather": [
+			"my grandfather's study on a winter evening",
+			"an old gentleman's club by the fireplace"
+		],
+		"candle-wax": ["lighting candles on a dark winter evening", "a quiet prayer in a small chapel"],
+		"church": ["a midnight mass on christmas eve", "an empty cathedral on a cold afternoon"],
+		"white-lilies": ["the day of a funeral and everyone in black", "grieving someone i loved"],
+		"cigarette-jazz": ["a smoky jazz bar at 2am", "a heartbreak drink alone at the bar"],
+		"oud-night": ["a mysterious night in an old city", "a dark and seductive evening"],
+		"vinyl-records": [
+			"listening to records alone on a sunday night",
+			"a secondhand record store on a rainy day"
+		],
+		"neon-rain": [
+			"walking through tokyo at night in the rain",
+			"a busy city street at midnight after the rain"
+		],
+		"gasoline-night": [
+			"driving home at 2am with the windows down",
+			"a gas station at night on a long drive"
+		],
+		"club": [
+			"dancing until sunrise in a crowded club",
+			"a sweaty basement party with strobe lights"
+		],
+		"festival": [
+			"a summer music festival with my friends",
+			"dancing in a field in front of a huge stage"
+		],
+		"carnival": ["a county fair with rides and lights", "a carnival at night with a ferris wheel"],
+		"subway": [
+			"riding the subway home late at night",
+			"rushing through a busy city in the morning"
+		],
+		"train": [
+			"a long train journey watching the countryside",
+			"saying goodbye on a train platform"
+		],
+		"airport": [
+			"waiting at the airport for someone to arrive",
+			"a red-eye flight to somewhere new"
+		],
+		"motel": ["a cheap motel on a long road trip", "a lonely night in a roadside motel"],
+		"laundromat": ["doing laundry alone at midnight", "a quiet laundromat on a rainy sunday"],
+		"hospital": [
+			"waiting for test results in a hospital hallway",
+			"visiting someone i love in the hospital"
+		],
+		"office": ["an empty office late on a friday", "another long day under office lights"]
+	}
+}

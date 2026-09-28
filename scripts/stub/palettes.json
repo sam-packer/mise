@@ -1,0 +1,795 @@
+[
+	{
+		"phrase": "a snowy december and i just made warm hot chocolate",
+		"hex": ["#efe6dc", "#5b3a2e", "#b07a55", "#c9d3dc", "#8e2f2a"]
+	},
+	{
+		"phrase": "curled up by the fire on a winter night with a blanket",
+		"hex": ["#2e1f1a", "#e0a86a", "#8a3b24", "#f3e3c8", "#5a4a3c"]
+	},
+	{
+		"phrase": "christmas eve with the family and the tree lights on",
+		"hex": ["#1f2b24", "#c9a24b", "#9e2b25", "#f2e7d0", "#3d5a44"]
+	},
+	{
+		"phrase": "waking up to fresh snow and a silent street",
+		"hex": ["#eef1f4", "#9fb1c2", "#56687a", "#d9dfe6", "#2e3a46"]
+	},
+	{
+		"phrase": "a christmas market at night with lights and mulled wine",
+		"hex": ["#1c1a2b", "#e8b25c", "#a3322b", "#f5e2b8", "#4a3b5c"]
+	},
+	{
+		"phrase": "a cold blue winter morning waiting for the bus",
+		"hex": ["#d7e0e8", "#5f7488", "#2b3947", "#a9b8c6", "#e9dcc8"]
+	},
+	{
+		"phrase": "a cabin in the snowy woods with smoke from the chimney",
+		"hex": ["#e4e6e3", "#3f4b3f", "#7b5a43", "#aab5b0", "#c07a45"]
+	},
+	{
+		"phrase": "ice skating outside at dusk with cold cheeks",
+		"hex": ["#c8d4e3", "#e8a7a0", "#3c4a6b", "#f4efe9", "#8a9bbd"]
+	},
+	{
+		"phrase": "a long dark january evening alone in the flat",
+		"hex": ["#1d2129", "#4c5566", "#c7b08a", "#2f3643", "#8a8f99"]
+	},
+	{
+		"phrase": "new year's eve, fireworks and champagne at midnight",
+		"hex": ["#10131f", "#e6c46a", "#c94f7c", "#f3ecdc", "#3b4c8f"]
+	},
+	{
+		"phrase": "baking christmas cookies with my grandmother",
+		"hex": ["#f3e2c7", "#a35a32", "#c7453a", "#5d7a4e", "#fff7ea"]
+	},
+	{
+		"phrase": "a frozen lake under a pale winter sun",
+		"hex": ["#e7eef2", "#b9cad6", "#7a93a8", "#f2e6cf", "#34495c"]
+	},
+	{
+		"phrase": "sledding with friends and coming home soaked and happy",
+		"hex": ["#e9eef3", "#d64b3a", "#2e5b8c", "#f2c14e", "#1f2a36"]
+	},
+	{
+		"phrase": "midnight mass on christmas eve in a cold stone church",
+		"hex": ["#1a1712", "#d9b36c", "#6e5a43", "#efe2c4", "#7a1f1f"]
+	},
+
+	{
+		"phrase": "a summer road trip with the windows down and music loud",
+		"hex": ["#f4d9a6", "#e2703a", "#2f8fa3", "#f7f0e1", "#b3412f"]
+	},
+	{
+		"phrase": "driving west into the sunset on an empty highway",
+		"hex": ["#f0a868", "#7a3b5c", "#f6d8a8", "#2b2340", "#d9583b"]
+	},
+	{
+		"phrase": "the last day of summer camp and everyone crying on the bus",
+		"hex": ["#e7dcc0", "#4f7a5a", "#d88c4a", "#2f4a5c", "#f2e9d8"]
+	},
+	{
+		"phrase": "a lazy july afternoon in the backyard with the sprinklers on",
+		"hex": ["#e9f0d8", "#6aa56a", "#f2c84b", "#4fa3c7", "#fdfaf0"]
+	},
+	{
+		"phrase": "a hot italian summer, peaches and a first love",
+		"hex": ["#f5e1c8", "#e8905c", "#6f8f4e", "#c7472f", "#fff6e8"]
+	},
+	{
+		"phrase": "a beach day with salty hair and sunscreen",
+		"hex": ["#f3e8d2", "#3fa7c4", "#f0c27a", "#e8735a", "#1d5f7a"]
+	},
+	{
+		"phrase": "a bonfire on the beach with friends as the sun goes down",
+		"hex": ["#2a1f2e", "#f09a4a", "#c8423a", "#f6d6a0", "#4b5f86"]
+	},
+	{
+		"phrase": "a warm summer night full of fireflies",
+		"hex": ["#1b2433", "#e8d27a", "#3f5b4a", "#8aa06a", "#f2ecd6"]
+	},
+	{
+		"phrase": "a public pool on the hottest day of the year",
+		"hex": ["#dff3f5", "#2fb4c8", "#f3d34a", "#e8674f", "#fdfdf7"]
+	},
+	{
+		"phrase": "a picnic in the park with strawberries and friends",
+		"hex": ["#f4efe0", "#d8404a", "#7fae5e", "#f5c6c0", "#3e6b3a"]
+	},
+	{
+		"phrase": "a greek island in august, white walls and blue sea",
+		"hex": ["#f7f5ef", "#1f5fa8", "#6cb4d9", "#e9d9b8", "#c9563a"]
+	},
+	{
+		"phrase": "a humid summer night in a foreign city with street food",
+		"hex": ["#231a1f", "#e76f3c", "#f1c75b", "#3e7a6a", "#c24a6a"]
+	},
+	{
+		"phrase": "running through a sunflower field in late summer",
+		"hex": ["#f6d64a", "#5d7a2e", "#e39b2d", "#fdf5d8", "#6f4a24"]
+	},
+	{
+		"phrase": "lying on the grass watching clouds on a slow afternoon",
+		"hex": ["#dcebf3", "#8fbf7a", "#f7f3e6", "#6aa2c9", "#4c6b3e"]
+	},
+	{
+		"phrase": "a drive-in movie on a warm night with cherry cola",
+		"hex": ["#1c1a2e", "#e04a5f", "#f2b84b", "#5bc0be", "#f4ead6"]
+	},
+	{
+		"phrase": "the golden light at the end of a perfect summer day",
+		"hex": ["#f2c27a", "#b85c38", "#f8e6c4", "#5e4a6b", "#e8913e"]
+	},
+
+	{
+		"phrase": "driving home at 2am with the windows down",
+		"hex": ["#0f1624", "#2b3a5c", "#e8a94a", "#7a8bb5", "#c9d1e3"]
+	},
+	{
+		"phrase": "2am in the city, neon signs reflected in the wet street",
+		"hex": ["#0c0e1a", "#e6358f", "#29c4d8", "#3a2b5c", "#f2e8f0"]
+	},
+	{
+		"phrase": "a late-night noodle bar under buzzing signs",
+		"hex": ["#1a1414", "#d9412e", "#f2b544", "#2d5c6b", "#f4e6d2"]
+	},
+	{
+		"phrase": "walking through tokyo at night in the rain",
+		"hex": ["#0e1420", "#c23b7a", "#4fb3c9", "#27324a", "#e9eef5"]
+	},
+	{
+		"phrase": "insomnia at 3am scrolling in the dark",
+		"hex": ["#0b0d12", "#3a4a6b", "#8fa3d1", "#1c2231", "#d5dcea"]
+	},
+	{
+		"phrase": "a smoky jazz bar at 2am after a breakup",
+		"hex": ["#1a1210", "#a8472e", "#d9a45b", "#3b2a2a", "#e8d6bc"]
+	},
+	{
+		"phrase": "a gas station glowing on an empty road at night",
+		"hex": ["#101418", "#e8e46a", "#3fa37a", "#c9453a", "#dfe6ea"]
+	},
+	{
+		"phrase": "dancing until sunrise in a crowded club",
+		"hex": ["#120a1f", "#9b3df0", "#f03d8a", "#27d3e8", "#f4e9ff"]
+	},
+	{
+		"phrase": "a taxi ride through the city lights after a party",
+		"hex": ["#10121c", "#f2c94c", "#d6456b", "#3b4f8f", "#e9e4dc"]
+	},
+	{
+		"phrase": "a rooftop at midnight looking over the city",
+		"hex": ["#131a2c", "#e3a45a", "#5a6f9e", "#26304a", "#f1e3c6"]
+	},
+	{
+		"phrase": "a 24 hour diner at 4am with coffee and pie",
+		"hex": ["#1d2224", "#d94a3d", "#6fb3a8", "#f2e0b5", "#3a4a4c"]
+	},
+	{
+		"phrase": "a retro roller disco under pink and blue lights",
+		"hex": ["#1a1030", "#ff5fa2", "#4ad6f0", "#f7d046", "#f6ecff"]
+	},
+	{
+		"phrase": "a subway ride home late at night, half asleep",
+		"hex": ["#1c2128", "#c7c9a3", "#4b6a7a", "#8a8f7a", "#e3e1d6"]
+	},
+
+	{
+		"phrase": "a grey rainy sunday with nowhere to be",
+		"hex": ["#c9ccc8", "#5c6760", "#8e958c", "#e8e4dc", "#3b423e"]
+	},
+	{
+		"phrase": "rain on the window and a cup of tea in the afternoon",
+		"hex": ["#d6d7d0", "#6c7a7c", "#a8876a", "#eee9e0", "#3a4547"]
+	},
+	{
+		"phrase": "watching a storm roll in from the porch",
+		"hex": ["#4a525c", "#1f252c", "#a4a9a0", "#d9d2c0", "#6f7d64"]
+	},
+	{
+		"phrase": "a dark and stormy night in an old house",
+		"hex": ["#15171c", "#3c4250", "#8c8f99", "#6b2a2a", "#d8d2c4"]
+	},
+	{
+		"phrase": "thunder and lightning and the power goes out",
+		"hex": ["#1b1f26", "#e8e2c8", "#4a5670", "#2f3542", "#b8a26a"]
+	},
+	{
+		"phrase": "walking home through a summer thunderstorm, soaked and laughing",
+		"hex": ["#5f6f7a", "#e7d9b6", "#2f3d48", "#9fb0a8", "#d88a5a"]
+	},
+	{
+		"phrase": "a misty morning by a lake, everything soft and grey",
+		"hex": ["#dfe3e1", "#a7b2b0", "#6f7f7d", "#eef0ec", "#495654"]
+	},
+	{
+		"phrase": "fog rolling over the harbour on a cold morning",
+		"hex": ["#d3d7d8", "#8f9a9e", "#556268", "#e9e6df", "#2f383c"]
+	},
+	{
+		"phrase": "the first rain after a long hot summer",
+		"hex": ["#b9c4bb", "#4f6f5e", "#d8cfb5", "#7d8f86", "#2e3b35"]
+	},
+	{
+		"phrase": "reading in bed while the rain falls outside",
+		"hex": ["#e6ddd0", "#5a6570", "#b5946a", "#f4efe6", "#394048"]
+	},
+
+	{
+		"phrase": "heartbreak, lying on the floor listening to sad songs",
+		"hex": ["#20242e", "#6a7894", "#b7a3b5", "#3a4052", "#e3dce3"]
+	},
+	{
+		"phrase": "the night after a breakup and the apartment feels too big",
+		"hex": ["#1e2228", "#565f6e", "#a0928a", "#343a45", "#d7d3cc"]
+	},
+	{
+		"phrase": "crying in the car so nobody sees",
+		"hex": ["#2a2f3a", "#7e8aa1", "#c7c2bb", "#4a5264", "#9e6f6a"]
+	},
+	{
+		"phrase": "seeing my ex happy with someone else",
+		"hex": ["#3a3440", "#9c8fa8", "#d6c8c4", "#5b4f5e", "#b56b6b"]
+	},
+	{
+		"phrase": "reading old texts from someone who is gone",
+		"hex": ["#262a33", "#8793a6", "#e0d8cc", "#4c5566", "#a88f7a"]
+	},
+	{
+		"phrase": "a slow goodbye at the train station",
+		"hex": ["#5c6166", "#c9bda6", "#2e3338", "#9aa3a8", "#7a4a3c"]
+	},
+
+	{
+		"phrase": "falling in love for the first time",
+		"hex": ["#f8e3e2", "#e0707b", "#f4b6a6", "#fffaf4", "#9b3050"]
+	},
+	{
+		"phrase": "the first kiss on a warm summer night",
+		"hex": ["#2a1e33", "#e8768a", "#f3c27a", "#6b4a8a", "#f7e6ea"]
+	},
+	{
+		"phrase": "waking up next to someone i love on a slow sunday",
+		"hex": ["#f5ebe0", "#d9a18a", "#c7b8a6", "#8a6a5a", "#fffaf3"]
+	},
+	{
+		"phrase": "a candlelit dinner for two in a small restaurant",
+		"hex": ["#2a1714", "#c9763f", "#7a2a2a", "#f1d4a8", "#4a3028"]
+	},
+	{
+		"phrase": "a wedding in a garden on a spring afternoon",
+		"hex": ["#f6f2ea", "#b9c9a6", "#e8b8b8", "#6f8a5a", "#d9c28a"]
+	},
+	{
+		"phrase": "slow dancing in the kitchen at midnight",
+		"hex": ["#2c2226", "#d98a6a", "#8a4a5a", "#f0d8c0", "#4a3a44"]
+	},
+	{
+		"phrase": "a crush smiling at me across the classroom",
+		"hex": ["#fbeef0", "#f28aa0", "#7ab8d9", "#fff9f2", "#c24a6e"]
+	},
+	{
+		"phrase": "a long-distance phone call with someone i miss",
+		"hex": ["#1f2638", "#e0b27a", "#6d7ca6", "#2f3a54", "#e9e1d5"]
+	},
+
+	{
+		"phrase": "grieving someone i loved, the house too quiet",
+		"hex": ["#2b2b2d", "#6e6a66", "#b5aea4", "#46443f", "#d8d2c8"]
+	},
+	{
+		"phrase": "a funeral on a grey afternoon, everyone in black",
+		"hex": ["#1c1c1e", "#5a5c5f", "#c9c6bf", "#34363a", "#8a7f6f"]
+	},
+	{
+		"phrase": "visiting my grandmother's grave with white lilies",
+		"hex": ["#d8d9d3", "#6f7768", "#f1eee6", "#3f463d", "#a8a28f"]
+	},
+	{
+		"phrase": "clearing out a parent's house after they died",
+		"hex": ["#bfb6a8", "#6b5e4f", "#e2dbcf", "#3f372f", "#8f8a7c"]
+	},
+	{
+		"phrase": "remembering someone gently on the anniversary of their death",
+		"hex": ["#e3ddd3", "#8c8478", "#b7a38a", "#5a544c", "#f4f0e8"]
+	},
+	{
+		"phrase": "day of the dead with marigolds and candles for family",
+		"hex": ["#2a1a2e", "#f29a2e", "#d6336c", "#f6d45a", "#6a3aa0"]
+	},
+
+	{
+		"phrase": "waiting for test results in a hospital hallway",
+		"hex": ["#e4e7e3", "#9aa7a4", "#5f6b69", "#c9d3cf", "#2f3836"]
+	},
+	{
+		"phrase": "sitting beside a hospital bed through the night",
+		"hex": ["#cfd6d4", "#6a7a78", "#a6b8c4", "#eef1ee", "#3a4444"]
+	},
+	{
+		"phrase": "a hospital waiting room with bad coffee and a ticking clock",
+		"hex": ["#dcded6", "#8a9a86", "#6c7a86", "#f0efe8", "#43504c"]
+	},
+	{
+		"phrase": "getting good news from the doctor and stepping outside into the sun",
+		"hex": ["#f3efe2", "#8fc1a9", "#f2c86a", "#5a8a9e", "#fffdf6"]
+	},
+	{
+		"phrase": "a newborn baby asleep in the maternity ward at dawn",
+		"hex": ["#f4efec", "#e6c9c4", "#b8cbd6", "#fffaf7", "#8a9aa8"]
+	},
+
+	{
+		"phrase": "an empty office after everyone has gone home",
+		"hex": ["#d8dbd8", "#7c8784", "#a9b1ae", "#eceeea", "#3e4543"]
+	},
+	{
+		"phrase": "another long monday under office lights",
+		"hex": ["#e2e3de", "#8c9290", "#b7bcb6", "#5a6260", "#f3f2ec"]
+	},
+	{
+		"phrase": "working late alone with the city lights outside the window",
+		"hex": ["#1a2230", "#e3b25e", "#50627d", "#2b3548", "#dfe3ea"]
+	},
+	{
+		"phrase": "quitting my job and walking out into a sunny afternoon",
+		"hex": ["#f7f0dc", "#f0a33a", "#4a9c8a", "#e45a4a", "#1f3b4d"]
+	},
+	{
+		"phrase": "a laundromat at midnight with the machines humming",
+		"hex": ["#d4dcd8", "#5fa3a0", "#e8e2c0", "#7a8a88", "#2f3a3a"]
+	},
+	{
+		"phrase": "a convenience store at 4am under flat white lights",
+		"hex": ["#eef0ea", "#3fa3a0", "#e8574a", "#f2d24a", "#2a3234"]
+	},
+
+	{
+		"phrase": "a kitchen full of family cooking together on a holiday",
+		"hex": ["#f2e4cc", "#b7552f", "#6f8a3c", "#e8a83c", "#4a2e20"]
+	},
+	{
+		"phrase": "a big loud family dinner with everyone talking at once",
+		"hex": ["#f0dcc0", "#a8412e", "#e39b3a", "#5d7a3e", "#3a2a22"]
+	},
+	{
+		"phrase": "sunday morning pancakes with my kids",
+		"hex": ["#fbf1dc", "#e8a444", "#8a5a36", "#f6d7a0", "#6fa3c0"]
+	},
+	{
+		"phrase": "thanksgiving at my grandparents' house",
+		"hex": ["#e9d7b9", "#9c4a24", "#c98a2e", "#5a5a2e", "#3a2a1e"]
+	},
+	{
+		"phrase": "baking bread slowly on a rainy saturday",
+		"hex": ["#efe4d2", "#b98a58", "#6a5a4a", "#f8f2e6", "#8a9aa0"]
+	},
+	{
+		"phrase": "making soup for a friend who is sick",
+		"hex": ["#f0e6cf", "#c79a3a", "#7a8a4a", "#fdf8ec", "#8a4a2e"]
+	},
+
+	{
+		"phrase": "walking through the park in october with a coffee",
+		"hex": ["#efe2cb", "#b5562a", "#d99a3c", "#6a4a2e", "#7a8a5a"]
+	},
+	{
+		"phrase": "an autumn walk through the woods, leaves crunching",
+		"hex": ["#e8d8bc", "#a3471e", "#d6892f", "#4f5a2e", "#6a3a22"]
+	},
+	{
+		"phrase": "back to school in september with new notebooks",
+		"hex": ["#f2ead8", "#b8432e", "#2f4a6b", "#d9a33a", "#fbf7ee"]
+	},
+	{
+		"phrase": "halloween night trick or treating in the dark",
+		"hex": ["#17131c", "#e8702a", "#5a2e7a", "#f2d27a", "#3a2e3e"]
+	},
+	{
+		"phrase": "a cold november evening walking home to a warm kitchen",
+		"hex": ["#2e2a2a", "#c9803a", "#6a5a52", "#e8d6b5", "#8a3a2a"]
+	},
+	{
+		"phrase": "a university library in autumn with rain outside",
+		"hex": ["#3a2f28", "#a07a4a", "#6b3a2a", "#e3d3b5", "#4a5a4a"]
+	},
+	{
+		"phrase": "apple picking in an orchard on a crisp afternoon",
+		"hex": ["#f1e6cc", "#c23b2e", "#7a9a3e", "#e8b04a", "#5a4030"]
+	},
+
+	{
+		"phrase": "a beach at dawn with nobody else around",
+		"hex": ["#f1e4dc", "#e8b5a0", "#9ab3c9", "#f7efe6", "#6a7fa0"]
+	},
+	{
+		"phrase": "watching the sunrise from a mountain after climbing all night",
+		"hex": ["#f4c9a6", "#6a5a8a", "#f7e6c8", "#2e3450", "#e88a6a"]
+	},
+	{
+		"phrase": "an early morning run while the city is still asleep",
+		"hex": ["#e6e2dc", "#e8b6a3", "#8fa5bd", "#f5f1ea", "#4f5f78"]
+	},
+	{
+		"phrase": "walking home at six in the morning as the sky turns pink",
+		"hex": ["#f2d7d3", "#a6a1c4", "#f7e8d0", "#5e5a7a", "#e89a8a"]
+	},
+	{
+		"phrase": "a quiet morning with the kettle on before anyone is awake",
+		"hex": ["#f3eee4", "#c2b49a", "#9aaab2", "#fffcf5", "#6a6a60"]
+	},
+	{
+		"phrase": "the first warm day of spring with the windows open",
+		"hex": ["#f6f3e4", "#b9d38a", "#f2c6d0", "#fffdf2", "#6a9a5a"]
+	},
+	{
+		"phrase": "cherry blossoms falling in the park in april",
+		"hex": ["#f9ebee", "#f2b3c4", "#8ab08a", "#fffafb", "#a86a7a"]
+	},
+	{
+		"phrase": "a spring shower in the garden and everything bright green",
+		"hex": ["#e8efdf", "#5a9a4a", "#b8d38a", "#a8b8c0", "#2f4a2e"]
+	},
+
+	{
+		"phrase": "a summer music festival in a field with my friends",
+		"hex": ["#f4e3c4", "#e84a6a", "#3ab0c9", "#f2c23a", "#6a3aa0"]
+	},
+	{
+		"phrase": "a carnival at night with a ferris wheel and cotton candy",
+		"hex": ["#1d1633", "#f28ab8", "#6ad0e8", "#f7d25a", "#e8453c"]
+	},
+	{
+		"phrase": "a street festival with music, food and bright colours",
+		"hex": ["#f7e6c4", "#e8452e", "#2eaa8a", "#f2b41e", "#8a2e8a"]
+	},
+	{
+		"phrase": "a birthday party with balloons and too much cake",
+		"hex": ["#fdf2f4", "#f28ab0", "#6ac0e8", "#f7d24a", "#8a5ad0"]
+	},
+	{
+		"phrase": "a wedding reception dancing with champagne and fairy lights",
+		"hex": ["#1f1a24", "#e8c77a", "#e8a8a8", "#f6ecdc", "#6a5a7a"]
+	},
+	{
+		"phrase": "a stadium roaring after a last-minute goal",
+		"hex": ["#1a2a1e", "#e8e04a", "#e8452e", "#f4f4ee", "#2e6a3a"]
+	},
+
+	{
+		"phrase": "alone in a big city where nobody knows my name",
+		"hex": ["#2a2e33", "#8a939c", "#d0b58a", "#4a5058", "#e3e1dc"]
+	},
+	{
+		"phrase": "jet-lagged in a hotel room overlooking a foreign city",
+		"hex": ["#1f2530", "#d8a8b0", "#6a7a99", "#e8e2de", "#3a4256"]
+	},
+	{
+		"phrase": "an airport at dawn waiting for a flight to somewhere new",
+		"hex": ["#e3e6ea", "#f0b58a", "#6a7f9a", "#fbf7f2", "#2e3a4c"]
+	},
+	{
+		"phrase": "a long train journey watching the countryside go by",
+		"hex": ["#e6e2d0", "#7a9a6a", "#c9a36a", "#a8b8c4", "#4a5a4a"]
+	},
+	{
+		"phrase": "moving into my first apartment with nothing on the walls",
+		"hex": ["#f4f2ee", "#d8cfc2", "#9aa8a2", "#e8b88a", "#4a4e4c"]
+	},
+	{
+		"phrase": "packing up my childhood bedroom before moving away",
+		"hex": ["#e6dccb", "#9a8a78", "#c2a88a", "#5e6a78", "#f4efe6"]
+	},
+	{
+		"phrase": "coming home after a long time away",
+		"hex": ["#efe4d0", "#b67a4a", "#6a8a7a", "#fbf6ec", "#4a3a30"]
+	},
+
+	{
+		"phrase": "lying on the roof looking at the stars",
+		"hex": ["#0c1022", "#e8e2c4", "#3a4a7a", "#8a9ac9", "#1e2644"]
+	},
+	{
+		"phrase": "walking alone under a full moon on a cold clear night",
+		"hex": ["#101829", "#c9d3e3", "#4a5a7a", "#8a9ab8", "#e8ecf2"]
+	},
+	{
+		"phrase": "a quiet lake at midnight, everything silver",
+		"hex": ["#141c26", "#aeb9c4", "#3c4a58", "#6e7e8e", "#e3e8ec"]
+	},
+	{
+		"phrase": "camping in the desert under the milky way",
+		"hex": ["#0f1020", "#c9763a", "#4a3a6a", "#e8c89a", "#2a2a4a"]
+	},
+	{
+		"phrase": "a haunted feeling walking through an empty house at night",
+		"hex": ["#121315", "#4a4f4a", "#8a8a7a", "#2a2e2a", "#c9c2a8"]
+	},
+
+	{
+		"phrase": "studying late at night with cold coffee and a desk lamp",
+		"hex": ["#1e1c1a", "#e0b56a", "#5a4a3a", "#f1e6cf", "#3a3a3e"]
+	},
+	{
+		"phrase": "writing a letter alone in a quiet room",
+		"hex": ["#efe7d8", "#3a3a3a", "#a08a6a", "#fbf8f0", "#6a5a4a"]
+	},
+	{
+		"phrase": "an old library with dusty books and afternoon sun",
+		"hex": ["#e9dcc2", "#7a5230", "#c9a05a", "#3e2a1e", "#f6efdf"]
+	},
+	{
+		"phrase": "a secondhand record store on a rainy day",
+		"hex": ["#2e2a26", "#c96a3a", "#a89a6a", "#e8dcc4", "#4a5a5a"]
+	},
+	{
+		"phrase": "painting alone in a sunny studio",
+		"hex": ["#f6f1e7", "#e0a03a", "#3a6ab0", "#d8452e", "#2e2e2e"]
+	},
+	{
+		"phrase": "an art gallery on a quiet weekday afternoon",
+		"hex": ["#f3f2ef", "#c9c5bd", "#2e2e2e", "#a8452e", "#8a8a84"]
+	},
+
+	{
+		"phrase": "a hike through a wet green forest after rain",
+		"hex": ["#dbe3d3", "#3f5e3a", "#7f9a6a", "#a8b8a0", "#2a3a26"]
+	},
+	{
+		"phrase": "standing on a cliff over the ocean in the wind",
+		"hex": ["#c9d6dc", "#2f5a6a", "#e6e2d6", "#6a8a6a", "#1e3440"]
+	},
+	{
+		"phrase": "a hot desert road at noon, dust and heat shimmer",
+		"hex": ["#f0d7ae", "#c9703a", "#8a9ab0", "#f7ecd6", "#6a3a22"]
+	},
+	{
+		"phrase": "a snowy mountain top in bright sun",
+		"hex": ["#f4f7fa", "#4a7ab0", "#c9d8e8", "#e8c89a", "#2a3a50"]
+	},
+	{
+		"phrase": "a tropical rainforest humid and loud with birds",
+		"hex": ["#2a3e2a", "#5a9a4a", "#e8b43a", "#c9453a", "#a8d08a"]
+	},
+	{
+		"phrase": "a meadow of wildflowers in early summer",
+		"hex": ["#eef0d8", "#9ac06a", "#e8a8c4", "#f2d24a", "#6a8ac9"]
+	},
+	{
+		"phrase": "sailing on a bright windy afternoon",
+		"hex": ["#eaf3f7", "#1f4f8a", "#f2f0e6", "#e84a3a", "#6ab0d0"]
+	},
+	{
+		"phrase": "a lighthouse on a grey coast in winter",
+		"hex": ["#c4cacb", "#384850", "#e9e5dc", "#8a4a3a", "#7a8a8e"]
+	},
+
+	{
+		"phrase": "my childhood bedroom on a summer afternoon",
+		"hex": ["#f5ebd6", "#e8a86a", "#8ab8c9", "#f2d0d0", "#6a8a5a"]
+	},
+	{
+		"phrase": "watching cartoons on a saturday morning as a kid",
+		"hex": ["#fdf4dc", "#f2a02e", "#3ab0e0", "#e8452e", "#6ac04a"]
+	},
+	{
+		"phrase": "finding old photographs of my parents when they were young",
+		"hex": ["#e7d8bd", "#a8743f", "#6a7a7a", "#c9a88a", "#4a3a2e"]
+	},
+	{
+		"phrase": "nostalgia for a summer that will never come back",
+		"hex": ["#f2dcc4", "#d88a6a", "#8aa8b8", "#fbefe0", "#7a5a6a"]
+	},
+	{
+		"phrase": "graduation day, proud and scared of what comes next",
+		"hex": ["#f3efe6", "#1f2a4a", "#d9b04a", "#8a2e3a", "#c9d0dc"]
+	},
+	{
+		"phrase": "the night before a big exam and i can't sleep",
+		"hex": ["#1a1d24", "#5a6a8a", "#d9c28a", "#2e3444", "#a8adb8"]
+	},
+
+	{
+		"phrase": "a calm sunny morning in a clean white kitchen",
+		"hex": ["#fbfaf6", "#e8dcc4", "#9ab8a8", "#f2c86a", "#4a4e4a"]
+	},
+	{
+		"phrase": "meditating in a quiet room with incense",
+		"hex": ["#ece6da", "#a88a5a", "#6a7a6a", "#f7f3ea", "#3a3a32"]
+	},
+	{
+		"phrase": "a calm rainy morning in kyoto with green tea",
+		"hex": ["#dfe3d6", "#6a8a5a", "#3a3a32", "#b8a88a", "#f2f0e8"]
+	},
+	{
+		"phrase": "a spa day, warm water and eucalyptus",
+		"hex": ["#e8efec", "#8ab8aa", "#f4f1ea", "#c9b8a0", "#4a6a62"]
+	},
+
+	{
+		"phrase": "anxious and overwhelmed, too many thoughts at once",
+		"hex": ["#2a2a33", "#c9453a", "#8a8a9a", "#e8e2d6", "#4a3a5a"]
+	},
+	{
+		"phrase": "so angry i have to go for a walk in the cold",
+		"hex": ["#1e1a1a", "#b82e2a", "#5a5a5e", "#e8dcd0", "#7a2a22"]
+	},
+	{
+		"phrase": "feeling invincible after finally finishing something hard",
+		"hex": ["#f5ecd4", "#e8702a", "#1f3a6a", "#f2c23a", "#2e2e2e"]
+	},
+	{
+		"phrase": "numb on a gray afternoon, nothing feels like anything",
+		"hex": ["#b8bab8", "#8a8e8e", "#d6d6d2", "#6a6e6e", "#4a4e4e"]
+	},
+	{
+		"phrase": "giddy and silly with my best friends at 1am",
+		"hex": ["#2a1e3e", "#f27ab0", "#f7d24a", "#6ad0c0", "#f4ecf6"]
+	},
+	{
+		"phrase": "lonely on a friday night while everyone else is out",
+		"hex": ["#1c2230", "#4a5a78", "#c9a07a", "#2e3648", "#d6d8e0"]
+	},
+	{
+		"phrase": "hopeful on the first morning of a new year",
+		"hex": ["#f4f1ea", "#a8c4d8", "#f2c9a0", "#fffdf8", "#5a7a9a"]
+	},
+	{
+		"phrase": "bored in a waiting room watching the clock",
+		"hex": ["#dcdcd2", "#a09c8a", "#7a8a8a", "#eeede6", "#5a5a52"]
+	},
+
+	{
+		"phrase": "an old italian piazza on a slow sunny lunch",
+		"hex": ["#f3e2c4", "#c9683a", "#6a8a4a", "#f7f0e0", "#3a5a8a"]
+	},
+	{
+		"phrase": "a paris cafe in the rain watching people pass",
+		"hex": ["#d9d4cb", "#6a3a2e", "#a8a08a", "#f2ece2", "#2e3a44"]
+	},
+	{
+		"phrase": "a spice market in marrakech in the afternoon heat",
+		"hex": ["#e8b87a", "#b8432a", "#2e6a8a", "#f4dcae", "#6a3a22"]
+	},
+	{
+		"phrase": "a london pub on a wet winter evening",
+		"hex": ["#2a2018", "#b8863a", "#6a2a22", "#e8d6b0", "#3a4a3a"]
+	},
+	{
+		"phrase": "new york in autumn, yellow cabs and steam from the street",
+		"hex": ["#e6ddd0", "#e8b43a", "#4a4a4e", "#a8432e", "#8a9aa8"]
+	},
+	{
+		"phrase": "a mexican town square during a fiesta",
+		"hex": ["#f7e2b8", "#e8452e", "#2e9a8a", "#f2a02e", "#c92e7a"]
+	},
+	{
+		"phrase": "a scandinavian cabin by a lake in the midnight sun",
+		"hex": ["#f0ece2", "#c9573a", "#6a8a9a", "#e8d8b0", "#2e3a3e"]
+	},
+	{
+		"phrase": "a tokyo convenience store run in the middle of summer",
+		"hex": ["#f2f4f0", "#2eaa6a", "#e8452e", "#3a6ac9", "#f7d24a"]
+	},
+
+	{
+		"phrase": "a haunted castle on the moors in a storm",
+		"hex": ["#1a1c1e", "#4a4e4a", "#7a6a5a", "#b8b2a0", "#5a1e1e"]
+	},
+	{
+		"phrase": "a candlelit gothic chapel at midnight",
+		"hex": ["#140f0e", "#c9953a", "#5a1e1e", "#e8d6b0", "#2e2a2a"]
+	},
+	{
+		"phrase": "a creepy abandoned amusement park in the fog",
+		"hex": ["#2a2e30", "#8a3a4a", "#a8b0a8", "#d9c48a", "#4a4e52"]
+	},
+	{
+		"phrase": "a noir detective story in a rainy city",
+		"hex": ["#141414", "#8a8a84", "#d8d2c4", "#3a3a3a", "#a82e2a"]
+	},
+
+	{
+		"phrase": "a vintage 1920s cocktail party with jazz",
+		"hex": ["#141414", "#d4af5a", "#e8e0cc", "#2e4a3e", "#8a2e2a"]
+	},
+	{
+		"phrase": "a 1970s living room with wood panels and a record player",
+		"hex": ["#e8d4a8", "#b8602a", "#6a5a2e", "#d98a3a", "#3a2a1e"]
+	},
+	{
+		"phrase": "a 1980s arcade with glowing machines",
+		"hex": ["#0e0a1e", "#ff3ea5", "#3ae0ff", "#f7e83a", "#6a2ae0"]
+	},
+	{
+		"phrase": "a 1990s bedroom covered in posters and fairy lights",
+		"hex": ["#2a2238", "#e8a0c0", "#6ab0a0", "#f2d88a", "#8a5ab0"]
+	},
+
+	{
+		"phrase": "an elegant evening at the opera in a velvet dress",
+		"hex": ["#1e0f14", "#8a1e2e", "#d4af6a", "#f0e2d0", "#3a1e2a"]
+	},
+	{
+		"phrase": "afternoon tea in a grand old hotel",
+		"hex": ["#f3ebe0", "#c9a0a8", "#8aa89a", "#e8d4a0", "#6a4a4a"]
+	},
+	{
+		"phrase": "a lemon grove on the amalfi coast",
+		"hex": ["#f7f0d0", "#f2d23a", "#2e6aa8", "#6a9a4a", "#fffcf0"]
+	},
+	{
+		"phrase": "lavender fields in provence in july",
+		"hex": ["#e8e0ee", "#8a6ac0", "#6a8a4a", "#f4e8c4", "#4a3a6a"]
+	},
+	{
+		"phrase": "a rose garden on a warm evening",
+		"hex": ["#f4e4e0", "#c9506a", "#6a8a4a", "#f8d0c4", "#4a2e3a"]
+	},
+
+	{
+		"phrase": "a video game marathon in the basement with my brother",
+		"hex": ["#1a1e2a", "#4ae07a", "#e8452e", "#3a8ae8", "#e8e6de"]
+	},
+	{
+		"phrase": "a tech office buzzing late at night before a launch",
+		"hex": ["#151a22", "#3ab0e8", "#e8e6de", "#2a3444", "#e8a03a"]
+	},
+	{
+		"phrase": "a science museum on a school trip",
+		"hex": ["#eef2f4", "#2e6ae0", "#f2b43a", "#e8452e", "#1e2a3a"]
+	},
+	{
+		"phrase": "watching a rocket launch at night",
+		"hex": ["#0a0e1a", "#f28a2e", "#e8e2c4", "#3a4a8a", "#c92e2a"]
+	},
+
+	{
+		"phrase": "a warm bath with candles after a long week",
+		"hex": ["#efe2d6", "#d9a07a", "#b8a0b0", "#faf4ee", "#6a5058"]
+	},
+	{
+		"phrase": "a sick day in bed with soup and old movies",
+		"hex": ["#ece6da", "#b8a07a", "#8a9aa8", "#f7f2ea", "#5a5048"]
+	},
+	{
+		"phrase": "a sleepover with blankets, snacks and scary stories",
+		"hex": ["#2a2238", "#f2b85a", "#8a6ab0", "#f4e8d4", "#e86a7a"]
+	},
+	{
+		"phrase": "a cozy bookshop cafe on a snowy afternoon",
+		"hex": ["#efe4d2", "#6a3e2e", "#b8905a", "#d6dde2", "#3a4a3e"]
+	},
+	{
+		"phrase": "a teenage summer job at the ice cream stand",
+		"hex": ["#fdf3ea", "#f2a0b8", "#8ad0c0", "#f7d27a", "#c94a5a"]
+	},
+	{
+		"phrase": "a friday afternoon when school gets out for summer",
+		"hex": ["#f7efd4", "#f2a83a", "#3ab0d0", "#e85a4a", "#5aa05a"]
+	},
+	{
+		"phrase": "an old farmhouse kitchen at harvest time",
+		"hex": ["#eee0c4", "#a86a2e", "#6a7a3a", "#d9a84a", "#4a3222"]
+	},
+	{
+		"phrase": "the quiet after a party when everyone has left",
+		"hex": ["#23202a", "#8a6a7a", "#d9b87a", "#46404e", "#e6dcd6"]
+	},
+	{
+		"phrase": "a fresh start on the first day of a new job",
+		"hex": ["#f5f4f0", "#3a6a9a", "#e8c07a", "#d8dde2", "#2e3440"]
+	},
+	{
+		"phrase": "watching my kid take their first steps",
+		"hex": ["#fbf3ea", "#f2c07a", "#8ac0d8", "#f2a8a0", "#6a8a6a"]
+	},
+	{
+		"phrase": "a pride parade full of joy and colour",
+		"hex": ["#fbf6f0", "#e8402e", "#f2b41e", "#2e9a5a", "#4a4ac9"]
+	},
+	{
+		"phrase": "a protest march with everyone shouting together",
+		"hex": ["#e8e4dc", "#c92e2a", "#1e1e1e", "#f2d23a", "#6a6a6a"]
+	}
+]
