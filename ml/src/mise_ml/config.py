@@ -44,6 +44,8 @@ class CurateConfig:
     book_top: int = 2000
     book_shelf_tags: int = 15
     song_top: int = 3000
+    # Some songs are not on Deezer; resolve keeps the top song_top of the candidates.
+    song_candidate_factor: float = 1.4
     song_per_artist: int = 5
     poem_min_lines: int = 8
     poem_max_lines: int = 40
@@ -66,7 +68,8 @@ class ResolveConfig:
     webp_quality: int = 82
     min_interval: dict[str, float] = field(
         default_factory=lambda: {
-            "itunes.apple.com": 3.2,
+            "api.deezer.com": 0.12,
+            "cdn-images.dzcdn.net": 0.12,
             "v3.sg.media-imdb.com": 0.4,
             "m.media-amazon.com": 0.2,
             "query.wikidata.org": 1.0,
@@ -74,13 +77,14 @@ class ResolveConfig:
             "covers.openlibrary.org": 0.5,
             "collectionapi.metmuseum.org": 0.1,
             "images.metmuseum.org": 0.1,
-            "is1-ssl.mzstatic.com": 0.2,
             "poetrydb.org": 1.0,
         }
     )
     default_interval: float = 1.0
     timeout: float = 30.0
     retries: int = 4
+    # Parallel requests per category. The per-host intervals above still cap the rate.
+    workers: dict[str, int] = field(default_factory=lambda: {"song": 4})
 
 
 @dataclass(frozen=True)

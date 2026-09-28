@@ -166,8 +166,8 @@ def validate_items(items: list[dict[str, Any]]) -> list[str]:
             problems.append(f"{it['id']}: no image")
         if not it["links"].get("primary"):
             problems.append(f"{it['id']}: no primary link")
-        if it["category"] == "song" and not it["links"].get("apple"):
-            problems.append(f"{it['id']}: no apple link")
+        if it["category"] == "song" and not (it["links"].get("deezer") and it.get("preview")):
+            problems.append(f"{it['id']}: no Deezer link or preview")
         if it["category"] == "poem" and not it.get("text"):
             problems.append(f"{it['id']}: no poem text")
     return problems

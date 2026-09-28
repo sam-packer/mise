@@ -60,7 +60,7 @@ The times are estimates for an RTX 5090, except where the text says "measured".
 |---|---|---|---|
 | `fetch` | `sources.toml` | `data/raw/` | 10–20 min |
 | `curate` | `data/raw/` | `data/curated/catalog.jsonl`, `pat.jsonl` | 12 s (measured) |
-| `resolve` | `catalog.jsonl` | `data/curated/resolved.jsonl`, `data/img/` | about 3 h |
+| `resolve` | `catalog.jsonl` | `data/curated/resolved.jsonl`, `data/img/` | about 1 h (books are the slowest; songs 5–10 min) |
 | `profile` | `resolved.jsonl`, `eval_feelings.jsonl`, vocab | `data/curated/profiles.jsonl`, `moods.jsonl`, `pat_sentences.jsonl`, `labels-<vocab>.jsonl` | 4–10 h |
 | `train-teacher` | the curated files | `data/models/teacher.pt`, `teacher_outputs.pt` | 30–60 min |
 | `train-student` | teacher outputs | `data/models/student/` | 20–40 min |
@@ -112,8 +112,9 @@ on 2026-09-27 was 2,000 films, 2,000 books, 3,000 songs, 1,993 poems, and 6,000 
 - **song:** MuSe tracks with a Spotify ID. The Zenodo release has no popularity column, and only
   about 2,000 of its tracks match a track in the Spotify tracks dataset. So `curate` ranks by
   artist popularity (the highest popularity of any track by that artist), then by track
-  popularity, and keeps at most 5 tracks per artist. It keeps the top 3,000. With the Kaggle
-  file, it ranks by Last.fm listeners or tag count instead.
+  popularity, and keeps at most 5 tracks per artist. It keeps the top 4,200 as candidates (1.4 times
+  3,000), because some songs are not on Deezer. With the Kaggle file, it ranks by Last.fm
+  listeners or tag count instead.
 - **poem:** PoetryDB poems with 8 to 40 lines. The excerpt is the first 14 lines.
 - **art:** Met public-domain Paintings, Drawings, Prints, and Photographs, highlights first. It
   keeps three candidates for each slot, because some objects have no image.
@@ -128,9 +129,23 @@ drops items without an image, except poems.
 - **film:** the IMDb suggestion endpoint gives the poster for the IMDb ID from MovieLens.
   Wikidata (IMDb ID P345, director P57) gives the director, 200 films for each query. The
   primary link is the IMDb title page.
-- **song:** iTunes Search gives the album art, the 30 s preview, the Apple link, and the album
-  name. The Spotify link comes from the MuSe Spotify ID. The YouTube link is a search URL for
-  the artist and title.
+- **song:** the Deezer search API (no key) finds the track by artist and title. A match needs
+  the same artist and a title that starts with the catalog title, ignoring "(feat. ...)" parts.
+  `resolve` prefers the original album over a live, remix, or compilation album, and it rejects
+  another version of the song (remix, live, karaoke, and so on) unless the catalog title names
+  that version too. Deezer gives the album cover, the album name, and the track link. The
+  Spotify link comes from the MuSe Spotify ID. The Apple Music and YouTube links are search
+  URLs for the artist and title. The preview is the path `/api/preview/deezer/<id>`, which the
+  web app's Worker serves, because Deezer preview URLs expire after about 15 minutes. Songs
+  run with 4 parallel requests; the 0.12 s gap for each Deezer host keeps them under Deezer's
+  limit of about 50 requests in 5 s.
+- `resolve` keeps exactly 3,000 songs: the best-ranked candidates that Deezer has. It tries the
+  candidates in rank order, in chunks, and stops when no untried candidate can rank above the
+  3,000th kept song. Then it removes any extra lower-ranked songs. So 1 or 4 workers, and a run
+  that resumes, keep the same 3,000. It logs `song: 3,000 kept of 4,200 candidates (N dropped:
+  reasons)`.
+- Songs that an earlier version of `resolve` found on iTunes have no Deezer id. `resolve`
+  removes them and their images at the start, so they resolve again from Deezer.
 - **book:** Open Library gives the cover and the work page.
 - **art:** the Met Collection API gives the image and the museum page. `resolve` checks
   `isPublicDomain` for each object and keeps 2,000: 40% paintings and 20% of each other class.
@@ -292,5 +307,5 @@ order. The label file name contains a hash of the vocab, so a new vocab gets new
 
 MovieLens and ArtEmis are for research or non-commercial use only. A class project is allowed.
 A public commercial launch is not. The Met Open Access images are CC0. The IMDb posters and the
-iTunes artwork and previews belong to their owners. The app shows them next to links to the
+Deezer album covers and previews belong to their owners. The app shows them next to links to the
 source pages.

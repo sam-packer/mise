@@ -79,6 +79,8 @@ class CachedClient:
 
         Only real answers (JSON with 200, or 404) are cached. A block page, a non-JSON 200,
         or any other status raises, so the caller counts an error and a rerun retries it.
+        Deezer answers 200 with {"error": {...}}. Code 4 means over quota: that one is retried
+        with backoff. Any error body raises FetchError and is never cached.
         """
         path = self._path(url, ".json")
         if path.exists():
@@ -86,16 +88,24 @@ class CachedClient:
             cached = json.loads(path.read_text(encoding="utf-8"))
             return cached["body"]
         self.requests += 1
-        resp = self._fetch(url)
-        if resp.status_code == 404:
-            body = None
-        elif resp.status_code == 200:
-            try:
-                body = resp.json()
-            except ValueError as e:
-                raise FetchError(f"{url}: HTTP 200 without JSON") from e
+        for attempt in range(self.cfg.retries):
+            resp = self._fetch(url)
+            if resp.status_code == 404:
+                body = None
+            elif resp.status_code == 200:
+                try:
+                    body = resp.json()
+                except ValueError as e:
+                    raise FetchError(f"{url}: HTTP 200 without JSON") from e
+            else:
+                raise FetchError(f"{url}: HTTP {resp.status_code}")
+            if not (isinstance(body, dict) and "error" in body):
+                break
+            if not isinstance(body["error"], dict) or body["error"].get("code") != 4:
+                raise FetchError(f"{url}: API error {body['error']}")
+            time.sleep(5 * 2**attempt)
         else:
-            raise FetchError(f"{url}: HTTP {resp.status_code}")
+            raise FetchError(f"{url}: API error {body['error']}")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps({"url": url, "status": resp.status_code, "body": body}),
