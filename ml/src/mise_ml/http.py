@@ -16,6 +16,10 @@ class FetchError(RuntimeError):
 
 
 USER_AGENT = "mise-catalog/0.1 (class project; +https://github.com/sam-packer/mise)"
+# Open Library allows 3 requests/s instead of 1 when the User-Agent carries a contact email.
+# The email goes to Open Library only.
+IDENTIFIED_AGENT = "mise-catalog/0.1 (me@sampacker.com; +https://github.com/sam-packer/mise)"
+IDENTIFIED_HOSTS = {"openlibrary.org", "covers.openlibrary.org"}
 
 
 class RateLimiter:
@@ -62,7 +66,8 @@ class CachedClient:
         for attempt in range(self.cfg.retries):
             self.limiter.wait(host)
             try:
-                resp = self.client.get(url)
+                agent = IDENTIFIED_AGENT if host in IDENTIFIED_HOSTS else USER_AGENT
+                resp = self.client.get(url, headers={"User-Agent": agent})
             except httpx.HTTPError:
                 time.sleep(2**attempt)
                 continue
