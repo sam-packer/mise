@@ -41,8 +41,19 @@ At the end, `all` checks the ship rule (see "eval" below):
 To run one step, use `uv run mise-ml <step>`. To see the steps in run order, run
 `uv run mise-ml` with no step.
 
-## Steps
+## Logs
 
+Each command prints short lines to the console, such as
+`12:04:31 resolve  INFO  film: 1,843 resolved`. Each step prints what it reads and how much work
+is left, then what it wrote, what it dropped and why, and how long it took. Progress bars show
+the long loops. WARN lines name what you should know: dropped items (counted by reason),
+retries, and failures. A step that fails ends with an ERROR line.
+
+Every command also writes a full log with DEBUG detail, such as each dropped item and each
+checksum, to `out/logs/<time>-<step>.log`. One `all` run writes one file. `all` ends with a
+table of the steps and their times.
+
+## Steps
 The times are estimates for an RTX 5090, except where the text says "measured".
 
 | Step | Input | Output | Time |

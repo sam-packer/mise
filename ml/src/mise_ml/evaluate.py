@@ -14,6 +14,7 @@ from mise_ml.config import (
     CATEGORIES,
     EVAL_REPORT,
     JUDGMENTS,
+    ML_ROOT,
     SEED,
     ProfileConfig,
     StudentConfig,
@@ -23,6 +24,7 @@ from mise_ml.data import Catalog, load_catalog, load_eval_texts, load_queries, r
 from mise_ml.export import onnx_run, onnx_session
 from mise_ml.features import shared_encoder
 from mise_ml.llm import Job, Record, Request, Unit, sha
+from mise_ml.log import elapsed, get, num, progress
 from mise_ml.profile import (
     FEELING_RULES,
     array_of,
@@ -38,6 +40,7 @@ from mise_ml.teacher import item_store, load_teacher, query_store
 from mise_ml.util import iter_jsonl, make_deterministic, write_json
 from mise_ml.vocab import load_vocab
 
+log = get(__name__)
 SHIP_MARGIN = 0.05
 SEP = "\x1f"
 
@@ -86,7 +89,7 @@ def student_outputs(texts: list[str], catalog: Catalog) -> tuple[Outputs, list[f
     max_tokens = StudentConfig().max_length
     rows, latency = [], []
     onnx_run(session, tokenizer, [texts[0]], max_tokens)
-    for text in texts:
+    for text in progress(texts, desc="student (1 thread)", unit="text"):
         start = time.perf_counter()
         out = onnx_run(session, tokenizer, [text], max_tokens)
         latency.append((time.perf_counter() - start) * 1000)
@@ -138,11 +141,22 @@ def judge() -> None:
         raise SystemExit("no eval feelings; write eval_feelings.jsonl first")
     catalog = load_catalog()
     k = cfg.judge_pool_per_system
-    systems = [
-        top_by_category(teacher_outputs(texts, catalog), catalog, k),
-        top_by_category(student_outputs(texts, catalog)[0], catalog, k),
-        top_by_category(baseline_outputs(texts, catalog), catalog, k),
-    ]
+    log.info(
+        f"judge: {num(len(texts))} eval feelings; pool = top {k} per category from the "
+        "teacher, the student, and the untrained MiniLM"
+    )
+    systems = []
+    for name, fn in progress(
+        (
+            ("teacher", teacher_outputs),
+            ("student", lambda t, c: student_outputs(t, c)[0]),
+            ("baseline", baseline_outputs),
+        ),
+        desc="judge pool",
+        unit="system",
+    ):
+        log.debug(f"judge pool: ranking with the {name}")
+        systems.append(top_by_category(fn(texts, catalog), catalog, k))
     shared_encoder.cache_clear()  # free the 8B teacher before the 9B labeler loads
     gc.collect()
     torch.cuda.empty_cache()
@@ -174,7 +188,10 @@ def judge() -> None:
     def fingerprint(key: str) -> str:
         return sha(key + describe(key))
 
+    log.info(f"judge: {num(len(keys))} (feeling, item) pairs in the pool")
     Job("judge", JUDGMENTS, cfg).run(keys, build, parse, fingerprint, lazy_llm(cfg))
+    fits = sum(1 for r in iter_jsonl(JUDGMENTS) if r["fit"])
+    log.info(f"judge: {num(fits)} pairs judged a fit")
 
 
 def judged_recall(out: Outputs, texts: list[str], catalog: Catalog) -> float:
@@ -214,6 +231,7 @@ def label_metrics(out: Outputs, rows: np.ndarray, qs: Any, offset: int) -> dict[
 
 
 def run() -> dict[str, Any]:
+    start = time.perf_counter()
     make_deterministic(SEED)
     vocab = load_vocab()
     catalog = load_catalog()
@@ -221,8 +239,14 @@ def run() -> dict[str, Any]:
     eval_rows = qs.where("eval")
     held_rows = qs.where("heldout")
     texts = [qs.texts[i] for i in eval_rows] + [qs.texts[i] for i in held_rows]
+    log.info(
+        f"reading the teacher, the bundle, and {num(len(eval_rows))} eval feelings plus "
+        f"{num(len(held_rows))} held-out item feelings"
+    )
     if not len(eval_rows):
-        print("no eval feelings found; report covers the held-out paraphrases only")
+        log.warning("no eval feelings found; the report covers the held-out feelings only")
+    if not JUDGMENTS.exists():
+        log.info("no judgments yet; run `uv run mise-ml eval --judge` for the judged recall@10")
 
     teacher = teacher_outputs(texts, catalog)
     student, latency = student_outputs(texts, catalog)
@@ -255,15 +279,23 @@ def run() -> dict[str, Any]:
     gap = report["teacher"][key] - report["student"][key]
     report["ship"] = {"metric": key, "gap": gap, "ok": bool(gap <= SHIP_MARGIN)}
     write_json(EVAL_REPORT, report)
+    log.info(
+        f"{'':8} {'recall@10':>10} {'judged':>8} {'palette dE':>11} "
+        f"{'light':>6} {'type':>6} {'scent':>6}"
+    )
     for name in ("teacher", "student"):
         r = report[name]
-        print(
-            f"{name}: recall@10 heldout {r['recall@10_heldout']:.3f}, "
-            f"judged {r['recall@10_judged']:.3f}, eval {r['eval']}, heldout {r['heldout']}"
+        e = r["eval"] or r["heldout"]
+        log.info(
+            f"{name:8} {r['recall@10_heldout']:>10.3f} {r['recall@10_judged']:>8.3f} "
+            f"{e.get('palette_dE', float('nan')):>11.4f} {e.get('light_acc', float('nan')):>6.3f} "
+            f"{e.get('typeface_acc', float('nan')):>6.3f} {e.get('scent_acc', float('nan')):>6.3f}"
         )
     lat = report["student"]["latency_ms"]
-    print(f"student latency: median {lat['median']:.1f} ms, p95 {lat['p95']:.1f} ms (1 thread)")
-    verdict = "SHIP" if report["ship"]["ok"] else "DO NOT SHIP"
-    print(f"{verdict}: teacher - student {key} = {gap * 100:.1f} points (limit 5) -> {EVAL_REPORT}")
+    log.info(f"student latency: median {lat['median']:.1f} ms, p95 {lat['p95']:.1f} ms (1 thread)")
+    verdict = "ship" if report["ship"]["ok"] else "do not ship"
+    line = f"{verdict}: teacher - student on {key} = {gap * 100:.1f} points (limit 5)"
+    (log.info if report["ship"]["ok"] else log.warning)(line)
     write_run_json()
+    log.info(f"done in {elapsed(start)}: report -> {EVAL_REPORT.relative_to(ML_ROOT).as_posix()}")
     return report

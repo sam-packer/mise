@@ -1,6 +1,7 @@
 import io
 import re
 import threading
+import time
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -9,12 +10,22 @@ from urllib.parse import quote_plus, urlencode
 
 import numpy as np
 from PIL import Image
-from tqdm import tqdm
 
 from mise_ml.color import image_tone
-from mise_ml.config import CATALOG, CATEGORIES, IMG, RESOLVE_DROPPED, RESOLVED, ResolveConfig
+from mise_ml.config import (
+    CATALOG,
+    CATEGORIES,
+    IMG,
+    ML_ROOT,
+    RESOLVE_DROPPED,
+    RESOLVED,
+    ResolveConfig,
+)
 from mise_ml.http import CachedClient
+from mise_ml.log import elapsed, get, num, progress
 from mise_ml.util import append_jsonl, iter_jsonl, sort_jsonl
+
+log = get(__name__)
 
 Record = dict[str, Any]
 Result = tuple[Record | None, str]
@@ -193,47 +204,71 @@ class Resolver:
 
 
 def run(categories: list[str] | None = None) -> None:
+    start = time.perf_counter()
     cfg = ResolveConfig()
     catalog = list(iter_jsonl(CATALOG))
     if not catalog:
         raise SystemExit(f"no catalog at {CATALOG}; run curate first")
     resolved = list(iter_jsonl(RESOLVED))
-    done = {r["id"] for r in resolved} | {r["id"] for r in iter_jsonl(RESOLVE_DROPPED)}
+    dropped_before = list(iter_jsonl(RESOLVE_DROPPED))
+    done = {r["id"] for r in resolved} | {r["id"] for r in dropped_before}
     art_kept = Counter(r["signal"]["classification"] for r in resolved if r["category"] == "art")
 
+    wanted = [c for c in CATEGORIES if not categories or c in categories]
     by_cat: dict[str, list[Record]] = defaultdict(list)
     for r in catalog:
-        if r["id"] not in done:
+        if r["id"] not in done and r["category"] in wanted:
             by_cat[r["category"]].append(r)
     for rows in by_cat.values():
         rows.sort(key=lambda r: (-r["rank"], r["id"]))
+    pending = ", ".join(f"{c} {num(len(by_cat[c]))}" for c in wanted if by_cat[c])
+    log.info(
+        f"reading {CATALOG.name}: {num(len(catalog))} items; {num(len(resolved))} resolved and "
+        f"{num(len(dropped_before))} dropped by earlier runs; to do: {pending or 'nothing'}"
+    )
 
-    wanted = [c for c in CATEGORIES if not categories or c in categories]
     resolver = Resolver(cfg)
     lock = threading.Lock()
-    stats: Counter[str] = Counter()
+    stats: dict[str, Counter[str]] = {c: Counter() for c in wanted}
 
     def work(category: str) -> None:
         fn: Callable[[Record], Result] = getattr(resolver, category)
-        if category == "film":
+        if category == "film" and by_cat["film"]:
+            log.info(f"film: asking Wikidata for the directors of {num(len(by_cat['film']))} films")
             resolver.load_directors(by_cat["film"])
-        for r in tqdm(by_cat[category], desc=category, position=CATEGORIES.index(category)):
-            if category == "art":
-                cls = r["signal"]["classification"]
-                if art_kept[cls] >= r["signal"]["quota"]:
-                    continue
+        counts = stats[category]
+        bar = progress(
+            by_cat[category], desc=category, unit="item", position=CATEGORIES.index(category)
+        )
+        for r in bar:
+            if (
+                category == "art"
+                and art_kept[r["signal"]["classification"]] >= r["signal"]["quota"]
+            ):
+                counts["skipped: class quota full"] += 1
+                continue
             try:
                 out, reason = fn(r)
             except Exception as e:  # one bad record must not stop a multi-hour run
-                out, reason = None, f"error:{type(e).__name__}"
+                out, reason = None, f"error: {type(e).__name__}"
+                log.debug(f"{r['id']}: {type(e).__name__}: {e}")
             with lock:
-                stats[f"{category}:{reason}"] += 1
+                counts[reason] += 1
                 if out is not None:
                     append_jsonl(RESOLVED, [out])
                     if category == "art":
                         art_kept[out["signal"]["classification"]] += 1
                 elif not reason.startswith("error"):
+                    log.debug(f"drop {r['id']}: {reason}")
                     append_jsonl(RESOLVE_DROPPED, [{"id": r["id"], "reason": reason}])
+                looked_up = resolver.http.hits + resolver.http.requests
+            bar.set_postfix(
+                ok=counts["ok"],
+                dropped=sum(n for k, n in counts.items() if k not in ("ok",) and ":" not in k),
+                errors=sum(n for k, n in counts.items() if k.startswith("error")),
+                cached=f"{resolver.http.hits / max(looked_up, 1):.0%}",
+                refresh=False,
+            )
 
     with ThreadPoolExecutor(max_workers=len(wanted)) as pool:
         list(pool.map(work, wanted))
@@ -241,7 +276,30 @@ def run(categories: list[str] | None = None) -> None:
     sort_jsonl(RESOLVED, "id")
     sort_jsonl(RESOLVE_DROPPED, "id")
 
-    for key, n in sorted(stats.items()):
-        print(f"{key}: {n}")
+    for category in wanted:
+        counts = stats[category]
+        if not counts:
+            continue
+        drops = {
+            k: n for k, n in counts.items() if k != "ok" and not k.startswith(("error", "skip"))
+        }
+        errors = {k: n for k, n in counts.items() if k.startswith("error")}
+        line = f"{category}: {num(counts['ok'])} resolved"
+        if drops:
+            reasons = ", ".join(f"{k} {num(n)}" for k, n in sorted(drops.items()))
+            log.warning(f"{line}, {num(sum(drops.values()))} dropped ({reasons})")
+        else:
+            log.info(line)
+        if errors:
+            reasons = ", ".join(f"{k.split(': ')[1]} {num(n)}" for k, n in sorted(errors.items()))
+            log.warning(
+                f"{category}: {num(sum(errors.values()))} items failed ({reasons}); "
+                "the next run tries them again (details in the log file)"
+            )
     totals = Counter(r["category"] for r in iter_jsonl(RESOLVED))
-    print("resolved:", dict(totals))
+    log.info(
+        f"done in {elapsed(start)}: {num(sum(totals.values()))} items in "
+        f"{RESOLVED.relative_to(ML_ROOT).as_posix()} "
+        f"({', '.join(f'{c} {num(totals[c])}' for c in CATEGORIES)}); "
+        f"{num(resolver.http.requests)} API calls, {num(resolver.http.hits)} answers from the cache"
+    )

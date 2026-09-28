@@ -1,5 +1,6 @@
-import json
+import logging
 import shutil
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -11,12 +12,23 @@ import torch
 from onnxruntime.quantization import QuantType, quantize_dynamic
 from transformers import PreTrainedTokenizerBase
 
-from mise_ml.config import BUNDLE, IMG, OUT, SEED, VOCAB_PATH, ExportConfig, StudentConfig
+from mise_ml.config import (
+    BUNDLE,
+    IMG,
+    ML_ROOT,
+    OUT,
+    SEED,
+    VOCAB_PATH,
+    ExportConfig,
+    StudentConfig,
+)
 from mise_ml.data import Catalog, load_catalog
+from mise_ml.log import elapsed, get, num, progress
 from mise_ml.student import OUTPUT_NAMES, STUDENT_DIR, Student, load_student
 from mise_ml.util import make_deterministic, sha256_file, write_json
 from mise_ml.vocab import load_vocab
 
+log = get(__name__)
 INPUT_NAMES = ("input_ids", "attention_mask", "token_type_ids")
 ITEM_FIELDS = (
     "id",
@@ -33,6 +45,9 @@ ITEM_FIELDS = (
 
 
 def export_onnx(model: Student, path: Path, opset: int) -> None:
+    # The exporter warns that torchvision and triton are absent; neither is used here.
+    for name in ("torch.onnx", "torch.utils.flop_counter"):
+        logging.getLogger(name).setLevel(logging.ERROR)
     model = model.float().cpu().eval()
     example = (
         torch.ones((2, 16), dtype=torch.int64),
@@ -51,6 +66,7 @@ def export_onnx(model: Student, path: Path, opset: int) -> None:
         dynamo=True,
         dynamic_shapes={name: dims for name in INPUT_NAMES},
         external_data=False,
+        verbose=False,
     )
     rename_shadowed_values(path)
 
@@ -81,7 +97,14 @@ def rename_shadowed_values(path: Path) -> None:
 
 
 def quantize(fp32: Path, int8: Path) -> None:
-    quantize_dynamic(fp32, int8, weight_type=QuantType.QInt8)
+    # onnxruntime logs a pre-processing hint on the root logger on every call; hide it.
+    root = logging.getLogger()
+    level = root.level
+    root.setLevel(logging.ERROR)
+    try:
+        quantize_dynamic(fp32, int8, weight_type=QuantType.QInt8)
+    finally:
+        root.setLevel(level)
 
 
 def onnx_session(path: Path, threads: int = 0) -> ort.InferenceSession:
@@ -117,10 +140,12 @@ def onnx_embed(
     texts: list[str],
     max_length: int,
     batch_size: int = 64,
+    desc: str | None = None,
 ) -> np.ndarray:
+    starts = range(0, len(texts), batch_size)
     parts = [
         onnx_run(session, tokenizer, texts[i : i + batch_size], max_length)["embedding"]
-        for i in range(0, len(texts), batch_size)
+        for i in (progress(starts, desc=desc, unit="batch") if desc else starts)
     ]
     emb = np.concatenate(parts).astype(np.float32)
     return emb / np.linalg.norm(emb, axis=1, keepdims=True)
@@ -168,18 +193,23 @@ def write_bundle(
         )
     problems = validate_items(items)
     if problems:
-        print("\n".join(problems[:20]))
-        raise SystemExit(f"{len(problems)} item problems; fix the catalog before export")
+        for p in problems:
+            log.debug(f"item problem: {p}")
+        log.error(f"{num(len(problems))} item problems, for example: {'; '.join(problems[:5])}")
+        raise SystemExit(1)
 
     session = onnx_session(model_path)
-    vectors = onnx_embed(session, tokenizer, catalog.texts, StudentConfig().item_max_length)
+    log.info(f"item vectors: encoding {num(len(catalog.texts))} items with the int8 graph")
+    vectors = onnx_embed(
+        session, tokenizer, catalog.texts, StudentConfig().item_max_length, desc="item vectors"
+    )
     (BUNDLE / "vectors.bin").write_bytes(vectors.astype("<f4").tobytes())
     write_json(BUNDLE / "items.json", items)
     shutil.copy2(VOCAB_PATH, BUNDLE / "vocab.json")
 
     img_dir = BUNDLE / "img"
     img_dir.mkdir()
-    for name in names:
+    for name in progress(names, desc="images", unit="file"):
         shutil.copy2(IMG / name, img_dir / name)
 
     cfg = ExportConfig()
@@ -200,10 +230,14 @@ def write_bundle(
         "counts": {"items": len(items)},
     }
     write_json(BUNDLE / "manifest.json", manifest)
-    counts: dict[str, int] = {}
-    for it in items:
-        counts[it["category"]] = counts.get(it["category"], 0) + 1
-    print(f"bundle -> {BUNDLE}: {counts}, vectors {vectors.shape}")
+    counts = Counter(it["category"] for it in items)
+    size = sum(p.stat().st_size for p in BUNDLE.rglob("*") if p.is_file())
+    log.info(
+        f"bundle {manifest['version']}: {num(len(items))} items "
+        f"({', '.join(f'{k} {num(v)}' for k, v in sorted(counts.items()))}), "
+        f"{num(len(names))} images, {size / 2**20:.0f} MiB -> "
+        f"{BUNDLE.relative_to(ML_ROOT).as_posix()}"
+    )
 
 
 def check_outputs(model_path: Path, tokenizer: PreTrainedTokenizerBase, sizes: tuple) -> None:
@@ -218,10 +252,13 @@ def check_outputs(model_path: Path, tokenizer: PreTrainedTokenizerBase, sizes: t
     }
     for name, shape in expected.items():
         if out[name].shape != shape:
-            raise SystemExit(f"output {name} has shape {out[name].shape}, expected {shape}")
+            log.error(f"output {name} has shape {out[name].shape}, expected {shape}")
+            raise SystemExit(1)
+    log.info("output shapes ok: " + ", ".join(f"{k} {v}" for k, v in expected.items()))
 
 
 def run() -> None:
+    start = time.perf_counter()
     make_deterministic(SEED)
     cfg = ExportConfig()
     vocab = load_vocab()
@@ -231,21 +268,39 @@ def run() -> None:
         raise SystemExit("vocab changed since train-student; retrain")
     if meta["item_ids"] != [it["id"] for it in catalog.items]:
         raise SystemExit("catalog changed since train-student; retrain")
+    log.info(
+        f"reading {STUDENT_DIR.relative_to(ML_ROOT).as_posix()} "
+        f"(val recall@10 {meta.get('val_recall@10', float('nan')):.3f}) and "
+        f"{num(len(catalog.items))} items; opset {cfg.opset}, "
+        f"limit {cfg.max_model_bytes / 2**20:.0f} MiB"
+    )
 
     work = OUT / "onnx"
     fp32, int8 = work / "student.fp32.onnx", work / "student.int8.onnx"
+    log.info("exporting the ONNX graph (fp32)")
     export_onnx(model, fp32, cfg.opset)
+    log.info("dynamic int8 quantization")
     quantize(fp32, int8)
     size = int8.stat().st_size
-    print(f"int8 model: {size / 2**20:.2f} MiB")
+    log.info(f"int8 model: {size / 2**20:.2f} MiB (fp32 {fp32.stat().st_size / 2**20:.1f} MiB)")
     if size > cfg.max_model_bytes:
-        raise SystemExit(f"model is {size} bytes, over the {cfg.max_model_bytes} byte limit")
+        log.error(
+            f"the model is {size / 2**20:.2f} MiB, "
+            f"over the {cfg.max_model_bytes / 2**20:.0f} MiB limit"
+        )
+        raise SystemExit(1)
     check_outputs(int8, tokenizer, vocab.sizes())
 
     sample = [it["queries"][0] for it in catalog.items[:: max(1, len(catalog.items) // 200)]]
     a = onnx_embed(onnx_session(fp32), tokenizer, sample, cfg.max_tokens)
     b = onnx_embed(onnx_session(int8), tokenizer, sample, cfg.max_tokens)
-    print(f"int8 vs fp32 embedding cosine: mean {(a * b).sum(1).mean():.4f}")
+    cosine = (a * b).sum(1)
+    log.info(
+        f"int8 vs fp32 embeddings on {len(sample)} feelings: cosine mean {cosine.mean():.4f}, "
+        f"min {cosine.min():.4f}"
+    )
+    if cosine.min() < 0.9:
+        log.warning("some int8 embeddings differ a lot from fp32 (cosine below 0.9)")
 
     write_bundle(int8, tokenizer, STUDENT_DIR / "encoder", catalog)
-    print(json.dumps(json.loads((BUNDLE / "manifest.json").read_text()), indent=2))
+    log.info(f"done in {elapsed(start)}")

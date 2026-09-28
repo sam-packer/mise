@@ -1,19 +1,21 @@
 import dataclasses
 import gc
+import time
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
-from tqdm import tqdm
 
-from mise_ml.config import MODELS, SEED, TeacherConfig
+from mise_ml.config import ML_ROOT, MODELS, SEED, TeacherConfig
 from mise_ml.data import load_catalog, load_queries, recall_at_k
 from mise_ml.features import ITEM_TEMPLATE, QUERY_TEMPLATE, FeatureStore, shared_encoder
 from mise_ml.heads import ChoiceHeads, Mlp, palette_loss
+from mise_ml.log import elapsed, get, num, progress
 from mise_ml.util import make_deterministic
 from mise_ml.vocab import load_vocab
 
+log = get(__name__)
 CHECKPOINT = MODELS / "teacher.pt"
 OUTPUTS = MODELS / "teacher_outputs.pt"
 
@@ -59,9 +61,12 @@ class Trainer:
         self.vocab = load_vocab()
         self.catalog = load_catalog()
         self.qs = load_queries(self.catalog, self.vocab, cfg)
-        print(
-            f"items {len(self.catalog.items)}, queries {len(self.qs.texts)} "
-            + ", ".join(f"{s} {len(self.qs.where(s))}" for s in ("train", "val", "heldout", "eval"))
+        splits = ", ".join(
+            f"{s} {num(len(self.qs.where(s)))}" for s in ("train", "val", "heldout", "eval")
+        )
+        log.info(
+            f"reading data/curated: {num(len(self.catalog.items))} items, "
+            f"{num(len(self.qs.texts))} queries ({splits}); backbone {cfg.backbone}"
         )
         dev = "cuda"
         self.fi = torch.tensor(
@@ -161,25 +166,49 @@ class Trainer:
         steps = cfg.epochs * -(-len(train) // cfg.batch_size)
         sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=cfg.lr, total_steps=steps)
         gen = torch.Generator(device="cuda").manual_seed(SEED)
-        best = float("inf")
+        best, best_epoch = float("inf"), -1
+        log.info(
+            f"training heads: {cfg.epochs} epochs, batch {cfg.batch_size}, lr {cfg.lr}, "
+            f"{num(len(train))} train rows ({num(len(train_pos))} with an item), "
+            f"hard negatives from epoch {cfg.hard_negative_warmup}"
+        )
+        start_all = time.perf_counter()
         for epoch in range(cfg.epochs):
+            start = time.perf_counter()
             if epoch >= cfg.hard_negative_warmup:
                 self.mine(train_pos)
             perm = train[torch.randperm(len(train), device="cuda", generator=gen)]
-            for start in tqdm(
-                range(0, len(perm), cfg.batch_size), desc=f"epoch {epoch}", leave=False
-            ):
-                loss = sum(self.losses(perm[start : start + cfg.batch_size]).values())
+            bar = progress(
+                range(0, len(perm), cfg.batch_size), desc=f"epoch {epoch + 1}/{cfg.epochs}"
+            )
+            total = 0.0
+            for i, step in enumerate(bar, 1):
+                loss = sum(self.losses(perm[step : step + cfg.batch_size]).values())
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
                 opt.step()
                 sched.step()
+                total += loss.item()
+                if i % 10 == 0:
+                    bar.set_postfix(
+                        loss=f"{total / i:.4f}", lr=f"{sched.get_last_lr()[0]:.2e}", refresh=False
+                    )
             metrics = self.validate(val)
-            print(f"epoch {epoch}: " + ", ".join(f"{k} {v:.4f}" for k, v in metrics.items()))
-            if metrics["loss"] < best:
-                best = metrics["loss"]
+            improved = metrics["loss"] < best
+            if improved:
+                best, best_epoch = metrics["loss"], epoch + 1
                 self.save()
-        print(f"best val loss {best:.4f} -> {CHECKPOINT}")
+            log.info(
+                f"epoch {epoch + 1}/{cfg.epochs} ({elapsed(start)}): train loss "
+                f"{total / max(i, 1):.4f}; val loss {metrics['loss']:.4f}, "
+                f"recall@10 {metrics.get('recall@10', float('nan')):.3f}; "
+                f"best {best:.4f} (epoch {best_epoch}){', saved' if improved else ''}"
+            )
+            log.debug("epoch %d val parts: %s", epoch + 1, metrics)
+        log.info(
+            f"training done in {elapsed(start_all)}: best val loss {best:.4f} at epoch "
+            f"{best_epoch} -> {CHECKPOINT.relative_to(ML_ROOT).as_posix()}"
+        )
 
     def save(self) -> None:
         MODELS.mkdir(parents=True, exist_ok=True)
@@ -225,11 +254,16 @@ class Trainer:
             },
             OUTPUTS,
         )
-        print(f"teacher outputs for {len(rows)} queries -> {OUTPUTS}")
+        log.info(
+            f"teacher outputs for {num(len(rows))} queries and {num(len(self.fi))} items -> "
+            f"{OUTPUTS.relative_to(ML_ROOT).as_posix()}"
+        )
 
 
 def run() -> None:
+    start = time.perf_counter()
     make_deterministic(SEED)
     trainer = Trainer(TeacherConfig())
     trainer.train()
     trainer.write_outputs()
+    log.info(f"done in {elapsed(start)}")

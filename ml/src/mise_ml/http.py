@@ -47,6 +47,8 @@ class CachedClient:
         self.cfg = cfg
         self.cache_dir = cache_dir
         self.limiter = RateLimiter(cfg.min_interval, cfg.default_interval)
+        self.hits = 0
+        self.requests = 0
         self.client = httpx.Client(
             timeout=cfg.timeout, follow_redirects=True, headers={"User-Agent": USER_AGENT}
         )
@@ -74,8 +76,10 @@ class CachedClient:
     def get_json(self, url: str) -> Any | None:
         path = self._path(url, ".json")
         if path.exists():
+            self.hits += 1
             cached = json.loads(path.read_text(encoding="utf-8"))
             return cached["body"]
+        self.requests += 1
         resp = self._fetch(url)
         body = None
         if resp.status_code == 200:

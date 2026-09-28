@@ -3,6 +3,7 @@ import math
 import pickle
 import random
 import re
+import time
 from collections import Counter
 from typing import Any
 from urllib.parse import quote_plus
@@ -12,6 +13,7 @@ import pandas as pd
 
 from mise_ml.config import (
     CATALOG,
+    ML_ROOT,
     MUSE_KAGGLE,
     MUSE_ZENODO,
     PAT,
@@ -20,7 +22,10 @@ from mise_ml.config import (
     SPOTIFY_TRACKS,
     CurateConfig,
 )
+from mise_ml.log import elapsed, get, num, progress
 from mise_ml.util import slugify, write_jsonl
+
+log = get(__name__)
 
 TITLE_YEAR_RE = re.compile(r"^(.*?)\s*\((\d{4})\)\s*$")
 TRAILING_ARTICLE_RE = re.compile(r"^(.*), (The|A|An|Les|La|Le|L'|Il|El|Die|Das|Der)$")
@@ -117,8 +122,16 @@ def curate_films(cfg: CurateConfig) -> list[Record]:
     counts = pd.read_csv(root / "ratings.csv", usecols=["movieId"], dtype="int32")[
         "movieId"
     ].value_counts()
+    rated = int((counts >= cfg.film_min_ratings).sum())
     counts = counts[counts >= cfg.film_min_ratings].head(cfg.film_top)
     chosen = set(counts.index.tolist())
+    log.info(
+        "film: %s of %s movies have at least %s ratings; keep the top %s",
+        num(rated),
+        num(len(movies)),
+        num(cfg.film_min_ratings),
+        num(len(chosen)),
+    )
 
     tags = pd.read_csv(root / "genome-tags.csv").set_index("tagId")["tag"].to_dict()
     scores = pd.read_csv(root / "genome-scores.csv", dtype={"movieId": "int32", "tagId": "int32"})
@@ -157,6 +170,14 @@ def curate_films(cfg: CurateConfig) -> list[Record]:
                 "links": {"primary": f"https://www.imdb.com/title/{imdb}/"} if imdb else {},
             }
         )
+    untagged = sum(1 for r in records if not r["signal"]["tags"])
+    no_imdb = sum(1 for r in records if not r["source"]["imdb"])
+    log.info(
+        "film: %s kept; %s without genome tags, %s without an IMDb id",
+        num(len(records)),
+        num(untagged),
+        num(no_imdb),
+    )
     return records
 
 
@@ -184,6 +205,7 @@ def normalize_isbn(value: Any) -> str | None:
 def curate_books(cfg: CurateConfig) -> list[Record]:
     root = RAW / "goodbooks"
     books = pd.read_csv(root / "books.csv", dtype={"isbn": str})
+    total = len(books)
     books = books.sort_values("ratings_count", ascending=False).head(cfg.book_top)
     tag_names = pd.read_csv(root / "tags.csv").set_index("tag_id")["tag_name"].to_dict()
     book_tags = pd.read_csv(root / "book_tags.csv")
@@ -219,6 +241,15 @@ def curate_books(cfg: CurateConfig) -> list[Record]:
                 "links": {},
             }
         )
+    no_shelves = sum(1 for r in records if not r["signal"]["shelves"])
+    no_isbn = sum(1 for r in records if not r["source"]["isbn"])
+    log.info(
+        "book: top %s of %s by ratings count; %s without shelf tags, %s without an ISBN",
+        num(len(records)),
+        num(total),
+        num(no_shelves),
+        num(no_isbn),
+    )
     return records
 
 
@@ -288,19 +319,35 @@ def select_songs(cfg: CurateConfig) -> tuple[pd.DataFrame, pd.Series]:
     tracks dataset, so ranking by track popularity alone leaves too few. It ranks by artist
     popularity, then track popularity, with at most song_per_artist tracks per artist.
     """
-    muse = pd.read_csv(MUSE_KAGGLE if MUSE_KAGGLE.exists() else MUSE_ZENODO)
+    path = MUSE_KAGGLE if MUSE_KAGGLE.exists() else MUSE_ZENODO
+    muse = pd.read_csv(path)
+    total = len(muse)
     muse = muse[muse["spotify_id"].notna() & (muse["spotify_id"].astype(str).str.len() > 0)]
     muse = muse.drop_duplicates("spotify_id")
+    log.info(
+        "song: %s of %s MuSe tracks (%s) have a Spotify id", num(len(muse)), num(total), path.name
+    )
     rank_col = next(
         (c for c in ("listeners", "lastfm_listeners", "number_of_emotion_tags") if c in muse),
         None,
     )
     if rank_col is not None:
         muse = muse.sort_values(rank_col, ascending=False).head(cfg.song_top)
+        log.info("song: keep the top %s by %s", num(len(muse)), rank_col)
         return muse, muse[rank_col].fillna(0)
     muse = with_spotify_popularity(muse)
+    log.info(
+        "song: popularity from the Spotify tracks data: %s tracks match, %s artists match",
+        num(int(muse["track_pop"].notna().sum())),
+        num(int(muse.loc[muse["artist_pop"].notna(), "artist_key"].nunique())),
+    )
     muse = muse.sort_values(["artist_pop", "track_pop"], ascending=False, na_position="last")
     muse = muse.groupby("artist_key", sort=False).head(cfg.song_per_artist).head(cfg.song_top)
+    log.info(
+        "song: keep the top %s by artist, then track popularity, at most %s per artist",
+        num(len(muse)),
+        num(cfg.song_per_artist),
+    )
     return muse, muse["track_pop"].fillna(muse["artist_pop"]).fillna(0)
 
 
@@ -336,14 +383,25 @@ def curate_songs(cfg: CurateConfig) -> list[Record]:
 def curate_poems(cfg: CurateConfig) -> list[Record]:
     raw = pd.read_json(RAW / "poetrydb" / "poems.jsonl", lines=True)
     records, seen = [], set()
+    dropped: Counter[str] = Counter()
     for row in raw.to_dict("records"):
         lines = [str(x).rstrip() for x in row["lines"]]
         n = int(row.get("linecount") or len(lines))
         key = (row["author"].lower(), row["title"].lower())
-        if not (cfg.poem_min_lines <= n <= cfg.poem_max_lines) or key in seen:
+        if not cfg.poem_min_lines <= n <= cfg.poem_max_lines:
+            dropped[f"not {cfg.poem_min_lines}-{cfg.poem_max_lines} lines"] += 1
+            continue
+        if key in seen:
+            dropped["duplicate title"] += 1
             continue
         seen.add(key)
         records.append(poem_record(row, cfg))
+    log.info(
+        "poem: %s of %s PoetryDB poems kept (%s)",
+        num(len(records)),
+        num(len(raw)),
+        ", ".join(f"{num(n)} {why}" for why, n in dropped.most_common()),
+    )
     return records
 
 
@@ -431,8 +489,26 @@ def curate_art(cfg: CurateConfig) -> list[Record]:
         rng.shuffle(rows)
         rows.sort(key=lambda r: r["Is Highlight"] != "True")
         quota = round(cfg.art_target * share)
-        for rank, row in enumerate(rows[: quota * cfg.art_candidate_factor]):
+        picked = rows[: quota * cfg.art_candidate_factor]
+        highlights = sum(1 for r in picked if r["Is Highlight"] == "True")
+        log.debug(
+            "art: %s: %s public-domain objects, %s candidates (%s highlights) for %s slots",
+            cls,
+            num(len(rows)),
+            num(len(picked)),
+            num(highlights),
+            num(quota),
+        )
+        for rank, row in enumerate(picked):
             records.append(art_record(row, quota, -rank))
+    by_cls = Counter(r["signal"]["classification"] for r in records)
+    log.info(
+        "art: %s candidates from %s public-domain objects (%s); resolve keeps %s with images",
+        num(len(records)),
+        num(len(met)),
+        ", ".join(f"{k} {num(v)}" for k, v in by_cls.items()),
+        num(cfg.art_target),
+    )
     return records
 
 
@@ -459,31 +535,46 @@ def load_pat() -> list[dict[str, Any]]:
     return rows
 
 
-def dedupe_ids(records: list[Record]) -> None:
+def dedupe_ids(records: list[Record]) -> int:
     seen: Counter[str] = Counter()
+    renamed = 0
     for r in records:
         seen[r["id"]] += 1
         if seen[r["id"]] > 1:
+            log.debug("duplicate id %s", r["id"])
             r["id"] = f"{r['id']}-{seen[r['id']]}"
+            renamed += 1
+    return renamed
 
 
 def run() -> None:
+    start = time.perf_counter()
     cfg = CurateConfig()
+    log.info("reading data/raw: MovieLens, goodbooks-10k, MuSe, PoetryDB, Met, Text2Colors PAT")
     records: list[Record] = []
-    for name, fn in (
+    steps = (
         ("film", curate_films),
         ("book", curate_books),
         ("song", curate_songs),
         ("poem", curate_poems),
         ("art", curate_art),
-    ):
-        part = fn(cfg)
-        print(f"{name}: {len(part)}")
-        records.extend(part)
-    dedupe_ids(records)
+    )
+    for _, fn in progress(steps, desc="curate", unit="category"):
+        records.extend(fn(cfg))
+    renamed = dedupe_ids(records)
+    if renamed:
+        log.info("%s items shared an id; they got a numeric suffix", num(renamed))
     records.sort(key=lambda r: r["id"])
     write_jsonl(CATALOG, records)
     pat = sorted(load_pat(), key=lambda r: (r["phrase"], r["rgb"]))
     write_jsonl(PAT, pat)
-    print(f"catalog: {len(records)} -> {CATALOG}")
-    print(f"pat: {len(pat)} palettes -> {PAT}")
+    counts = Counter(r["category"] for r in records)
+    log.info(
+        "done in %s: %s catalog items (%s) -> %s; %s PAT palettes -> %s",
+        elapsed(start),
+        num(len(records)),
+        ", ".join(f"{c} {num(counts[c])}" for c in ("film", "book", "song", "poem", "art")),
+        CATALOG.relative_to(ML_ROOT).as_posix(),
+        num(len(pat)),
+        PAT.relative_to(ML_ROOT).as_posix(),
+    )

@@ -9,7 +9,10 @@ from pathlib import Path
 from typing import Any
 
 from mise_ml import config
+from mise_ml.log import get
 from mise_ml.util import sha256_file, write_json
+
+log = get(__name__)
 
 PACKAGES = (
     "torch",
@@ -128,4 +131,4 @@ def write_run_json() -> None:
             "ship": report["ship"] if report else None,
         },
     )
-    print(f"provenance -> {config.RUN_JSON}")
+    log.info(f"provenance -> {config.RUN_JSON.relative_to(config.ML_ROOT).as_posix()}")

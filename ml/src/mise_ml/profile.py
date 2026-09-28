@@ -1,11 +1,13 @@
 import csv
 import functools
 import random
+import time
 from typing import Any
 
 from mise_ml.color import parse_hex
 from mise_ml.config import (
     IMG,
+    ML_ROOT,
     MOODS,
     PAT,
     PAT_SENTENCES,
@@ -17,8 +19,11 @@ from mise_ml.config import (
 )
 from mise_ml.data import load_eval_texts
 from mise_ml.llm import Job, LocalLLM, Record, Request, Unit, sha
+from mise_ml.log import elapsed, get, progress
 from mise_ml.util import hash_fraction, iter_jsonl, make_deterministic, sha256_file, word_count
 from mise_ml.vocab import Vocab, labels_path, load_vocab
+
+log = get(__name__)
 
 FEELING_RULES = """A feeling is a sentence about a scene or a moment, 6 to 30 words, lower case, \
 casual, in the first person or as a scene. Examples:
@@ -266,7 +271,7 @@ PAT_SCHEMA = obj({"sentences": array_of({"n": {"type": "integer"}, "text": {"typ
 def run_pat(cfg: ProfileConfig, llm: Any) -> None:
     phrases = sorted({r["phrase"] for r in iter_jsonl(PAT)})
     if not phrases:
-        print("[pat] no PAT palettes; skip")
+        log.warning("pat: no PAT palettes in data/curated/pat.jsonl; skip")
         return
 
     def build(pending: list[str]) -> list[Unit]:
@@ -361,8 +366,14 @@ def run() -> None:
     cfg = ProfileConfig()
     if not RESOLVED.exists():
         raise SystemExit(f"no resolved items at {RESOLVED}; run resolve first")
+    start = time.perf_counter()
+    log.info(
+        f"labeler {cfg.model} at {cfg.revision[:12]}, batch {cfg.batch_size} "
+        f"({cfg.image_batch_size} with images), greedy; jobs: items, moods, pat, labels"
+    )
     llm = lazy_llm(cfg)
-    run_items(cfg, llm)
-    run_moods(cfg, llm)
-    run_pat(cfg, llm)
-    run_labels(cfg, llm)
+    for job in progress((run_items, run_moods, run_pat, run_labels), desc="profile", unit="job"):
+        job(cfg, llm)
+    log.info(
+        f"done in {elapsed(start)}: outputs in {PROFILES.parent.relative_to(ML_ROOT).as_posix()}"
+    )

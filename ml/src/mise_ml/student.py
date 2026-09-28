@@ -1,22 +1,24 @@
 import dataclasses
 import json
 import math
+import time
 from pathlib import Path
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
-from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
 
-from mise_ml.config import MODELS, SEED, StudentConfig
+from mise_ml.config import ML_ROOT, MODELS, SEED, StudentConfig
 from mise_ml.data import load_catalog, recall_at_k
 from mise_ml.heads import ChoiceHeads, kl_logits
+from mise_ml.log import elapsed, get, num, progress
 from mise_ml.teacher import OUTPUTS as TEACHER_OUTPUTS
 from mise_ml.util import make_deterministic
 from mise_ml.vocab import load_vocab
 
+log = get(__name__)
 STUDENT_DIR = MODELS / "student"
 OUTPUT_NAMES = ("embedding", "palette", "light", "typeface", "scent")
 
@@ -82,6 +84,35 @@ def tokenize(
     }
 
 
+class Pretokenized:
+    """Texts tokenized once, padded to max_length, on the GPU.
+
+    rows(idx) gives exactly what tokenize() gives for those texts: the same ids and masks,
+    padded to the longest row in the batch. It works because the tokenizer pads on the
+    right, so cutting the columns after that longest row changes nothing.
+    """
+
+    def __init__(
+        self, tokenizer: PreTrainedTokenizerBase, texts: list[str], max_length: int, device: str
+    ) -> None:
+        assert tokenizer.padding_side == "right"
+        batch = tokenizer(
+            texts, padding="max_length", truncation=True, max_length=max_length, return_tensors="pt"
+        )
+        self.tensors = {
+            "input_ids": batch["input_ids"].to(device),
+            "attention_mask": batch["attention_mask"].to(device),
+            "token_type_ids": batch.get("token_type_ids", torch.zeros_like(batch["input_ids"])).to(
+                device
+            ),
+        }
+        self.lengths = self.tensors["attention_mask"].sum(1)
+
+    def rows(self, idx: torch.Tensor) -> dict[str, torch.Tensor]:
+        width = int(self.lengths[idx].max())
+        return {k: v[idx, :width] for k, v in self.tensors.items()}
+
+
 @torch.no_grad()
 def encode_texts(
     model: Student,
@@ -140,13 +171,27 @@ def run() -> None:
         opt, lambda s: min((s + 1) / max(warmup, 1), max(0.0, (total - s) / max(total - warmup, 1)))
     )
     rng = np.random.default_rng(SEED)
-    best = -1.0
+    best, best_epoch = -1.0, -1
     tau = cfg.temperature
+    query_tokens = Pretokenized(tokenizer, texts, cfg.max_length, dev)
+    item_tokens = Pretokenized(tokenizer, catalog.texts, cfg.item_max_length, dev)
+    log.info(
+        f"reading teacher outputs: {num(len(texts))} queries ({num(len(train))} train, "
+        f"{num(len(val))} val), {num(n_items)} items; backbone {cfg.backbone}"
+    )
+    log.info(
+        f"training: {cfg.epochs} epochs x {num(steps_per_epoch)} steps, batch {cfg.batch_size}, "
+        f"encoder lr {cfg.encoder_lr}, head lr {cfg.head_lr}; items per step: teacher top "
+        f"{cfg.teacher_topk} per query + {cfg.random_items} random + positives"
+    )
+    start_all = time.perf_counter()
 
     for epoch in range(cfg.epochs):
+        start = time.perf_counter()
         model.train()
         order = rng.permutation(train)
-        bar = tqdm(range(steps_per_epoch), desc=f"epoch {epoch}")
+        bar = progress(range(steps_per_epoch), desc=f"epoch {epoch + 1}/{cfg.epochs}", unit="step")
+        running = 0.0
         for step in bar:
             b = torch.as_tensor(
                 order[step * cfg.batch_size : (step + 1) * cfg.batch_size], device=dev
@@ -155,10 +200,8 @@ def run() -> None:
             rand = torch.randint(0, n_items, (cfg.random_items,), device=dev)
             p = pos[b]
             cand = torch.cat([top.flatten(), rand, p[p >= 0]]).unique()
-            queries = tokenize(tokenizer, [texts[i] for i in b.tolist()], cfg.max_length)
-            items = tokenize(
-                tokenizer, [catalog.texts[i] for i in cand.tolist()], cfg.item_max_length
-            )
+            queries = query_tokens.rows(b)
+            items = item_tokens.rows(cand)
             with torch.autocast(dev, dtype=torch.bfloat16):
                 q_emb, palette, light, face, scent = model(**queries)
                 i_emb = model.embed(**items)
@@ -182,12 +225,14 @@ def run() -> None:
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step()
             sched.step()
-            if step % 50 == 0:
+            running += loss.item()
+            if step % 20 == 0:
                 bar.set_postfix(
+                    loss=f"{running / (step + 1):.3f}",
                     kl=f"{loss_kl.item():.3f}",
                     nce=f"{loss_nce.item():.3f}",
-                    pal=f"{loss_pal.item():.4f}",
-                    choice=f"{loss_choice.item():.3f}",
+                    lr=f"{sched.get_last_lr()[0]:.1e}",
+                    refresh=False,
                 )
 
         item_emb = encode_texts(model, tokenizer, catalog.texts, cfg.item_max_length)
@@ -200,9 +245,9 @@ def run() -> None:
             t["item_emb"].float().numpy(),
             catalog.categories,
         )
-        print(f"epoch {epoch}: val recall@10 student {recall:.4f}, teacher {teacher_recall:.4f}")
-        if recall > best:
-            best = recall
+        improved = recall > best
+        if improved:
+            best, best_epoch = recall, epoch + 1
             save_student(
                 model,
                 tokenizer,
@@ -216,4 +261,13 @@ def run() -> None:
                     "val_recall@10": recall,
                 },
             )
-    print(f"best val recall@10 {best:.4f} -> {STUDENT_DIR}")
+        log.info(
+            f"epoch {epoch + 1}/{cfg.epochs} ({elapsed(start)}): train loss "
+            f"{running / steps_per_epoch:.4f}; val recall@10 {recall:.3f} (teacher "
+            f"{teacher_recall:.3f}); best {best:.3f} (epoch {best_epoch})"
+            + (", saved" if improved else "")
+        )
+    log.info(
+        f"done in {elapsed(start_all)}: best val recall@10 {best:.3f} at epoch {best_epoch} -> "
+        f"{STUDENT_DIR.relative_to(ML_ROOT).as_posix()}"
+    )

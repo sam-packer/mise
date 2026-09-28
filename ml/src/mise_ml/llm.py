@@ -7,6 +7,8 @@ JSON. jsonschema checks it again, because a hit on max_new_tokens can still cut 
 
 import hashlib
 import json
+import time
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,13 +18,14 @@ import jsonschema
 import torch
 import xgrammar as xgr
 from PIL import Image
-from tqdm import tqdm
 from transformers import AutoModelForImageTextToText, AutoProcessor, LogitsProcessor
 
-from mise_ml.config import DATA, ProfileConfig
+from mise_ml.config import DATA, ML_ROOT, ProfileConfig
+from mise_ml.log import elapsed, get, num, progress
 from mise_ml.util import append_jsonl, iter_jsonl, write_jsonl
 
 Record = dict[str, Any]
+log = get(__name__)
 LLM_CACHE = DATA / "llm"
 
 
@@ -76,6 +79,8 @@ class GrammarProcessor(LogitsProcessor):
 
 class LocalLLM:
     def __init__(self, cfg: ProfileConfig) -> None:
+        start = time.perf_counter()
+        log.info(f"loading {cfg.model} at {cfg.revision[:12]} in bf16 (about 19 GB)")
         self.cfg = cfg
         self.processor = AutoProcessor.from_pretrained(cfg.model, revision=cfg.revision)
         self.processor.tokenizer.padding_side = "left"
@@ -93,6 +98,8 @@ class LocalLLM:
         )
         self.compiler = xgr.GrammarCompiler(info)
         self.grammars: dict[str, xgr.CompiledGrammar] = {}
+        used = torch.cuda.memory_allocated() / 2**30
+        log.info(f"model ready in {elapsed(start)}, {used:.1f} GiB on the GPU")
 
     def grammar(self, schema: dict[str, Any]) -> xgr.CompiledGrammar:
         key = json.dumps(schema, sort_keys=True)
@@ -112,7 +119,8 @@ class LocalLLM:
         ]
 
     @torch.inference_mode()
-    def generate(self, requests: list[Request], max_new_tokens: int) -> list[str]:
+    def generate(self, requests: list[Request], max_new_tokens: int) -> tuple[list[str], int]:
+        """The answers and the number of new tokens generated."""
         inputs = self.processor.apply_chat_template(
             [self.messages(r) for r in requests],
             add_generation_prompt=True,
@@ -135,7 +143,8 @@ class LocalLLM:
             logits_processor=[GrammarProcessor(grammars, self.vocab_size)],
         )
         new = out[:, inputs["input_ids"].shape[1] :]
-        return self.processor.batch_decode(new, skip_special_tokens=True)
+        tokens = int((new != self.processor.tokenizer.pad_token_id).sum())
+        return self.processor.batch_decode(new, skip_special_tokens=True), tokens
 
 
 def valid_json(text: str, schema: dict[str, Any]) -> dict[str, Any] | None:
@@ -194,9 +203,25 @@ class Job:
             if prints.get(k) == p
         }
         pending = [k for k in keys if k not in attempted]
-        print(f"[{self.name}] {len(keys) - len(pending)} done, {len(pending)} to generate")
+        log.info(
+            f"{self.name}: {num(len(keys))} keys; {num(len(keys) - len(pending))} in the cache, "
+            f"{num(len(pending))} to generate"
+        )
         if pending:
-            self._generate(build(pending), sig, prints, llm())
+            units = build(pending)
+            start = time.perf_counter()
+            stats = self._generate(units, sig, prints, llm())
+            rate = stats["tokens"] / max(time.perf_counter() - start, 1e-9)
+            log.info(
+                f"{self.name}: {num(len(units))} requests in {elapsed(start)}, "
+                f"{num(stats['valid'])} valid, {num(stats['retried'])} retried, "
+                f"{num(stats['skipped'])} skipped, {rate:.0f} tokens/s"
+            )
+            if stats["skipped"]:
+                log.warning(
+                    f"{self.name}: {num(stats['skipped'])} requests gave no valid JSON after a "
+                    "retry and were skipped (keys in the log file); a rerun tries them again"
+                )
             entries = [
                 e for e in iter_jsonl(self.cache) if e["sig"] == sig and e.get("data") is not None
             ]
@@ -209,36 +234,68 @@ class Job:
                 if prints.get(k) is not None and prints[k] == e["prints"].get(k):
                     records[k] = rec
         write_jsonl(self.output, [records[k] for k in sorted(records)])
-        print(f"[{self.name}] {len(records)} of {len(keys)} keys have a record -> {self.output}")
+        missing = len(keys) - len(records)
+        log.info(
+            f"{self.name}: {num(len(records))} of {num(len(keys))} keys have a record"
+            + (f" ({num(missing)} without: skipped or rejected by parse)" if missing else "")
+            + f" -> {self.output.relative_to(ML_ROOT).as_posix()}"
+        )
 
-    def _generate(self, units: list[Unit], sig: str, prints: dict[str, str], llm: LocalLLM) -> None:
+    def _generate(
+        self, units: list[Unit], sig: str, prints: dict[str, str], llm: LocalLLM
+    ) -> Counter[str]:
+        stats: Counter[str] = Counter()
         by_kind: dict[bool, list[Unit]] = {False: [], True: []}
         for u in units:
             by_kind[u.request.image is not None].append(u)
         for has_image, group in by_kind.items():
+            if not group:
+                continue
             group.sort(key=lambda u: (len(u.request.user), u.keys))
             size = self.cfg.image_batch_size if has_image else self.cfg.batch_size
-            bar = tqdm(total=len(group), desc=f"{self.name}{' (images)' if has_image else ''}")
-            for start in range(0, len(group), size):
-                batch = group[start : start + size]
-                self._run_batch(batch, sig, prints, llm)
+            desc = f"{self.name}{' (images)' if has_image else ''}"
+            bar = progress(total=len(group), desc=desc, unit="req")
+            start = time.perf_counter()
+            for i in range(0, len(group), size):
+                batch = group[i : i + size]
+                self._run_batch(batch, sig, prints, llm, stats)
                 bar.update(len(batch))
+                bar.set_postfix(
+                    valid=stats["valid"],
+                    retried=stats["retried"],
+                    skipped=stats["skipped"],
+                    tok_s=f"{stats['tokens'] / max(time.perf_counter() - start, 1e-9):.0f}",
+                    refresh=False,
+                )
             bar.close()
+        return stats
 
     def _run_batch(
-        self, batch: list[Unit], sig: str, prints: dict[str, str], llm: LocalLLM
+        self,
+        batch: list[Unit],
+        sig: str,
+        prints: dict[str, str],
+        llm: LocalLLM,
+        stats: Counter[str],
     ) -> None:
         limit = max(u.request.max_new_tokens for u in batch)
-        texts = llm.generate([u.request for u in batch], limit)
+        texts, tokens = llm.generate([u.request for u in batch], limit)
+        stats["tokens"] += tokens
         rows = []
         for unit, text in zip(batch, texts, strict=True):
             data = valid_json(text, unit.request.schema)
             if data is None:
                 # One retry alone, with room for a longer answer.
-                retry = llm.generate([unit.request], 2 * unit.request.max_new_tokens)[0]
-                data = valid_json(retry, unit.request.schema)
+                stats["retried"] += 1
+                log.debug(f"{self.name}: retry {unit.keys[0]!r}: {text[-200:]!r}")
+                retry, tokens = llm.generate([unit.request], 2 * unit.request.max_new_tokens)
+                stats["tokens"] += tokens
+                data = valid_json(retry[0], unit.request.schema)
                 if data is None:
-                    print(f"[{self.name}] skip {unit.keys[0]!r}: no valid JSON after a retry")
+                    stats["skipped"] += 1
+                    log.debug(f"{self.name}: skip {unit.keys}: no valid JSON after a retry")
+            if data is not None:
+                stats["valid"] += 1
             rows.append(
                 {
                     "sig": sig,

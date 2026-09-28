@@ -8,16 +8,19 @@ the left, the feature is the last-token hidden state, and it is L2-normalized.
 import functools
 import hashlib
 import json
+import time
 from pathlib import Path
 
 import numpy as np
 import torch
 import torch.nn.functional as F
-from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 
 from mise_ml.config import FEATURES, TeacherConfig
+from mise_ml.log import elapsed, get, num, progress
 from mise_ml.util import slugify
+
+log = get(__name__)
 
 QUERY_TASK = (
     "Given a feeling someone describes as a scene or a moment, retrieve films, books, songs, "
@@ -29,6 +32,8 @@ ITEM_TEMPLATE = "{text}"
 
 class QwenEncoder:
     def __init__(self, cfg: TeacherConfig) -> None:
+        start = time.perf_counter()
+        log.info(f"loading {cfg.backbone} at {cfg.revision[:12]} in bf16 (about 15 GB)")
         self.cfg = cfg
         self.tokenizer = AutoTokenizer.from_pretrained(
             cfg.backbone, revision=cfg.revision, padding_side="left"
@@ -38,6 +43,8 @@ class QwenEncoder:
         )
         self.model = self.model.cuda().eval()
         self.model.requires_grad_(False)
+        used = torch.cuda.memory_allocated() / 2**30
+        log.info(f"model ready in {elapsed(start)}, {used:.1f} GiB on the GPU")
 
     @torch.inference_mode()
     def encode(self, texts: list[str], template: str) -> np.ndarray:
@@ -45,7 +52,8 @@ class QwenEncoder:
         order = sorted(range(len(texts)), key=lambda i: (len(texts[i]), texts[i]))
         out = np.zeros((len(texts), self.model.config.hidden_size), dtype=np.float16)
         step = self.cfg.encode_batch
-        for start in tqdm(range(0, len(order), step), desc="embedding features"):
+        bar = progress(total=len(texts), desc="features", unit="text")
+        for start in range(0, len(order), step):
             idx = order[start : start + step]
             batch = self.tokenizer(
                 [template.format(text=texts[i]) for i in idx],
@@ -57,6 +65,8 @@ class QwenEncoder:
             hidden = self.model(**batch, use_cache=False).last_hidden_state
             last = F.normalize(hidden[:, -1].float(), p=2, dim=-1)
             out[idx] = last.cpu().numpy().astype(np.float16)
+            bar.update(len(idx))
+        bar.close()
         return out
 
 
@@ -73,6 +83,7 @@ class FeatureStore:
     """
 
     def __init__(self, name: str, template: str, cfg: TeacherConfig) -> None:
+        self.name = name
         self.template = template
         self.cfg = cfg
         # The template and token limit change the features too, so they are part of the name.
@@ -91,8 +102,18 @@ class FeatureStore:
         known, array = self._load()
         index = {t: i for i, t in enumerate(known)}
         missing = list(dict.fromkeys(t for t in texts if t not in index))
+        log.info(
+            f"{self.name} features: {num(len(texts))} texts, "
+            f"{num(len(texts) - len(missing))} from the cache, {num(len(missing))} to encode"
+        )
         if missing:
+            start = time.perf_counter()
             new = shared_encoder(self.cfg).encode(missing, self.template)
+            rate = len(missing) / max(time.perf_counter() - start, 1e-9)
+            log.info(
+                f"{self.name} features: encoded {num(len(missing))} texts in {elapsed(start)} "
+                f"({rate:.0f} texts/s) -> {self.array_path.name}"
+            )
             array = new if array is None else np.concatenate([array, new])
             for t in missing:
                 index[t] = len(index)
