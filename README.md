@@ -49,3 +49,8 @@ It builds the site and deploys it to Cloudflare Workers, with whatever bundle is
 | `scripts/` | the stub bundle build, from hand-curated sources |
 | `ml/`      | the training pipeline (`mise-ml`)                |
 | `docs/`    | the design spec                                  |
+
+## Credit
+
+The idea of turning a described feeling into picks across media was sparked by
+[Wave](https://github.com/SophiaYifei/wave-recsys). mise shares no code or design with it.
