@@ -118,9 +118,26 @@ class LocalLLM:
             {"role": "user", "content": user},
         ]
 
-    @torch.inference_mode()
     def generate(self, requests: list[Request], max_new_tokens: int) -> tuple[list[str], int]:
-        """The answers and the number of new tokens generated."""
+        """The answers and the number of new tokens generated.
+
+        A batch that runs out of GPU memory is split in half and retried, down to one request,
+        so the longest batches at the end of a job slow down instead of stopping the run.
+        """
+        try:
+            return self._generate(requests, max_new_tokens)
+        except torch.OutOfMemoryError:
+            torch.cuda.empty_cache()
+            if len(requests) == 1:
+                raise
+            half = len(requests) // 2
+            log.warning(f"out of GPU memory on a batch of {len(requests)}; retrying as two halves")
+            first, t1 = self.generate(requests[:half], max_new_tokens)
+            second, t2 = self.generate(requests[half:], max_new_tokens)
+            return first + second, t1 + t2
+
+    @torch.inference_mode()
+    def _generate(self, requests: list[Request], max_new_tokens: int) -> tuple[list[str], int]:
         inputs = self.processor.apply_chat_template(
             [self.messages(r) for r in requests],
             add_generation_prompt=True,
