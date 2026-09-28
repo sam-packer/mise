@@ -17,7 +17,7 @@ export type Item = {
 	/** Song only: the album the track is on. */
 	album?: string;
 	preview?: string;
-	links: { primary: string; spotify?: string; apple?: string; youtube?: string };
+	links: { primary: string; spotify?: string; apple?: string; deezer?: string; youtube?: string };
 };
 
 export type Manifest = {

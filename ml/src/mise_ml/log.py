@@ -146,10 +146,16 @@ def session(step: str) -> Iterator[logging.Logger]:
         log_environment(log)
         try:
             yield log
-        except BaseException as e:
-            if not isinstance(e, SystemExit | KeyboardInterrupt):
-                log.exception("failed")
+        except KeyboardInterrupt:
+            log.warning("stopped by the user; a rerun continues where this run stopped")
+            raise SystemExit(130) from None
+        except SystemExit:
             raise
+        except Exception as e:
+            # One console line; the traceback goes to the log file only.
+            log.error(f"failed: {type(e).__name__}: {e} (traceback in the log file)")
+            log.debug("traceback", exc_info=True)
+            raise SystemExit(1) from None
         finally:
             log.info("full log: %s", path.relative_to(ML_ROOT).as_posix())
             file.close()

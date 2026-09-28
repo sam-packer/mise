@@ -311,6 +311,10 @@ def with_spotify_popularity(muse: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def song_candidates(cfg: CurateConfig) -> int:
+    return round(cfg.song_top * cfg.song_candidate_factor)
+
+
 def select_songs(cfg: CurateConfig) -> tuple[pd.DataFrame, pd.Series]:
     """The top songs and their rank value.
 
@@ -332,8 +336,13 @@ def select_songs(cfg: CurateConfig) -> tuple[pd.DataFrame, pd.Series]:
         None,
     )
     if rank_col is not None:
-        muse = muse.sort_values(rank_col, ascending=False).head(cfg.song_top)
-        log.info("song: keep the top %s by %s", num(len(muse)), rank_col)
+        muse = muse.sort_values(rank_col, ascending=False).head(song_candidates(cfg))
+        log.info(
+            "song: keep the top %s by %s as candidates; resolve keeps %s",
+            num(len(muse)),
+            rank_col,
+            num(cfg.song_top),
+        )
         return muse, muse[rank_col].fillna(0)
     muse = with_spotify_popularity(muse)
     log.info(
@@ -342,11 +351,14 @@ def select_songs(cfg: CurateConfig) -> tuple[pd.DataFrame, pd.Series]:
         num(int(muse.loc[muse["artist_pop"].notna(), "artist_key"].nunique())),
     )
     muse = muse.sort_values(["artist_pop", "track_pop"], ascending=False, na_position="last")
-    muse = muse.groupby("artist_key", sort=False).head(cfg.song_per_artist).head(cfg.song_top)
+    muse = muse.groupby("artist_key", sort=False).head(cfg.song_per_artist)
+    muse = muse.head(song_candidates(cfg))
     log.info(
-        "song: keep the top %s by artist, then track popularity, at most %s per artist",
+        "song: keep the top %s by artist, then track popularity, at most %s per artist, "
+        "as candidates; resolve keeps %s",
         num(len(muse)),
         num(cfg.song_per_artist),
+        num(cfg.song_top),
     )
     return muse, muse["track_pop"].fillna(muse["artist_pop"]).fillna(0)
 
