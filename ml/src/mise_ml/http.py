@@ -3,7 +3,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 import httpx
 
@@ -17,9 +17,36 @@ class FetchError(RuntimeError):
 
 USER_AGENT = "mise-catalog/0.1 (class project; +https://github.com/sam-packer/mise)"
 # Open Library allows 3 requests/s instead of 1 when the User-Agent carries a contact email.
-# The email goes to Open Library only.
+# MusicBrainz and Wikimedia ask for a contact in the User-Agent. The email goes to these only.
 IDENTIFIED_AGENT = "mise-catalog/0.1 (me@sampacker.com; +https://github.com/sam-packer/mise)"
-IDENTIFIED_HOSTS = {"openlibrary.org", "covers.openlibrary.org"}
+IDENTIFIED_HOSTS = {
+    "openlibrary.org",
+    "covers.openlibrary.org",
+    "musicbrainz.org",
+    "query.wikidata.org",
+    "commons.wikimedia.org",
+}
+# The Art Institute of Chicago asks for this header. Without it, Cloudflare answers the
+# IIIF image server with a 403 challenge page.
+HOST_HEADERS = {
+    "api.artic.edu": {"AIC-User-Agent": USER_AGENT},
+    "www.artic.edu": {"AIC-User-Agent": USER_AGENT},
+}
+
+# API errors in a 200 body, by host: (codes to retry with backoff, codes that mean "not found").
+# Deezer 4: over quota; 800: no data (an unknown ISRC). Last.fm 8, 11, 16: temporary;
+# 29: rate limit; 6: no such track.
+API_ERRORS: dict[str, tuple[set[Any], set[Any]]] = {
+    "api.deezer.com": ({4}, {800}),
+    "ws.audioscrobbler.com": ({8, 11, 16, 29}, {6}),
+}
+
+
+def api_error_code(body: Any) -> Any:
+    if not (isinstance(body, dict) and "error" in body):
+        return None
+    error = body["error"]
+    return error.get("code") if isinstance(error, dict) else error
 
 
 class RateLimiter:
@@ -42,9 +69,11 @@ class RateLimiter:
 
 
 class CachedClient:
-    """GET with an on-disk response cache and per-host rate limits.
+    """GET and POST with an on-disk response cache and per-host rate limits.
 
-    A cached response never touches the network, so reruns are fast and free.
+    A cached response never touches the network, so reruns are fast and free. Auth headers
+    and `secret` query parameters go to the server but never into the cache key or the
+    cache file, so a key never lands on disk and a new key reuses the cached answers.
     """
 
     def __init__(self, cfg: ResolveConfig, cache_dir: Path = CACHE / "http") -> None:
@@ -57,44 +86,85 @@ class CachedClient:
             timeout=cfg.timeout, follow_redirects=True, headers={"User-Agent": USER_AGENT}
         )
 
-    def _path(self, url: str, suffix: str) -> Path:
-        host = urlsplit(url).hostname or "unknown"
-        return self.cache_dir / host / f"{stable_hash(url, 24)}{suffix}"
+    def _path(self, key: str, suffix: str) -> Path:
+        host = urlsplit(key).hostname or "unknown"
+        return self.cache_dir / host / f"{stable_hash(key, 24)}{suffix}"
 
-    def _fetch(self, url: str) -> httpx.Response:
+    def _fetch(
+        self,
+        url: str,
+        headers: dict[str, str] | None = None,
+        secret: dict[str, str] | None = None,
+        body: Any = None,
+    ) -> httpx.Response:
         host = urlsplit(url).hostname or ""
+        agent = IDENTIFIED_AGENT if host in IDENTIFIED_HOSTS else USER_AGENT
+        send_headers = {"User-Agent": agent, **HOST_HEADERS.get(host, {}), **(headers or {})}
+        if secret:
+            url = f"{url}{'&' if '?' in url else '?'}{urlencode(secret)}"
         for attempt in range(self.cfg.retries):
             self.limiter.wait(host)
             try:
-                agent = IDENTIFIED_AGENT if host in IDENTIFIED_HOSTS else USER_AGENT
-                resp = self.client.get(url, headers={"User-Agent": agent})
+                if body is None:
+                    resp = self.client.get(url, headers=send_headers)
+                else:
+                    resp = self.client.post(url, json=body, headers=send_headers)
             except httpx.HTTPError:
                 time.sleep(2**attempt)
                 continue
             # 403 too: bot protection (the Met) answers 403 for a while under load.
             if resp.status_code in (403, 429) or resp.status_code >= 500:
-                retry_after = resp.headers.get("retry-after", "")
-                time.sleep(float(retry_after) if retry_after.isdigit() else 5 * 2**attempt)
+                wait = resp.headers.get("retry-after") or resp.headers.get("x-ratelimit-reset-in")
+                wait = wait if wait and wait.isdigit() else ""
+                time.sleep(float(wait) + 1 if wait else 5 * 2**attempt)
                 continue
             return resp
-        raise FetchError(url)
+        raise FetchError(urlsplit(url)._replace(query="").geturl())
 
-    def get_json(self, url: str) -> Any | None:
+    def get_json(
+        self,
+        url: str,
+        headers: dict[str, str] | None = None,
+        secret: dict[str, str] | None = None,
+    ) -> Any | None:
         """The JSON body, or None for a 404. Anything else raises FetchError.
 
         Only real answers (JSON with 200, or 404) are cached. A block page, a non-JSON 200,
         or any other status raises, so the caller counts an error and a rerun retries it.
-        Deezer answers 200 with {"error": {...}}. Code 4 means over quota: that one is retried
-        with backoff. Any error body raises FetchError and is never cached.
+        Deezer and Last.fm answer 200 with {"error": ...}. API_ERRORS names the codes to
+        retry with backoff and the codes that mean "not found" (cached as None). Any other
+        error body raises FetchError and is never cached.
         """
-        path = self._path(url, ".json")
+        return self._json(url, url, headers, secret, None)
+
+    def post_json(self, url: str, body: Any, headers: dict[str, str] | None = None) -> Any:
+        """POST a JSON body; the answer is cached by URL and body.
+
+        A GraphQL answer with "errors" raises FetchError and is never cached.
+        """
+        key = f"{url}#{json.dumps(body, sort_keys=True)}"
+        answer = self._json(url, key, headers, None, body)
+        if isinstance(answer, dict) and answer.get("errors"):
+            raise FetchError(f"{url}: {answer['errors']}")
+        return answer
+
+    def _json(
+        self,
+        url: str,
+        key: str,
+        headers: dict[str, str] | None,
+        secret: dict[str, str] | None,
+        post: Any,
+    ) -> Any | None:
+        path = self._path(key, ".json")
         if path.exists():
             self.hits += 1
             cached = json.loads(path.read_text(encoding="utf-8"))
             return cached["body"]
         self.requests += 1
+        retry, not_found = API_ERRORS.get(urlsplit(url).hostname or "", (set(), set()))
         for attempt in range(self.cfg.retries):
-            resp = self._fetch(url)
+            resp = self._fetch(url, headers, secret, post)
             if resp.status_code == 404:
                 body = None
             elif resp.status_code == 200:
@@ -104,16 +174,22 @@ class CachedClient:
                     raise FetchError(f"{url}: HTTP 200 without JSON") from e
             else:
                 raise FetchError(f"{url}: HTTP {resp.status_code}")
-            if not (isinstance(body, dict) and "error" in body):
+            code = api_error_code(body)
+            if code is None:
                 break
-            if not isinstance(body["error"], dict) or body["error"].get("code") != 4:
+            if code in not_found:
+                body = None
+                break
+            if code not in retry:
                 raise FetchError(f"{url}: API error {body['error']}")
             time.sleep(5 * 2**attempt)
         else:
             raise FetchError(f"{url}: API error {body['error']}")
+        if post is not None and isinstance(body, dict) and body.get("errors"):
+            return body  # post_json raises; an error answer is never cached
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
-            json.dumps({"url": url, "status": resp.status_code, "body": body}),
+            json.dumps({"url": key, "status": resp.status_code, "body": body}),
             encoding="utf-8",
         )
         return body

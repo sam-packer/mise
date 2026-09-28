@@ -1,96 +1,92 @@
-import ast
+"""Select the catalog: films (TMDB), books (Hardcover), songs (ListenBrainz and MusicBrainz),
+art (the Met CSV, the Art Institute of Chicago, the Cleveland Museum of Art), and poems
+(PoetryDB). Every API answer is cached in data/cache/http, so a rerun is fast.
+
+Films, books, and songs are chosen by era: each era keeps its quota, spread over its years.
+Each era and each art source is a group. curate writes more candidates than a group keeps;
+resolve tries them in rank order and keeps the group's target.
+"""
+
+import html
+import json
 import math
 import pickle
 import random
 import re
 import time
-from collections import Counter
+from collections import Counter, defaultdict
+from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
 import numpy as np
 import pandas as pd
 
+from mise_ml import keys
 from mise_ml.config import (
     CATALOG,
+    CATALOG_META,
+    CATALOG_VERSION,
+    IMG,
+    MET_CSV,
     ML_ROOT,
-    MUSE_KAGGLE,
-    MUSE_ZENODO,
     PAT,
     RAW,
+    RESOLVE_DROPPED,
+    RESOLVED,
     SEED,
-    SPOTIFY_TRACKS,
     CurateConfig,
+    Eras,
+    ResolveConfig,
 )
+from mise_ml.http import CachedClient
 from mise_ml.log import elapsed, get, num, progress
-from mise_ml.util import slugify, write_jsonl
+from mise_ml.util import slugify, write_json, write_jsonl
 
 log = get(__name__)
 
-TITLE_YEAR_RE = re.compile(r"^(.*?)\s*\((\d{4})\)\s*$")
-TRAILING_ARTICLE_RE = re.compile(r"^(.*), (The|A|An|Les|La|Le|L'|Il|El|Die|Das|Der)$")
-SERIES_RE = re.compile(r"\s*\([^()]*#\s*[\d.]+[^()]*\)\s*$")
-
-SHELF_JUNK = {
-    "to",
-    "read",
-    "reading",
-    "reads",
-    "currently",
-    "own",
-    "owned",
-    "owns",
-    "favorite",
-    "favorites",
-    "favourite",
-    "favourites",
-    "fav",
-    "favs",
-    "default",
-    "kindle",
-    "ebook",
-    "ebooks",
-    "e",
-    "audio",
-    "audiobook",
-    "audiobooks",
-    "library",
-    "borrowed",
-    "wishlist",
-    "wish",
-    "club",
-    "reread",
-    "re",
-    "shelf",
-    "series",
-    "abandoned",
-    "dnf",
-    "maybe",
-    "buy",
-    "bought",
-    "have",
-    "finished",
-    "tbr",
-    "hold",
-    "english",
-    "book",
-    "books",
-    "novel",
-    "novels",
-    "i",
-    "my",
-    "list",
-    "want",
-    "later",
-    "next",
-    "nook",
-    "calibre",
-    "unread",
-    "pending",
-}
-
-
 Record = dict[str, Any]
+
+TMDB = "https://api.themoviedb.org/3"
+HARDCOVER = "https://api.hardcover.app/v1/graphql"
+LISTENBRAINZ = "https://api.listenbrainz.org/1"
+MUSICBRAINZ = "https://musicbrainz.org/ws/2/recording"
+AIC = "https://api.artic.edu/api/v1/artworks/search"
+CMA = "https://openaccess-api.clevelandart.org/api/artworks/"
+
+# Words that mark another version of a song. A catalog song never has one; resolve rejects
+# a Deezer match with one unless the catalog title has it too.
+VERSION = re.compile(
+    r"\b(remix|mix|live|instrumental|karaoke|acoustic|cover|sped up|slowed|a cappella|"
+    r"acapella|originally performed|made popular|tribute|demo)\b",
+    re.IGNORECASE,
+)
+FEATURING = re.compile(r"\s*[\(\[]\s*(feat|ft|featuring|with)\b\.?[^\)\]]*[\)\]]", re.IGNORECASE)
+# " - Remastered 2009", "(2011 Remaster)", "- Mono": the same song, another master.
+REMASTER = re.compile(
+    r"\s*(-\s+|[\(\[])[^\(\)\[\]]*\b(remaster(ed)?|mono|stereo|single version|radio edit|"
+    r"album version|original mix)\b[^\(\)\[\]]*[\)\]]?\s*$",
+    re.IGNORECASE,
+)
+BOOK_JUNK = re.compile(r"\b(box(ed)? set|boxset|collection|omnibus|books \d+\s*-\s*\d+)\b", re.I)
+# TMDB keywords that say nothing about a film's mood.
+KEYWORD_JUNK = re.compile(r"stinger|based on|sequel|remake|duringcredits|aftercredits|\(mcu\)")
+# AIC terms that name a material or technique, not a subject or mood.
+TERM_JUNK = re.compile(r"paint|canvas|panel|oil|tempera|watercolor|century|gouache|ink|chalk")
+
+
+def base_title(title: str) -> str:
+    """The title without a "(feat. ...)" part, which differs between catalogs."""
+    return FEATURING.sub("", title).strip()
+
+
+def clean_song_title(title: str) -> str:
+    return REMASTER.sub("", title).strip() or title.strip()
+
+
+def norm(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", text.lower().replace("&", "and"))
 
 
 def year_or_none(value: Any) -> int | None:
@@ -98,298 +94,451 @@ def year_or_none(value: Any) -> int | None:
         y = int(float(value))
     except (TypeError, ValueError):
         return None
-    return y if 0 < y < 2100 else None
+    return y if -5000 < y < 2100 and y != 0 else None
 
 
-def clean_movie_title(raw: str) -> tuple[str, int | None]:
-    title, year = raw.strip(), None
-    m = TITLE_YEAR_RE.match(title)
-    if m:
-        title, year = m.group(1), int(m.group(2))
-    if title.endswith(")") and " (" in title:
-        title = title[: title.index(" (")]
-    m = TRAILING_ARTICLE_RE.match(title)
-    if m:
-        sep = "" if m.group(2).endswith("'") else " "
-        title = f"{m.group(2)}{sep}{m.group(1)}"
-    return title, year
+def text_or_none(value: Any) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
-def curate_films(cfg: CurateConfig) -> list[Record]:
-    root = RAW / "movielens" / "ml-latest"
-    movies = pd.read_csv(root / "movies.csv")
-    links = pd.read_csv(root / "links.csv", dtype={"imdbId": str})
-    counts = pd.read_csv(root / "ratings.csv", usecols=["movieId"], dtype="int32")[
-        "movieId"
-    ].value_counts()
-    rated = int((counts >= cfg.film_min_ratings).sum())
-    counts = counts[counts >= cfg.film_min_ratings].head(cfg.film_top)
-    chosen = set(counts.index.tolist())
-    log.info(
-        "film: %s of %s movies have at least %s ratings; keep the top %s",
-        num(rated),
-        num(len(movies)),
-        num(cfg.film_min_ratings),
-        num(len(chosen)),
-    )
-
-    tags = pd.read_csv(root / "genome-tags.csv").set_index("tagId")["tag"].to_dict()
-    scores = pd.read_csv(root / "genome-scores.csv", dtype={"movieId": "int32", "tagId": "int32"})
-    scores = scores[scores["movieId"].isin(chosen)]
-    scores = scores[scores["relevance"] >= cfg.film_genome_min_relevance]
-    scores = scores.sort_values(["movieId", "relevance"], ascending=[True, False])
-    top_tags = (
-        scores.groupby("movieId")
-        .head(cfg.film_genome_tags)
-        .groupby("movieId")["tagId"]
-        .apply(lambda s: [tags[t] for t in s])
-        .to_dict()
-    )
-
-    movies = movies[movies["movieId"].isin(chosen)].merge(links, on="movieId", how="left")
-    records = []
-    for row in movies.itertuples(index=False):
-        title, year = clean_movie_title(row.title)
-        imdb = f"tt{row.imdbId}" if isinstance(row.imdbId, str) else None
-        records.append(
-            {
-                "id": f"film:{slugify(title)}-{year or row.movieId}",
-                "category": "film",
-                "title": title,
-                "creator": "",
-                "year": year,
-                "rank": int(counts[row.movieId]),
-                "signal": {
-                    "tags": top_tags.get(row.movieId, []),
-                    "genres": [] if row.genres == "(no genres listed)" else row.genres.split("|"),
-                },
-                "source": {
-                    "movielens": int(row.movieId),
-                    "imdb": imdb,
-                },
-                "links": {"primary": f"https://www.imdb.com/title/{imdb}/"} if imdb else {},
-            }
-        )
-    untagged = sum(1 for r in records if not r["signal"]["tags"])
-    no_imdb = sum(1 for r in records if not r["source"]["imdb"])
-    log.info(
-        "film: %s kept; %s without genome tags, %s without an IMDb id",
-        num(len(records)),
-        num(untagged),
-        num(no_imdb),
-    )
-    return records
+def clip(text: Any, limit: int) -> str | None:
+    """Plain text without HTML, cut at a word boundary."""
+    if not isinstance(text, str):
+        return None
+    text = re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", text))).strip()
+    if len(text) <= limit:
+        return text or None
+    return text[:limit].rsplit(" ", 1)[0].rstrip(",;:") + " ..."
 
 
-def clean_shelves(names: list[str], limit: int) -> list[str]:
+def unique(values: Iterable[str], limit: int) -> list[str]:
+    out: list[str] = []
+    for v in values:
+        v = v.strip()
+        if v and v.lower() not in {o.lower() for o in out}:
+            out.append(v)
+    return out[:limit]
+
+
+def parallel(fn: Callable[[Any], Any], items: list[Any], workers: int) -> list[Any]:
+    """fn over items with a thread pool, results in item order. The per-host rate limit
+    still holds; parallel calls hide the network latency."""
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(fn, items))
+
+
+# Eras and groups
+
+
+def era_name(start: int, end: int) -> str:
+    return f"{start}-{end}" if start > 0 else f"before-{end + 1}"
+
+
+def era_groups(category: str, eras: Eras) -> dict[str, int]:
+    return {f"{category}:{era_name(s, e)}": quota for s, e, quota in eras}
+
+
+def targets(cfg: CurateConfig) -> dict[str, int]:
+    """The items resolve keeps for each group."""
+    quota = cfg.art_met_quota
+    return {
+        **era_groups("film", cfg.film_eras),
+        **era_groups("book", cfg.book_eras),
+        **era_groups("song", cfg.song_eras),
+        **{f"art:met-{c.lower()}": round(cfg.art_met * s) for c, s in quota.items()},
+        "art:aic": cfg.art_aic,
+        "art:cma": cfg.art_cma,
+    }
+
+
+def wanted(category: str, quota: int, cfg: CurateConfig) -> int:
+    return round(quota * cfg.candidate_factor[category])
+
+
+def spread(rows: list[Record], n: int, cfg: CurateConfig) -> tuple[list[Record], int]:
+    """The best n rows of an era, spread over its years.
+
+    rows must be in rank order. A year first gets at most year_cap_factor times its even
+    share; the free slots then go to the best rows left. Returns the rows and how many came
+    from the capped pass.
+    """
+    years = {r["year"] for r in rows}
+    cap = max(1, math.ceil(cfg.year_cap_factor * n / max(1, len(years))))
+    per_year: Counter[int] = Counter()
+    first, rest = [], []
+    for r in rows:
+        if len(first) < n and per_year[r["year"]] < cap:
+            per_year[r["year"]] += 1
+            first.append(r)
+        else:
+            rest.append(r)
+    return first + rest[: n - len(first)], len(first)
+
+
+def by_era(category: str, rows: list[Record], eras: Eras, cfg: CurateConfig) -> list[Record]:
+    """Keep each era's candidates; rows carry "year" and "rank"."""
     out = []
-    for name in names:
-        n = name.lower().strip()
-        tokens = set(re.split(r"[-_ ]+", n))
-        if n and not tokens & SHELF_JUNK and not re.search(r"\d", n) and n not in out:
-            out.append(n)
-        if len(out) >= limit:
-            break
+    for start, end, quota in eras:
+        group = f"{category}:{era_name(start, end)}"
+        pool = sorted(
+            (r for r in rows if start <= r["year"] <= end), key=lambda r: (-r["rank"], r["id"])
+        )
+        n = wanted(category, quota, cfg)
+        chosen, capped = spread(pool, n, cfg)
+        for r in chosen:
+            r["group"] = group
+        out.extend(chosen)
+        line = (
+            f"{category} {era_name(start, end)}: {num(len(chosen))} candidates for "
+            f"{num(quota)} slots from {num(len(pool))}"
+        )
+        if len(chosen) < n:
+            log.warning(f"{line}; the era is short by {num(n - len(chosen))} candidates")
+        else:
+            log.info(f"{line} ({num(len(chosen) - capped)} over the year cap)")
     return out
 
 
-def normalize_isbn(value: Any) -> str | None:
-    if not isinstance(value, str):
-        return None
-    v = value.strip().upper()
-    if re.fullmatch(r"\d{9}[\dX]|\d{8}[\dX]", v):
-        return v.zfill(10)
-    return None
+# Films: TMDB discover by year, ranked by vote count
 
 
-def curate_books(cfg: CurateConfig) -> list[Record]:
-    root = RAW / "goodbooks"
-    books = pd.read_csv(root / "books.csv", dtype={"isbn": str})
-    total = len(books)
-    books = books.sort_values("ratings_count", ascending=False).head(cfg.book_top)
-    tag_names = pd.read_csv(root / "tags.csv").set_index("tag_id")["tag_name"].to_dict()
-    book_tags = pd.read_csv(root / "book_tags.csv")
-    book_tags = book_tags[book_tags["goodreads_book_id"].isin(books["goodreads_book_id"])]
-    book_tags = book_tags.sort_values(["goodreads_book_id", "count"], ascending=[True, False])
-    shelves = (
-        book_tags.groupby("goodreads_book_id")["tag_id"]
-        .apply(lambda s: [str(tag_names.get(t, "")) for t in s])
-        .to_dict()
-    )
-    records = []
-    for row in books.itertuples(index=False):
-        title = SERIES_RE.sub("", str(row.title)).strip()
-        author = str(row.authors).split(",")[0].strip()
-        year = year_or_none(row.original_publication_year)
-        records.append(
-            {
-                "id": f"book:{slugify(title)}-{slugify(author, 24)}",
-                "category": "book",
-                "title": title,
-                "creator": author,
-                "year": year,
-                "rank": int(row.ratings_count),
-                "signal": {
-                    "shelves": clean_shelves(
-                        shelves.get(row.goodreads_book_id, []), cfg.book_shelf_tags
-                    )
+def tmdb_get(http: CachedClient, path: str, params: dict[str, Any]) -> Any:
+    headers, secret = keys.tmdb()
+    return http.get_json(f"{TMDB}{path}?{urlencode(sorted(params.items()))}", headers, secret)
+
+
+def select_films(http: CachedClient, cfg: CurateConfig) -> list[Record]:
+    genres = {g["id"]: g["name"] for g in tmdb_get(http, "/genre/movie/list", {})["genres"]}
+    pages: list[tuple[int, int, int]] = []
+    for (start, end, quota), votes in zip(cfg.film_eras, cfg.film_min_votes, strict=True):
+        n_years = end - start + 1
+        cap = math.ceil(cfg.year_cap_factor * wanted("film", quota, cfg) / n_years)
+        # 20 films a page; a little more than the cap, for films without a poster.
+        per_year = math.ceil(cap * 1.25 / 20)
+        pages += [(y, p, votes) for y in range(start, end + 1) for p in range(1, per_year + 1)]
+
+    def page(args: tuple[int, int, int]) -> list[dict]:
+        year, number, votes = args
+        params = {
+            "primary_release_year": year,
+            "sort_by": "vote_count.desc",
+            "vote_count.gte": votes,
+            "include_adult": "false",
+            "include_video": "false",
+            "page": number,
+        }
+        body = tmdb_get(http, "/discover/movie", params) or {}
+        if number > body.get("total_pages", 0):
+            return []
+        return [{**m, "_year": year} for m in body.get("results", [])]
+
+    log.info(f"film: {num(len(pages))} TMDB discover pages, {cfg.film_eras[0][0]} to now")
+    found: dict[int, Record] = {}
+    for rows in progress(parallel(page, pages, 8), desc="film pages", unit="page"):
+        for m in rows:
+            year = year_or_none((m.get("release_date") or "")[:4])
+            if m.get("adult") or not m.get("poster_path") or year != m["_year"]:
+                continue
+            title = m["title"].strip()
+            found.setdefault(
+                m["id"],
+                {
+                    "id": f"film:{slugify(title)}-{year}",
+                    "category": "film",
+                    "title": title,
+                    "creator": "",
+                    "year": year,
+                    "rank": int(m["vote_count"]),
+                    "signal": {
+                        "genres": [genres[g] for g in m.get("genre_ids", []) if g in genres],
+                        "overview": clip(m.get("overview"), cfg.description_chars),
+                    },
+                    "source": {"tmdb": m["id"]},
+                    "links": {"primary": f"https://www.themoviedb.org/movie/{m['id']}"},
                 },
+            )
+    return by_era("film", list(found.values()), cfg.film_eras, cfg)
+
+
+# Books: Hardcover GraphQL, ranked by readers
+
+BOOK_FIELDS = (
+    "id",
+    "title",
+    "slug",
+    "release_year",
+    "users_read_count",
+    "compilation",
+    "canonical_id",
+    "cached_tags",
+    "cached_contributors",
+    "cached_image",
+    "description",
+)
+BOOK_QUERY = """query Books($start: Int!, $end: Int!, $limit: Int!, $offset: Int!) {
+  books(
+    where: {release_year: {_gte: $start, _lte: $end}, compilation: {_eq: false},
+            canonical_id: {_is_null: true}, users_read_count: {_gt: 0}}
+    order_by: [{users_read_count: desc}, {id: asc}]
+    limit: $limit
+    offset: $offset
+  ) { id title slug release_year users_read_count cached_tags cached_contributors
+      cached_image description }
+}"""
+
+
+def hardcover(http: CachedClient, query: str, variables: dict[str, Any] | None = None) -> Any:
+    body = {"query": query, "variables": variables or {}}
+    return http.post_json(HARDCOVER, body, keys.hardcover())["data"]
+
+
+def check_hardcover_schema(http: CachedClient) -> None:
+    """Stop with the field names that Hardcover no longer has, before any selection."""
+    data = hardcover(http, '{ __type(name: "books") { fields { name } } }')
+    have = {f["name"] for f in (data.get("__type") or {}).get("fields", [])}
+    absent = [f for f in BOOK_FIELDS if f not in have]
+    if absent:
+        raise SystemExit(f"Hardcover's books type has no field {', '.join(absent)}; update curate")
+
+
+def book_tags(tags: Any, category: str, limit: int) -> list[str]:
+    rows = (tags or {}).get(category) or []
+    rows = sorted(rows, key=lambda t: -(t.get("count") or 0))
+    return unique((t.get("tag", "") for t in rows), limit)
+
+
+def book_record(b: dict, cfg: CurateConfig) -> Record | None:
+    title = (b.get("title") or "").strip()
+    authors = [
+        c["author"]["name"].strip()
+        for c in b.get("cached_contributors") or []
+        if (c.get("author") or {}).get("name") and c.get("contribution") in (None, "Author")
+    ]
+    if not title or not authors or BOOK_JUNK.search(title):
+        return None
+    image = (b.get("cached_image") or {}).get("url")
+    return {
+        "id": f"book:{slugify(title)}-{slugify(authors[0], 24)}",
+        "category": "book",
+        "title": title,
+        "creator": authors[0],
+        "year": b["release_year"],
+        "rank": int(b["users_read_count"]),
+        "signal": {
+            "moods": [t.lower() for t in book_tags(b.get("cached_tags"), "Mood", cfg.book_tags)],
+            "genres": book_tags(b.get("cached_tags"), "Genre", cfg.book_tags),
+            "description": clip(b.get("description"), cfg.description_chars),
+        },
+        "source": {"hardcover": b["id"], "image": image},
+        "links": {"primary": f"https://hardcover.app/books/{b['slug']}"},
+    }
+
+
+def select_books(http: CachedClient, cfg: CurateConfig) -> list[Record]:
+    check_hardcover_schema(http)
+    rows: dict[tuple[str, str], Record] = {}
+    bar = progress(total=len(cfg.book_eras), desc="book eras", unit="era")
+    for start, end, quota in cfg.book_eras:
+        n = wanted("book", quota, cfg)
+        era: list[Record] = []
+        for page in range(cfg.book_max_pages):
+            variables = {"start": start, "end": end, "limit": cfg.book_page}
+            variables["offset"] = page * cfg.book_page
+            books = hardcover(http, BOOK_QUERY, variables)["books"]
+            for b in books:
+                r = book_record(b, cfg)
+                key = (norm(r["title"]), norm(r["creator"])) if r else None
+                if r is not None and key not in rows:
+                    rows[key] = r
+                    era.append(r)
+            ranked = sorted(era, key=lambda r: (-r["rank"], r["id"]))
+            if len(books) < cfg.book_page or spread(ranked, n, cfg)[1] >= n:
+                break
+        log.debug(f"book {era_name(start, end)}: {num(len(era))} books from {page + 1} pages")
+        bar.update()
+    bar.close()
+    return by_era("book", list(rows.values()), cfg.book_eras, cfg)
+
+
+# Songs: ListenBrainz sitewide stats and artist top recordings, years from MusicBrainz
+
+SITEWIDE_RANGES = (
+    "this_week",
+    "this_month",
+    "this_year",
+    "week",
+    "month",
+    "quarter",
+    "half_yearly",
+    "year",
+    "all_time",
+)
+LASTFM = "https://ws.audioscrobbler.com/2.0/"
+OLD_ERA_TAGS = (
+    "50s",
+    "60s",
+    "70s",
+    "oldies",
+    "motown",
+    "doo wop",
+    "rock and roll",
+    "classic rock",
+    "soul",
+    "funk",
+    "disco",
+    "folk",
+    "blues",
+    "jazz",
+)
+
+
+def listenbrainz_pool(http: CachedClient) -> list[dict]:
+    """Recordings with a user count: the sitewide top lists, and the top recordings of
+    every artist on them."""
+    sitewide: dict[str, dict] = {}
+    for rng in SITEWIDE_RANGES:
+        url = f"{LISTENBRAINZ}/stats/sitewide/recordings?range={rng}&count=1000"
+        for x in (http.get_json(url) or {}).get("payload", {}).get("recordings", []):
+            if x.get("recording_mbid") and x.get("artist_mbids"):
+                sitewide.setdefault(x["recording_mbid"], x)
+    found = dict.fromkeys(x["artist_mbids"][0] for x in sitewide.values())
+    by_recording = len(found)
+    for rng in SITEWIDE_RANGES:
+        url = f"{LISTENBRAINZ}/stats/sitewide/artists?range={rng}&count=1000"
+        for x in (http.get_json(url) or {}).get("payload", {}).get("artists", []):
+            if x.get("artist_mbid"):
+                found.setdefault(x["artist_mbid"])
+    by_stats = len(found)
+    # ListenBrainz listeners play mostly recent music, so the stats alone give too few songs
+    # from before 1980. Last.fm's top artists of older decades and genres fill that era.
+    for tag in OLD_ERA_TAGS:
+        params = {"method": "tag.gettopartists", "tag": tag, "limit": 100, "format": "json"}
+        body = http.get_json(f"{LASTFM}?{urlencode(params)}", secret=keys.lastfm()) or {}
+        for a in (body.get("topartists") or {}).get("artist", []):
+            if a.get("mbid"):
+                found.setdefault(a["mbid"])
+    artists = list(found)
+    log.info(
+        f"song: {num(len(sitewide))} recordings by {num(by_recording)} artists in the "
+        f"ListenBrainz sitewide stats ({len(SITEWIDE_RANGES)} ranges), "
+        f"{num(by_stats - by_recording)} more artists from the sitewide artist stats, and "
+        f"{num(len(artists) - by_stats)} from Last.fm's top artists of older decades"
+    )
+    # User counts for the sitewide recordings, in batches.
+    ids = sorted(sitewide)
+    users: dict[str, int] = {}
+    for i in range(0, len(ids), 500):
+        body = {"recording_mbids": ids[i : i + 500]}
+        for p in http.post_json(f"{LISTENBRAINZ}/popularity/recording", body) or []:
+            users[p["recording_mbid"]] = p.get("total_user_count") or 0
+    pool = {
+        mbid: {
+            "mbid": mbid,
+            "title": x["track_name"],
+            "artist": x["artist_name"],
+            "artist_mbid": x["artist_mbids"][0],
+            "users": users.get(mbid, 0),
+        }
+        for mbid, x in sitewide.items()
+    }
+
+    def top(artist: str) -> list[dict]:
+        url = f"{LISTENBRAINZ}/popularity/top-recordings-for-artist/{artist}"
+        return http.get_json(url, keys.listenbrainz()) or []
+
+    bar = progress(total=len(artists), desc="song artists", unit="artist")
+
+    def one(artist: str) -> list[dict]:
+        rows = top(artist)
+        bar.update()
+        return rows
+
+    for artist, rows in zip(artists, parallel(one, artists, 4), strict=True):
+        for x in rows:
+            if x.get("recording_mbid") and x.get("recording_name"):
+                pool.setdefault(
+                    x["recording_mbid"],
+                    {
+                        "mbid": x["recording_mbid"],
+                        "title": x["recording_name"],
+                        "artist": x.get("artist_name") or "",
+                        "artist_mbid": artist,
+                        "users": x.get("total_user_count") or 0,
+                    },
+                )
+    bar.close()
+    return list(pool.values())
+
+
+def per_artist(pool: list[dict], limit: int) -> list[dict]:
+    """At most `limit` songs per artist, by user count; one recording per song; no other
+    versions (live, remix, karaoke, ...)."""
+    out, seen = [], set()
+    count: Counter[str] = Counter()
+    for x in sorted(pool, key=lambda x: (-x["users"], x["mbid"])):
+        x["title"] = clean_song_title(x["title"])
+        key = (x["artist_mbid"], norm(base_title(x["title"])))
+        if (
+            not x["artist"]
+            or VERSION.search(x["title"])
+            or key in seen
+            or count[x["artist_mbid"]] >= limit
+        ):
+            continue
+        seen.add(key)
+        count[x["artist_mbid"]] += 1
+        out.append(x)
+    return out
+
+
+def musicbrainz_dates(http: CachedClient, mbids: list[str]) -> dict[str, dict]:
+    """First release year and ISRCs for each recording, 100 recordings per search."""
+    ids = sorted(set(mbids))
+    out: dict[str, dict] = {}
+    for i in progress(range(0, len(ids), 100), desc="musicbrainz", unit="batch"):
+        query = "rid:(" + " OR ".join(ids[i : i + 100]) + ")"
+        url = f"{MUSICBRAINZ}?{urlencode({'query': query, 'fmt': 'json', 'limit': 100})}"
+        for rec in (http.get_json(url) or {}).get("recordings", []):
+            out[rec["id"]] = {
+                "year": year_or_none((rec.get("first-release-date") or "")[:4]),
+                "isrcs": sorted(rec.get("isrcs") or []),
+            }
+    return out
+
+
+def select_songs(http: CachedClient, cfg: CurateConfig) -> list[Record]:
+    pool = per_artist(listenbrainz_pool(http), cfg.song_per_artist)
+    dates = musicbrainz_dates(http, [x["mbid"] for x in pool])
+    rows = []
+    for x in pool:
+        meta = dates.get(x["mbid"]) or {}
+        if meta.get("year") is None:
+            continue
+        rows.append(
+            {
+                "id": f"song:{slugify(x['artist'], 24)}-{slugify(x['title'], 40)}",
+                "category": "song",
+                "title": x["title"],
+                "creator": x["artist"],
+                "year": meta["year"],
+                "rank": int(x["users"]),
+                "signal": {},
                 "source": {
-                    "goodreads": int(row.goodreads_book_id),
-                    "isbn": normalize_isbn(row.isbn),
+                    "mbid": x["mbid"],
+                    "artist_mbid": x["artist_mbid"],
+                    "isrc": meta["isrcs"][0] if meta["isrcs"] else None,
                 },
                 "links": {},
             }
         )
-    no_shelves = sum(1 for r in records if not r["signal"]["shelves"])
-    no_isbn = sum(1 for r in records if not r["source"]["isbn"])
     log.info(
-        "book: top %s of %s by ratings count; %s without shelf tags, %s without an ISBN",
-        num(len(records)),
-        num(total),
-        num(no_shelves),
-        num(no_isbn),
+        f"song: {num(len(pool))} songs after the per-artist cap of {cfg.song_per_artist}; "
+        f"{num(len(rows))} have a release year in MusicBrainz"
     )
-    return records
+    return by_era("song", rows, cfg.song_eras, cfg)
 
 
-def parse_list(value: Any) -> list[str]:
-    if not isinstance(value, str) or not value.startswith("["):
-        return []
-    try:
-        parsed = ast.literal_eval(value)
-    except (ValueError, SyntaxError):
-        return []
-    return [str(x) for x in parsed]
-
-
-def as_float(value: Any) -> float | None:
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
-        return None
-    return None if math.isnan(f) else round(f, 3)
-
-
-def squash(text: Any) -> str:
-    return re.sub(r"[^a-z0-9]+", "", str(text).lower())
-
-
-def with_spotify_popularity(muse: pd.DataFrame) -> pd.DataFrame:
-    """Add track and artist popularity from the Spotify tracks dataset.
-
-    A track matches by Spotify ID, else by artist and title. An artist matches by name
-    and gets the highest popularity of any track they appear on.
-    """
-    tracks = pd.read_csv(
-        SPOTIFY_TRACKS, usecols=["track_id", "artists", "track_name", "popularity"]
-    )
-    by_id = tracks.groupby("track_id")["popularity"].max()
-    by_name = (
-        tracks.assign(
-            a=tracks["artists"].astype(str).str.split(";").str[0].map(squash),
-            t=tracks["track_name"].map(squash),
-        )
-        .groupby(["a", "t"])["popularity"]
-        .max()
-        .to_dict()
-    )
-    artists = tracks["artists"].astype(str).str.split(";").explode()
-    by_artist = (
-        pd.Series(tracks.loc[artists.index, "popularity"].to_numpy(), index=artists.map(squash))
-        .groupby(level=0)
-        .max()
-    )
-    a, t = muse["artist"].map(squash), muse["track"].map(squash)
-    by_name_pop = pd.Series(
-        [by_name.get(key, np.nan) for key in zip(a, t, strict=True)], index=muse.index
-    )
-    return muse.assign(
-        artist_key=a,
-        track_pop=muse["spotify_id"].map(by_id).fillna(by_name_pop),
-        artist_pop=a.map(by_artist),
-    )
-
-
-def song_candidates(cfg: CurateConfig) -> int:
-    return round(cfg.song_top * cfg.song_candidate_factor)
-
-
-def select_songs(cfg: CurateConfig) -> tuple[pd.DataFrame, pd.Series]:
-    """The top songs and their rank value.
-
-    The Kaggle release ranks by Last.fm listeners, else by emotion tag count. The Zenodo
-    release has no popularity column. Only about 2,000 of its tracks match the Spotify
-    tracks dataset, so ranking by track popularity alone leaves too few. It ranks by artist
-    popularity, then track popularity, with at most song_per_artist tracks per artist.
-    """
-    path = MUSE_KAGGLE if MUSE_KAGGLE.exists() else MUSE_ZENODO
-    muse = pd.read_csv(path)
-    total = len(muse)
-    muse = muse[muse["spotify_id"].notna() & (muse["spotify_id"].astype(str).str.len() > 0)]
-    muse = muse.drop_duplicates("spotify_id")
-    log.info(
-        "song: %s of %s MuSe tracks (%s) have a Spotify id", num(len(muse)), num(total), path.name
-    )
-    rank_col = next(
-        (c for c in ("listeners", "lastfm_listeners", "number_of_emotion_tags") if c in muse),
-        None,
-    )
-    if rank_col is not None:
-        muse = muse.sort_values(rank_col, ascending=False).head(song_candidates(cfg))
-        log.info(
-            "song: keep the top %s by %s as candidates; resolve keeps %s",
-            num(len(muse)),
-            rank_col,
-            num(cfg.song_top),
-        )
-        return muse, muse[rank_col].fillna(0)
-    muse = with_spotify_popularity(muse)
-    log.info(
-        "song: popularity from the Spotify tracks data: %s tracks match, %s artists match",
-        num(int(muse["track_pop"].notna().sum())),
-        num(int(muse.loc[muse["artist_pop"].notna(), "artist_key"].nunique())),
-    )
-    muse = muse.sort_values(["artist_pop", "track_pop"], ascending=False, na_position="last")
-    muse = muse.groupby("artist_key", sort=False).head(cfg.song_per_artist)
-    muse = muse.head(song_candidates(cfg))
-    log.info(
-        "song: keep the top %s by artist, then track popularity, at most %s per artist, "
-        "as candidates; resolve keeps %s",
-        num(len(muse)),
-        num(cfg.song_per_artist),
-        num(cfg.song_top),
-    )
-    return muse, muse["track_pop"].fillna(muse["artist_pop"]).fillna(0)
-
-
-def curate_songs(cfg: CurateConfig) -> list[Record]:
-    muse, rank = select_songs(cfg)
-    records = []
-    for (index, row), value in zip(muse.iterrows(), rank, strict=True):
-        track, artist = str(row["track"]), str(row["artist"])
-        spotify = str(row["spotify_id"])
-        genre = row.get("genre")
-        records.append(
-            {
-                "id": f"song:{slugify(artist, 24)}-{slugify(track, 40)}",
-                "category": "song",
-                "title": track,
-                "creator": artist,
-                "year": None,
-                "rank": int(value),
-                "signal": {
-                    "valence": as_float(row.get("valence_tags")),
-                    "arousal": as_float(row.get("arousal_tags")),
-                    "dominance": as_float(row.get("dominance_tags")),
-                    "tags": parse_list(row.get("seeds")),
-                    "genre": genre if isinstance(genre, str) else None,
-                },
-                "source": {"spotify": spotify, "muse_row": int(index)},
-                "links": {"spotify": f"https://open.spotify.com/track/{spotify}"},
-            }
-        )
-    return records
+# Poems: PoetryDB
 
 
 def curate_poems(cfg: CurateConfig) -> list[Record]:
@@ -439,6 +588,8 @@ def poem_record(row: dict[str, Any], cfg: CurateConfig) -> Record:
     }
 
 
+# Art: the Met CSV, the Art Institute of Chicago, the Cleveland Museum of Art
+
 MET_COLUMNS = [
     "Object ID",
     "Is Highlight",
@@ -451,27 +602,24 @@ MET_COLUMNS = [
     "Object Begin Date",
     "Medium",
     "Classification",
-    "Link Resource",
+    "Object Wikidata URL",
+    "Tags",
 ]
 
 
 def load_met() -> pd.DataFrame:
-    met = pd.read_csv(
-        RAW / "met" / "MetObjects.csv", usecols=MET_COLUMNS, dtype=str, low_memory=False
-    )
+    met = pd.read_csv(MET_CSV, usecols=MET_COLUMNS, dtype=str, low_memory=False)
     met = met[(met["Is Public Domain"] == "True") & met["Title"].notna()]
     met["cls"] = met["Classification"].fillna("").str.split("|").str[0].str.strip()
     return met
 
 
-def text_or_none(value: Any) -> str | None:
-    return value if isinstance(value, str) else None
-
-
-def art_record(row: dict[str, Any], quota: int, rank: int) -> Record:
+def met_record(row: dict[str, Any], group: str, rank: int) -> Record:
     title = str(row["Title"]).strip()
     artist = text_or_none(row["Artist Display Name"]) or ""
     oid = int(row["Object ID"])
+    wikidata = text_or_none(row["Object Wikidata URL"])
+    tags = text_or_none(row["Tags"])
     return {
         "id": f"art:{slugify(title, 40)}-{oid}",
         "category": "art",
@@ -479,49 +627,169 @@ def art_record(row: dict[str, Any], quota: int, rank: int) -> Record:
         "creator": artist.split("|")[0].strip() or "Unknown artist",
         "year": year_or_none(row["Object Begin Date"]),
         "rank": rank,
+        "group": group,
         "signal": {
             "classification": row["cls"],
-            "quota": quota,
             "medium": text_or_none(row["Medium"]),
             "date": text_or_none(row["Object Date"]),
             "culture": text_or_none(row["Culture"]),
             "department": row["Department"],
+            "subjects": tags.split("|") if tags else [],
         },
-        "source": {"met": oid},
+        "source": {"met": oid, "wikidata": wikidata.rsplit("/", 1)[-1] if wikidata else None},
         "links": {"primary": f"https://www.metmuseum.org/art/collection/search/{oid}"},
     }
 
 
-def curate_art(cfg: CurateConfig) -> list[Record]:
+def select_met(cfg: CurateConfig) -> list[Record]:
+    """Public-domain objects of each class: highlights first, then objects with a Wikidata
+    item (a Commons image), then objects with subject tags, then a seeded shuffle."""
     met = load_met()
     rng = random.Random(SEED)
     records = []
-    for cls, share in cfg.art_quota.items():
+    for cls, share in cfg.art_met_quota.items():
         rows = met[met["cls"] == cls].to_dict("records")
         rng.shuffle(rows)
-        rows.sort(key=lambda r: r["Is Highlight"] != "True")
-        quota = round(cfg.art_target * share)
-        picked = rows[: quota * cfg.art_candidate_factor]
-        highlights = sum(1 for r in picked if r["Is Highlight"] == "True")
-        log.debug(
-            "art: %s: %s public-domain objects, %s candidates (%s highlights) for %s slots",
-            cls,
-            num(len(rows)),
-            num(len(picked)),
-            num(highlights),
-            num(quota),
+        rows.sort(
+            key=lambda r: (
+                r["Is Highlight"] != "True",
+                not isinstance(r["Object Wikidata URL"], str),
+                not isinstance(r["Tags"], str),
+            )
         )
-        for rank, row in enumerate(picked):
-            records.append(art_record(row, quota, -rank))
-    by_cls = Counter(r["signal"]["classification"] for r in records)
-    log.info(
-        "art: %s candidates from %s public-domain objects (%s); resolve keeps %s with images",
-        num(len(records)),
-        num(len(met)),
-        ", ".join(f"{k} {num(v)}" for k, v in by_cls.items()),
-        num(cfg.art_target),
-    )
+        n = wanted("art", round(cfg.art_met * share), cfg)
+        group = f"art:met-{cls.lower()}"
+        records += [met_record(r, group, -rank) for rank, r in enumerate(rows[:n])]
+        log.debug(f"art: Met {cls}: {num(len(rows))} public-domain objects, {num(n)} candidates")
+    log.info(f"art: {num(len(records))} Met candidates from {num(len(met))} public-domain objects")
     return records
+
+
+AIC_FIELDS = [
+    "id",
+    "title",
+    "artist_title",
+    "date_display",
+    "date_start",
+    "image_id",
+    "medium_display",
+    "artwork_type_title",
+    "subject_titles",
+    "term_titles",
+    "style_titles",
+    "classification_titles",
+]
+
+
+def select_aic(http: CachedClient, cfg: CurateConfig) -> list[Record]:
+    """Public-domain paintings with an image, the museum's boosted works first."""
+    n = wanted("art", cfg.art_aic, cfg)
+    query = {
+        "bool": {
+            "filter": [
+                {"term": {"is_public_domain": True}},
+                {"exists": {"field": "image_id"}},
+                {"term": {"artwork_type_id": 1}},  # Painting
+            ]
+        }
+    }
+    rows: list[dict] = []
+    for page in range(1, math.ceil(n / 100) + 1):
+        params = {
+            "query": query,
+            "sort": [{"is_boosted": "desc"}, {"id": "asc"}],
+            "fields": AIC_FIELDS,
+            "limit": 100,
+            "page": page,
+        }
+        body = http.get_json(f"{AIC}?{urlencode({'params': json.dumps(params)})}") or {}
+        rows += body.get("data", [])
+        if page >= body.get("pagination", {}).get("total_pages", 0):
+            break
+    records = []
+    for rank, a in enumerate(rows[:n]):
+        title = (a.get("title") or "Untitled").strip()
+        terms = [t for t in a.get("term_titles") or [] if not TERM_JUNK.search(t)]
+        records.append(
+            {
+                "id": f"art:{slugify(title, 40)}-aic{a['id']}",
+                "category": "art",
+                "title": title,
+                "creator": (a.get("artist_title") or "").strip() or "Unknown artist",
+                "year": year_or_none(a.get("date_start")),
+                "rank": -rank,
+                "group": "art:aic",
+                "signal": {
+                    "classification": a.get("artwork_type_title"),
+                    "medium": a.get("medium_display"),
+                    "date": a.get("date_display"),
+                    "subjects": unique(a.get("subject_titles") or [], 15),
+                    "styles": unique(a.get("style_titles") or [], 6),
+                    "terms": unique(terms, 12),
+                },
+                "source": {"aic": a["id"], "image_id": a["image_id"]},
+                "links": {"primary": f"https://www.artic.edu/artworks/{a['id']}"},
+            }
+        )
+    log.info(f"art: {num(len(records))} Art Institute of Chicago candidates")
+    return records
+
+
+CMA_FIELDS = (
+    "id,title,creation_date,creation_date_earliest,creators,images,culture,technique,"
+    "description,url,type,department,is_highlight"
+)
+
+
+def select_cma(http: CachedClient, cfg: CurateConfig) -> list[Record]:
+    """CC0 paintings with an image: highlights first, then works with a curator's
+    description, then a seeded shuffle."""
+    rows: list[dict] = []
+    while True:
+        params = {"cc0": 1, "has_image": 1, "type": "Painting", "limit": 1000, "skip": len(rows)}
+        body = http.get_json(f"{CMA}?{urlencode({**params, 'fields': CMA_FIELDS})}") or {}
+        rows += body.get("data", [])
+        if not body.get("data") or len(rows) >= body.get("info", {}).get("total", 0):
+            break
+    rows = [r for r in rows if ((r.get("images") or {}).get("web") or {}).get("url")]
+    rows.sort(key=lambda r: r["id"])
+    random.Random(SEED).shuffle(rows)
+    rows.sort(key=lambda r: (not r.get("is_highlight"), not r.get("description")))
+    n = wanted("art", cfg.art_cma, cfg)
+    records = []
+    for rank, a in enumerate(rows[:n]):
+        title = (a.get("title") or "Untitled").strip()
+        creators = a.get("creators") or []
+        creator = (creators[0].get("description") or "").split(" (")[0] if creators else ""
+        records.append(
+            {
+                "id": f"art:{slugify(title, 40)}-cma{a['id']}",
+                "category": "art",
+                "title": title,
+                "creator": creator.strip() or "Unknown artist",
+                "year": year_or_none(a.get("creation_date_earliest")),
+                "rank": -rank,
+                "group": "art:cma",
+                "signal": {
+                    "classification": a.get("type"),
+                    "medium": a.get("technique"),
+                    "date": a.get("creation_date"),
+                    "culture": ", ".join(a.get("culture") or []) or None,
+                    "description": clip(a.get("description"), cfg.description_chars),
+                },
+                "source": {"cma": a["id"], "image": a["images"]["web"]["url"]},
+                "links": {"primary": a.get("url") or f"https://clevelandart.org/art/{a['id']}"},
+            }
+        )
+    log.info(f"art: {num(len(records))} Cleveland Museum of Art candidates of {num(len(rows))}")
+    return records
+
+
+def select_art(http: CachedClient, cfg: CurateConfig) -> list[Record]:
+    return select_met(cfg) + select_aic(http, cfg) + select_cma(http, cfg)
+
+
+# PAT palettes
 
 
 def load_pat() -> list[dict[str, Any]]:
@@ -559,34 +827,77 @@ def dedupe_ids(records: list[Record]) -> int:
     return renamed
 
 
+def catalog_version() -> int | None:
+    if not CATALOG_META.exists():
+        return None
+    return json.loads(CATALOG_META.read_text(encoding="utf-8")).get("version")
+
+
+def start_fresh_if_old() -> None:
+    """A catalog from an older format (MovieLens, goodbooks-10k, MuSe) cannot mix with this
+    one. Remove it, its resolve results, and its images. data/raw and the HTTP cache stay."""
+    version = catalog_version()
+    if version == CATALOG_VERSION:
+        return
+    files = [p for p in (CATALOG, RESOLVED, RESOLVE_DROPPED) if p.exists()]
+    images = sorted(IMG.glob("*.webp")) if IMG.exists() else []
+    if not files and not images:
+        return
+    log.warning(
+        f"data/curated holds a catalog in format {version or 1}; this code writes format "
+        f"{CATALOG_VERSION} (TMDB, Hardcover, ListenBrainz, three museums). Starting the "
+        f"catalog fresh: removing {', '.join(p.name for p in files) or 'no files'} and "
+        f"{num(len(images))} images in data/img. data/raw and data/cache/http stay."
+    )
+    for p in [*files, *images]:
+        p.unlink()
+
+
 def run() -> None:
     start = time.perf_counter()
     cfg = CurateConfig()
-    log.info("reading data/raw: MovieLens, goodbooks-10k, MuSe, PoetryDB, Met, Text2Colors PAT")
-    records: list[Record] = []
-    steps = (
-        ("film", curate_films),
-        ("book", curate_books),
-        ("song", curate_songs),
-        ("poem", curate_poems),
-        ("art", curate_art),
+    keys.require(["tmdb", "hardcover", "listenbrainz", "lastfm"])
+    start_fresh_if_old()
+    log.info(
+        "selecting: films from TMDB, books from Hardcover, songs from ListenBrainz and "
+        "MusicBrainz, art from the Met CSV, the Art Institute of Chicago, and the Cleveland "
+        "Museum of Art; poems from PoetryDB (API answers cached in data/cache/http)"
     )
-    for _, fn in progress(steps, desc="curate", unit="category"):
-        records.extend(fn(cfg))
+    http = CachedClient(ResolveConfig())
+    steps: dict[str, Callable[[], list[Record]]] = {
+        "film": lambda: select_films(http, cfg),
+        "book": lambda: select_books(http, cfg),
+        "song": lambda: select_songs(http, cfg),
+        "art": lambda: select_art(http, cfg),
+    }
+    # Each category talks to its own hosts, so they run in parallel.
+    with ThreadPoolExecutor(max_workers=len(steps)) as pool:
+        futures = {c: pool.submit(fn) for c, fn in steps.items()}
+        records = [r for c in steps for r in futures[c].result()]
+    http.close()
+    records += curate_poems(cfg)
     renamed = dedupe_ids(records)
     if renamed:
         log.info("%s items shared an id; they got a numeric suffix", num(renamed))
     records.sort(key=lambda r: r["id"])
     write_jsonl(CATALOG, records)
+    write_json(CATALOG_META, {"version": CATALOG_VERSION})
     pat = sorted(load_pat(), key=lambda r: (r["phrase"], r["rgb"]))
     write_jsonl(PAT, pat)
     counts = Counter(r["category"] for r in records)
+    by_group: dict[str, int] = defaultdict(int)
+    for r in records:
+        by_group[r.get("group", r["category"])] += 1
+    log.debug("candidates by group: " + ", ".join(f"{g} {n}" for g, n in sorted(by_group.items())))
     log.info(
-        "done in %s: %s catalog items (%s) -> %s; %s PAT palettes -> %s",
+        "done in %s: %s catalog items (%s) -> %s; %s API calls, %s answers from the cache; "
+        "%s PAT palettes -> %s",
         elapsed(start),
         num(len(records)),
         ", ".join(f"{c} {num(counts[c])}" for c in ("film", "book", "song", "poem", "art")),
         CATALOG.relative_to(ML_ROOT).as_posix(),
+        num(http.requests),
+        num(http.hits),
         num(len(pat)),
         PAT.relative_to(ML_ROOT).as_posix(),
     )
