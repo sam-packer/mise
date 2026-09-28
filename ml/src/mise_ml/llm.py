@@ -244,8 +244,9 @@ class Job:
         )
         if pending:
             units = build(pending)
+            model = llm()
             start = time.perf_counter()
-            stats = self._generate(units, sig, prints, llm())
+            stats = self._generate(units, sig, prints, model)
             rate = stats["tokens"] / max(time.perf_counter() - start, 1e-9)
             log.info(
                 f"{self.name}: {num(len(units))} requests in {elapsed(start)}, "
@@ -255,7 +256,8 @@ class Job:
             if stats["skipped"]:
                 log.warning(
                     f"{self.name}: {num(stats['skipped'])} requests gave no valid JSON after a "
-                    "retry and were skipped (keys in the log file); a rerun tries them again"
+                    "retry and were cached as failed (keys in the log file); "
+                    "a rerun does not retry these cached failures automatically"
                 )
             entries = [
                 e for e in iter_jsonl(self.cache) if e["sig"] == sig and e.get("data") is not None
@@ -290,18 +292,20 @@ class Job:
             size = self.cfg.image_batch_size if has_image else self.cfg.batch_size
             desc = f"{self.name}{' (images)' if has_image else ''}"
             bar = progress(total=len(group), desc=desc, unit="req")
+            starting_stats = stats.copy()
             start = time.perf_counter()
             for i in range(0, len(group), size):
                 batch = group[i : i + size]
                 self._run_batch(batch, sig, prints, llm, stats)
-                bar.update(len(batch))
+                group_stats = stats - starting_stats
                 bar.set_postfix(
-                    valid=stats["valid"],
-                    retried=stats["retried"],
-                    skipped=stats["skipped"],
-                    tok_s=f"{stats['tokens'] / max(time.perf_counter() - start, 1e-9):.0f}",
+                    valid=group_stats["valid"],
+                    retried=group_stats["retried"],
+                    skipped=group_stats["skipped"],
+                    tok_s=f"{group_stats['tokens'] / max(time.perf_counter() - start, 1e-9):.0f}",
                     refresh=False,
                 )
+                bar.update(len(batch))
             bar.close()
         return stats
 

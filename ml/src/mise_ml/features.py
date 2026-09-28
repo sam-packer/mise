@@ -101,14 +101,17 @@ class FeatureStore:
     def get(self, texts: list[str]) -> np.ndarray:
         known, array = self._load()
         index = {t: i for i, t in enumerate(known)}
-        missing = list(dict.fromkeys(t for t in texts if t not in index))
+        unique = list(dict.fromkeys(texts))
+        missing = [t for t in unique if t not in index]
         log.info(
-            f"{self.name} features: {num(len(texts))} texts, "
-            f"{num(len(texts) - len(missing))} from the cache, {num(len(missing))} to encode"
+            f"{self.name} features: {num(len(texts))} texts ({num(len(unique))} unique), "
+            f"{num(len(unique) - len(missing))} unique texts from the cache, "
+            f"{num(len(missing))} to encode"
         )
         if missing:
+            encoder = shared_encoder(self.cfg)
             start = time.perf_counter()
-            new = shared_encoder(self.cfg).encode(missing, self.template)
+            new = encoder.encode(missing, self.template)
             rate = len(missing) / max(time.perf_counter() - start, 1e-9)
             log.info(
                 f"{self.name} features: encoded {num(len(missing))} texts in {elapsed(start)} "

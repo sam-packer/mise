@@ -557,14 +557,14 @@ def run(categories: list[str] | None = None) -> None:
                     log.debug(f"drop {r['id']}: {reason}")
                     append_jsonl(RESOLVE_DROPPED, [{"id": r["id"], "reason": reason}])
                 looked_up = resolver.http.hits + resolver.http.requests
-                bar.update()
                 bar.set_postfix(
                     ok=counts["ok"],
                     dropped=sum(n for k, n in counts.items() if k != "ok" and ":" not in k),
                     errors=sum(n for k, n in counts.items() if k.startswith("error")),
-                    cached=f"{resolver.http.hits / max(looked_up, 1):.0%}",
+                    cached_all=f"{resolver.http.hits / max(looked_up, 1):.0%}",
                     refresh=False,
                 )
+                bar.update()
 
         workers = cfg.workers.get(category, 1)
         chunk = workers * 8
