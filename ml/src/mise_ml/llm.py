@@ -127,7 +127,8 @@ class LocalLLM:
             tokenize=True,
             return_dict=True,
             return_tensors="pt",
-            padding=True,
+            # Transformers 5 takes processor options here; template variables stay in kwargs.
+            processor_kwargs={"padding": True},
             enable_thinking=False,
         ).to("cuda")
         grammars = [self.grammar(r.schema) for r in requests]
