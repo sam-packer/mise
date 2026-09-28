@@ -9,8 +9,5 @@
 		"directory": ".svelte-kit/cloudflare"
 	},
 	"workers_dev": true,
-	"preview_urls": true,
-	"vars": {
-		"BUN_VERSION": "1.4.2"
-	}
+	"preview_urls": true
 }
