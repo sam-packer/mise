@@ -4,12 +4,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
 from mise_ml import log as logs
-from mise_ml.config import CATEGORIES
+from mise_ml.config import CATEGORIES, ML_ROOT
 
 STEPS = {
     "fetch": "download the raw sources and verify their checksums",
-    "curate": "apply the curation rules; write data/curated/catalog.jsonl",
+    "curate": "select films, books, songs, art, poems (cached API calls); write catalog.jsonl",
     "resolve": "resolve media and links, download images (cached, resumable)",
     "profile": "local LLM pass: item profiles, moods, PAT sentences, labels (resumable)",
     "train-teacher": "cache Qwen3-Embedding-8B features and train the teacher heads",
@@ -27,9 +29,10 @@ def preflight() -> None:
     """Name everything that is missing before hours of work start."""
     import torch
 
+    from mise_ml import keys
     from mise_ml.config import EVAL_FEELINGS, VOCAB_PATH
 
-    problems = []
+    problems = keys.missing(list(keys.KEYS))
     if not torch.cuda.is_available():
         problems.append("no CUDA GPU is visible to PyTorch")
     if not VOCAB_PATH.exists():
@@ -86,6 +89,7 @@ def run_all() -> None:
     from mise_ml.config import (
         BUNDLE,
         CATALOG,
+        CATALOG_META,
         EVAL_FEELINGS,
         EVAL_REPORT,
         MODELS,
@@ -106,7 +110,7 @@ def run_all() -> None:
     run = Run()
     run.step("fetch", fetch.run)
     raw = [src.dest for src in fetch.load_sources() if src.dest.exists()]
-    run.step("curate", curate.run, ([*raw, SOURCES], CurateConfig(), [CATALOG, PAT]))
+    run.step("curate", curate.run, ([*raw, SOURCES], CurateConfig(), [CATALOG, CATALOG_META, PAT]))
     run.step("resolve", resolve.run)
     run.step("profile", profile.run)
     labels = labels_path(load_vocab())
@@ -145,6 +149,8 @@ def print_steps() -> None:
 
 
 def main() -> None:
+    # API keys live in ml/.env (see ml/.env.example). A variable set in the shell wins.
+    load_dotenv(ML_ROOT / ".env", override=False)
     parser = argparse.ArgumentParser(prog="mise-ml", description="mise ML pipeline")
     sub = parser.add_subparsers(dest="step", metavar="step")
     for name, text in STEPS.items():

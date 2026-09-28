@@ -1,75 +1,10 @@
-# Raw sources for `uv run mise-ml fetch`. Paths are relative to data/raw/.
+# Raw files for `uv run mise-ml fetch`. Paths are relative to data/raw/.
+# Films, books, songs, and the Chicago and Cleveland art come from APIs in `curate` (README).
 # fetch downloads each missing file and checks its size and SHA-256.
 # A mismatch stops fetch: the source changed upstream.
 # Nothing under data/ is committed. fetch rebuilds it from these sources.
 # kind: "file" (download), "zip" (download and extract), "snapshot" (built from an API),
 # "manual" (gated; you download it by hand; optional).
-
-[[source]]
-name = "MovieLens ml-latest (includes the Tag Genome)"
-url = "https://files.grouplens.org/datasets/movielens/ml-latest.zip"
-path = "movielens/ml-latest.zip"
-kind = "zip"
-sha256 = "66a9e518c747d76b241d9a859b001a2619d3ed1672ceef599eb50daf73a7b4a3"
-bytes = 350896731
-license = "GroupLens research license: research and non-commercial use only, no redistribution"
-
-[[source]]
-name = "goodbooks-10k books"
-url = "https://raw.githubusercontent.com/zygmuntz/goodbooks-10k/master/books.csv"
-path = "goodbooks/books.csv"
-sha256 = "4d21d0e0433128657c752e3a3d0405ac0ec11675d6c70c64cb0abf4ab1acb76a"
-bytes = 3286659
-license = "CC BY-SA 4.0"
-
-[[source]]
-name = "goodbooks-10k book tags"
-url = "https://raw.githubusercontent.com/zygmuntz/goodbooks-10k/master/book_tags.csv"
-path = "goodbooks/book_tags.csv"
-sha256 = "8ff2f0659be9ddbe10bf47ba33b5b69024f893f017ac665236f15bc97d862950"
-bytes = 16665883
-license = "CC BY-SA 4.0"
-
-[[source]]
-name = "goodbooks-10k tags"
-url = "https://raw.githubusercontent.com/zygmuntz/goodbooks-10k/master/tags.csv"
-path = "goodbooks/tags.csv"
-sha256 = "87f316957564fa21c316a4f50afc87f07906f478f990eec027aaca00c536c449"
-bytes = 722480
-license = "CC BY-SA 4.0"
-
-[[source]]
-name = "MuSe (Zenodo release)"
-url = "https://zenodo.org/api/records/4281165/files/muse_dataset.csv/content"
-path = "muse/muse_dataset.csv"
-sha256 = "56be88aea7dfa2c0446e0d7cc033d95c3550a3dc4364ac91c815cf998265fd2b"
-bytes = 10026011
-license = "CC BY 4.0"
-skip_if = "muse/muse_v3.csv"
-note = """Download muse_dataset.csv from https://zenodo.org/records/4281165 and put it in
-data/raw/muse/."""
-
-[[source]]
-name = "Spotify tracks dataset (popularity for MuSe ranking)"
-url = "https://huggingface.co/datasets/maharshipandya/spotify-tracks-dataset/resolve/635b034f69257814eff850a5c2b3346fe458134f/dataset.csv"
-path = "spotify/dataset.csv"
-sha256 = "b202fa49909b2d5cef71a04b1d21243cfeb36414535f2ca9272aa646721177bd"
-bytes = 20118244
-license = "BSD"
-skip_if = "muse/muse_v3.csv"
-note = """Download dataset.csv from
-https://huggingface.co/datasets/maharshipandya/spotify-tracks-dataset and put it in
-data/raw/spotify/."""
-
-[[source]]
-name = "MuSe (Kaggle release, optional, richer)"
-url = "https://www.kaggle.com/datasets/cakiki/muse-the-musical-sentiment-dataset"
-path = "muse/muse_v3.csv"
-kind = "manual"
-license = "see the Kaggle page"
-note = """Optional. The Kaggle release adds tags, genre and tag counts but needs a login.
-Put muse_v3.csv in data/raw/muse/. When it is present, curate uses it instead of the Zenodo
-file, and fetch skips the Zenodo and Spotify files."""
 
 [[source]]
 name = "Met Open Access CSV"

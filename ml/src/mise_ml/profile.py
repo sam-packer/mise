@@ -39,6 +39,10 @@ The app answers with a film, a book, a song, a poem, and an artwork that fit it.
 
 {FEELING_RULES}
 
+The work comes with facts and crowd tags: film genres and keywords, reader moods and \
+genres for books, listener tags for songs, subjects and styles for art. Use them as hints \
+for the mood. Crowd tags can be noisy; ignore a tag that does not fit the rest.
+
 For the work you get, write:
 - vibe: one quiet line about the mood, lower case, at most 12 words, no title, no names, \
 no final period.
@@ -169,6 +173,26 @@ def chunks(keys: list[str], size: int) -> list[list[str]]:
 # items
 
 
+# Signal fields in prompt order, with the label the labeler sees. Tag lists come first.
+SIGNAL_LABELS = {
+    "genres": "genres",
+    "moods": "reader mood tags",
+    "tags": "listener tags",
+    "keywords": "keywords",
+    "subjects": "subjects",
+    "styles": "styles",
+    "terms": "museum terms",
+    "tagline": "tagline",
+    "overview": "synopsis",
+    "description": "description",
+    "classification": "type",
+    "medium": "medium",
+    "date": "date",
+    "culture": "culture",
+    "department": "museum department",
+}
+
+
 def item_prompt(r: Record) -> str:
     lines = [f"category: {r['category']}", f"title: {r['title']}"]
     if r.get("creator"):
@@ -177,16 +201,16 @@ def item_prompt(r: Record) -> str:
         lines.append(f"album: {r['album']}")
     if r.get("year"):
         lines.append(f"year: {r['year']}")
-    for key, value in sorted(r.get("signal", {}).items()):
-        if value in (None, [], "") or key == "quota":
+    signal = r.get("signal", {})
+    for key, label in SIGNAL_LABELS.items():
+        value = signal.get(key)
+        if value in (None, [], ""):
             continue
         if isinstance(value, list):
             value = ", ".join(value)
-        lines.append(f"{key}: {value}")
+        lines.append(f"{label}: {value}")
     if r.get("text"):
         lines.append(f"poem text:\n{r['text']}")
-    if r["category"] == "song" and r["signal"].get("valence") is not None:
-        lines.append("(valence, arousal, dominance are crowd ratings on a 1 to 9 scale)")
     return "\n".join(lines)
 
 

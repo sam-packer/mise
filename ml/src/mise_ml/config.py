@@ -16,11 +16,12 @@ BUNDLE = OUT / "bundle"
 SOURCES = ML_ROOT / "sources.toml"
 VOCAB_PATH = REPO_ROOT / "scripts" / "stub" / "vocab.json"
 EVAL_FEELINGS = ML_ROOT / "eval_feelings.jsonl"
-MUSE_KAGGLE = RAW / "muse" / "muse_v3.csv"
-MUSE_ZENODO = RAW / "muse" / "muse_dataset.csv"
-SPOTIFY_TRACKS = RAW / "spotify" / "dataset.csv"
+MET_CSV = RAW / "met" / "MetObjects.csv"
 
 CATALOG = CURATED / "catalog.jsonl"
+# The catalog format. curate starts the catalog fresh when this file holds another version.
+CATALOG_META = CURATED / "catalog.meta.json"
+CATALOG_VERSION = 2
 PAT = CURATED / "pat.jsonl"
 RESOLVED = CURATED / "resolved.jsonl"
 RESOLVE_DROPPED = CURATED / "resolve_dropped.jsonl"
@@ -35,24 +36,37 @@ SEED = 1337
 CATEGORIES = ("art", "film", "song", "poem", "book")
 
 
+# An era is (first year, last year, items to keep). "Before 1950" starts at -5000, so
+# ancient works with a negative release year count too.
+Eras = tuple[tuple[int, int, int], ...]
+
+
 @dataclass(frozen=True)
 class CurateConfig:
-    film_min_ratings: int = 2000
-    film_top: int = 2000
-    film_genome_tags: int = 12
-    film_genome_min_relevance: float = 0.5
-    book_top: int = 2000
-    book_shelf_tags: int = 15
-    song_top: int = 3000
-    # Some songs are not on Deezer; resolve keeps the top song_top of the candidates.
-    song_candidate_factor: float = 1.4
-    song_per_artist: int = 5
-    poem_min_lines: int = 8
-    poem_max_lines: int = 40
-    poem_excerpt_lines: int = 14
-    art_target: int = 2000
-    art_candidate_factor: int = 3
-    art_quota: dict[str, float] = field(
+    film_eras: Eras = ((1920, 1969, 300), (1970, 1999, 600), (2000, 2019, 700), (2020, 2026, 400))
+    # TMDB vote_count.gte for each era, in the order of film_eras.
+    film_min_votes: tuple[int, ...] = (50, 100, 200, 100)
+    film_keywords: int = 15
+    book_eras: Eras = ((-5000, 1949, 300), (1950, 1999, 500), (2000, 2019, 700), (2020, 2026, 500))
+    book_page: int = 500
+    book_max_pages: int = 8
+    book_tags: int = 8
+    song_eras: Eras = ((1900, 1979, 450), (1980, 1999, 750), (2000, 2019, 1050), (2020, 2026, 750))
+    song_per_artist: int = 6
+    song_tags: int = 10
+    # Candidates per kept item. resolve tries candidates in rank order and keeps the target
+    # of each group (an era, or an art source), so a drop is replaced by the next candidate.
+    candidate_factor: dict[str, float] = field(
+        default_factory=lambda: {"film": 1.05, "book": 1.1, "song": 1.4, "art": 1.25}
+    )
+    # Spread within an era: a year gets at most this many times its even share at first.
+    # Free slots then go to the best remaining candidates of the era.
+    year_cap_factor: float = 2.0
+    art_met: int = 1200
+    art_aic: int = 500
+    art_cma: int = 300
+    # Met public-domain classes and their share of art_met.
+    art_met_quota: dict[str, float] = field(
         default_factory=lambda: {
             "Paintings": 0.4,
             "Drawings": 0.2,
@@ -60,19 +74,38 @@ class CurateConfig:
             "Photographs": 0.2,
         }
     )
+    description_chars: int = 500
+    poem_min_lines: int = 8
+    poem_max_lines: int = 40
+    poem_excerpt_lines: int = 14
 
 
 @dataclass(frozen=True)
 class ResolveConfig:
     image_long_edge: int = 800
     webp_quality: int = 82
+    # Seconds between two requests to one host. Hosts run in parallel with each other.
     min_interval: dict[str, float] = field(
         default_factory=lambda: {
+            # TMDB allows about 40 requests/s.
+            "api.themoviedb.org": 0.03,
+            "image.tmdb.org": 0.03,
+            # Hardcover allows 60 requests/min.
+            "api.hardcover.app": 1.05,
+            "assets.hardcover.app": 0.05,
+            # ListenBrainz allows 30 requests in 10 s; MusicBrainz 1 request/s.
+            "api.listenbrainz.org": 0.34,
+            "musicbrainz.org": 1.05,
+            # Last.fm asks for at most 5 requests/s.
+            "ws.audioscrobbler.com": 0.2,
             "api.deezer.com": 0.12,
             "cdn-images.dzcdn.net": 0.12,
-            "v3.sg.media-imdb.com": 0.4,
-            "m.media-amazon.com": 0.2,
             "query.wikidata.org": 1.0,
+            "commons.wikimedia.org": 0.25,
+            "api.artic.edu": 1.0,
+            "www.artic.edu": 0.25,
+            "openaccess-api.clevelandart.org": 0.5,
+            "openaccess-cdn.clevelandart.org": 0.1,
             # 3 requests/s: Open Library's limit for a User-Agent with a contact email.
             "openlibrary.org": 0.34,
             # Covers by cover ID are not rate-limited.
@@ -86,7 +119,9 @@ class ResolveConfig:
     timeout: float = 30.0
     retries: int = 4
     # Parallel requests per category. The per-host intervals above still cap the rate.
-    workers: dict[str, int] = field(default_factory=lambda: {"song": 4, "book": 4, "film": 2})
+    workers: dict[str, int] = field(
+        default_factory=lambda: {"film": 8, "song": 4, "book": 4, "art": 4}
+    )
 
 
 @dataclass(frozen=True)

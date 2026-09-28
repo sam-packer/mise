@@ -268,6 +268,21 @@ def run() -> dict[str, Any]:
             "eval": label_metrics(out, eval_rows, qs, 0),
             "heldout": label_metrics(out, held_rows, qs, n_eval),
         }
+    # The floor: off-the-shelf MiniLM, what the stub bundle runs. It has no trained heads,
+    # so only its retrieval numbers mean anything.
+    baseline = baseline_outputs(texts, catalog)
+    report["baseline"] = {
+        "recall@10_heldout": recall_at_k(
+            baseline.query[n_eval:], held_pos, baseline.items, catalog.categories
+        ),
+        "recall@10_judged": judged_recall(
+            Outputs(baseline.query[:n_eval], baseline.items, baseline.palette, []),
+            eval_texts,
+            catalog,
+        ),
+        "eval": {},
+        "heldout": {},
+    }
     report["student"]["latency_ms"] = {
         "median": statistics.median(latency),
         "p95": float(np.percentile(latency, 95)),
@@ -279,18 +294,25 @@ def run() -> dict[str, Any]:
     gap = report["teacher"][key] - report["student"][key]
     report["ship"] = {"metric": key, "gap": gap, "ok": bool(gap <= SHIP_MARGIN)}
     write_json(EVAL_REPORT, report)
+
+    def cell(value: float | None, width: int, digits: int = 3) -> str:
+        if value is None or np.isnan(value):
+            return f"{'—':>{width}}"
+        return f"{value:>{width}.{digits}f}"
+
     log.info(
         f"{'':8} {'recall@10':>10} {'judged':>8} {'palette dE':>11} "
         f"{'light':>6} {'type':>6} {'scent':>6}"
     )
-    for name in ("teacher", "student"):
+    for name in ("teacher", "student", "baseline"):
         r = report[name]
         e = r["eval"] or r["heldout"]
         log.info(
-            f"{name:8} {r['recall@10_heldout']:>10.3f} {r['recall@10_judged']:>8.3f} "
-            f"{e.get('palette_dE', float('nan')):>11.4f} {e.get('light_acc', float('nan')):>6.3f} "
-            f"{e.get('typeface_acc', float('nan')):>6.3f} {e.get('scent_acc', float('nan')):>6.3f}"
+            f"{name:8} {cell(r['recall@10_heldout'], 10)} {cell(r['recall@10_judged'], 8)} "
+            f"{cell(e.get('palette_dE'), 11, 4)} {cell(e.get('light_acc'), 6)} "
+            f"{cell(e.get('typeface_acc'), 6)} {cell(e.get('scent_acc'), 6)}"
         )
+    log.info("baseline = off-the-shelf MiniLM (the stub); it has no palette or choice heads")
     lat = report["student"]["latency_ms"]
     log.info(f"student latency: median {lat['median']:.1f} ms, p95 {lat['p95']:.1f} ms (1 thread)")
     verdict = "ship" if report["ship"]["ok"] else "do not ship"

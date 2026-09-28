@@ -1,8 +1,8 @@
 # mise-ml
 
-This package builds the real mood bundle for mise. It downloads public datasets, curates a
-catalog, finds images and links, labels everything with a local LLM, trains a teacher, distills
-it into a small student, and writes the bundle to `out/bundle/` in the format of spec §4.
+This package builds the real mood bundle for mise. It selects a current catalog from public APIs
+and museum data, finds images and links, labels everything with a local LLM, trains a teacher,
+distills it into a small student, and writes the bundle to `out/bundle/` in the format of spec §4.
 
 The pipeline uses three models. All three run on your GPU and are pinned to a revision:
 
@@ -18,7 +18,21 @@ the embedding model is built for. The student learns to copy the teacher and fit
 ## Reproduce
 
 You need an NVIDIA GPU with 32 GB (the defaults suit an RTX 5090), uv, about 60 GB of free
-disk (estimate), and an internet connection. You need no API key and no account.
+disk (estimate), an internet connection, and four free API keys.
+
+Copy `.env.example` to `.env` and fill in the keys. `.env` is gitignored. A variable that is set
+in the shell wins over `.env`.
+
+| Variable | Get it at | Used for |
+|---|---|---|
+| `TMDB_TOKEN` or `TMDB_API_KEY` | themoviedb.org > Settings > API | films: selection and details |
+| `HARDCOVER_TOKEN` | hardcover.app/account/api | books: selection, tags, and covers |
+| `LISTENBRAINZ_TOKEN` | listenbrainz.org/settings | songs: the top recordings of each artist |
+| `LASTFM_API_KEY` | last.fm/api/account/create | songs: older artists and listener tags |
+
+Set one of the two TMDB variables. The bearer token wins when both are set. The pipeline logs
+only "set" or "missing" for a key, never its value. It sends the keys in headers or as secret
+query parameters, which never go into the HTTP cache.
 
 ```
 uv sync
@@ -28,8 +42,10 @@ uv run mise-ml all
 `all` runs every step in order. Each step skips work that is already done, so you can stop
 `all` at any time and start it again. No step needs an argument.
 
-Before `all` starts, it checks for a CUDA GPU, for `../scripts/stub/vocab.json`, and for
-`eval_feelings.jsonl`. It names each missing item and stops before any long work.
+Before `all` starts, it checks for the API keys, for a CUDA GPU, for
+`../scripts/stub/vocab.json`, and for `eval_feelings.jsonl`. It names each missing item and
+stops before any long work. `curate` and `resolve` also check the keys they need when you run
+them alone.
 
 At the end, `all` checks the ship rule (see "eval" below):
 
@@ -58,9 +74,9 @@ The times are estimates for an RTX 5090, except where the text says "measured".
 
 | Step | Input | Output | Time |
 |---|---|---|---|
-| `fetch` | `sources.toml` | `data/raw/` | 10–20 min |
-| `curate` | `data/raw/` | `data/curated/catalog.jsonl`, `pat.jsonl` | 12 s (measured) |
-| `resolve` | `catalog.jsonl` | `data/curated/resolved.jsonl`, `data/img/` | about 1 h (books are the slowest; songs 5–10 min) |
+| `fetch` | `sources.toml` | `data/raw/` | 5–10 min |
+| `curate` | APIs, `data/raw/` | `data/curated/catalog.jsonl`, `catalog.meta.json`, `pat.jsonl` | about 21 min the first time (song selection, measured); under 1 min from the cache |
+| `resolve` | `catalog.jsonl`, APIs | `data/curated/resolved.jsonl`, `data/img/` | about 15 min (songs are the slowest) |
 | `profile` | `resolved.jsonl`, `eval_feelings.jsonl`, vocab | `data/curated/profiles.jsonl`, `moods.jsonl`, `pat_sentences.jsonl`, `labels-<vocab>.jsonl` | 4–10 h |
 | `train-teacher` | the curated files | `data/models/teacher.pt`, `teacher_outputs.pt` | 30–60 min |
 | `train-student` | teacher outputs | `data/models/student/` | 20–40 min |
@@ -77,11 +93,7 @@ Review the new file, then update `sources.toml`.
 
 | Source | Use | License |
 |---|---|---|
-| MovieLens ml-latest, with the Tag Genome | films and their mood tags | research and non-commercial use only |
-| goodbooks-10k | books and their shelf tags | CC BY-SA 4.0 |
-| MuSe, Zenodo release | songs with valence, arousal, dominance, and a Spotify ID | CC BY 4.0 |
-| Spotify tracks dataset (Hugging Face) | a popularity value to rank the MuSe songs | BSD |
-| Met Open Access CSV | public-domain artworks | CC0 |
+| Met Open Access CSV | public-domain artworks and their subject tags | CC0 |
 | PoetryDB | public-domain poems | poems are public domain |
 | Text2Colors PAT (mirror) | 10,183 name-to-palette pairs | see below |
 | ArtEmis (optional, manual) | extra feeling sentences | research use only |
@@ -94,61 +106,113 @@ Review the new file, then update `sources.toml`.
   pipeline uses a mirror of `data/hexcolor_vf/`. The original code is MIT. The mirror has no
   license. When you use PAT, cite Bahng et al., "Coloring with Words: Guiding Image
   Colorization Through Text-based Palette Generation", ECCV 2018.
-- The Kaggle release of MuSe has more columns (tags, genre), but it needs a login. It is
-  optional. If you put `muse_v3.csv` in `data/raw/muse/`, `curate` uses it instead of the
-  Zenodo file.
 - ArtEmis is gated and optional. If you put `artemis_dataset_release_v0.csv` in
   `data/raw/artemis/`, `profile` uses up to 3,000 of its utterances as extra feelings.
 
 ### curate (§9.1)
 
-`curate` reads the raw files and writes one catalog. It needs no network. The measured result
-on 2026-09-27 was 2,000 films, 2,000 books, 3,000 songs, 1,993 poems, and 6,000 art candidates.
+`curate` selects the catalog. Films, books, songs, and the Chicago and Cleveland art come from
+APIs. `data/cache/http/` caches every API answer, so a second run needs almost no network. The
+four categories run in parallel, because each one uses its own hosts.
 
-- **film:** MovieLens movies with at least 2,000 ratings, the top 2,000 by rating count. The
-  mood signal is the top 12 Tag Genome tags with relevance 0.5 or more.
-- **book:** the top 2,000 goodbooks-10k titles by ratings count. The signal is the shelf tags,
-  without shelving noise such as "to-read" or "owned".
-- **song:** MuSe tracks with a Spotify ID. The Zenodo release has no popularity column, and only
-  about 2,000 of its tracks match a track in the Spotify tracks dataset. So `curate` ranks by
-  artist popularity (the highest popularity of any track by that artist), then by track
-  popularity, and keeps at most 5 tracks per artist. It keeps the top 4,200 as candidates (1.4 times
-  3,000), because some songs are not on Deezer. With the Kaggle file, it ranks by Last.fm
-  listeners or tag count instead.
+| Source | What `curate` asks | Calls for a full run |
+|---|---|---|
+| TMDB | `/3/discover/movie` for each year, 20 films a page | about 300 |
+| Hardcover | one GraphQL query of 500 books for each page | about 10 |
+| ListenBrainz | sitewide recording and artist stats (1,000 a call), popularity in batches of 500, the top recordings of each artist | about 2,100 |
+| Last.fm | top artists of 14 older tags, 100 a call | 14 |
+| MusicBrainz | recording search `rid:(a OR b ...)`, 100 recordings a call | about 90 |
+| Art Institute of Chicago | artwork search, 100 a page | 7 |
+| Cleveland Museum of Art | artworks, 1,000 a page | 4 |
+
+**Eras.** Films, books, and songs are chosen by era. Each era keeps its quota:
+
+| Category | Eras and items |
+|---|---|
+| film (2,000) | 1920–1969: 300 · 1970–1999: 600 · 2000–2019: 700 · 2020–2026: 400 |
+| book (2,000) | before 1950: 300 · 1950–1999: 500 · 2000–2019: 700 · 2020–2026: 500 |
+| song (3,000) | before 1980: 450 · 1980–1999: 750 · 2000–2019: 1,050 · 2020–2026: 750 |
+
+Within an era, a year first gets at most two times its even share. The free slots then go to
+the best items left in the era. So a strong year cannot fill the whole era, and a weak year
+does not take items that nobody knows.
+
+**Groups and candidates.** Each era, and each art source, is a group. `curate` writes more
+candidates than a group keeps: 1.05 times for films, 1.1 for books, 1.4 for songs, and 1.25
+for art. `resolve` keeps the target of each group (see below).
+
+- **film:** TMDB discover for each release year from 1920, ranked by vote count. The minimum
+  vote count is 50 before 1970, 100 for 1970–1999, 200 for 2000–2019, and 100 from 2020. A film
+  needs a poster. The signal has the genres and the TMDB overview.
+- **book:** Hardcover books for each era, ranked by readers (`users_read_count`), without
+  compilations and duplicate records. `curate` asks the Hardcover schema for the fields it uses
+  before the first query, and it stops with the names of any fields that are gone. It also
+  removes box sets and a second record with the same title and author. The signal has the top 8
+  reader mood tags, the top 8 genre tags, and the description.
+- **song:** the ListenBrainz sitewide recording stats (9 ranges) give recordings and artists.
+  The sitewide artist stats give more artists. ListenBrainz listeners play mostly recent
+  music, so Last.fm's top 100 artists of 14 older decade and genre tags (50s, 60s, 70s, oldies,
+  motown, soul, jazz, and so on) fill the era before 1980. The top recordings of each artist
+  come next.
+  `curate` ranks the recordings by the number of users who listened, not by listen count,
+  because a few fans who stream a song all day make listen counts unfair. It keeps at most 6
+  songs for each artist, one recording of each song, and no live, remix, karaoke, or other
+  version. MusicBrainz gives the first release year and the ISRCs.
 - **poem:** PoetryDB poems with 8 to 40 lines. The excerpt is the first 14 lines.
-- **art:** Met public-domain Paintings, Drawings, Prints, and Photographs, highlights first. It
-  keeps three candidates for each slot, because some objects have no image.
+- **art:** 1,200 from the Met, 500 from the Art Institute of Chicago, and 300 from the
+  Cleveland Museum of Art, all public domain.
+  - The Met CSV gives Paintings (40%), Drawings, Prints, and Photographs (20% each). Highlights
+    come first, then objects with a Wikidata item, then objects with subject tags. The CSV tags
+    are the signal.
+  - Chicago gives public-domain paintings with an image, the museum's boosted works first. The
+    subjects, styles, and terms are the signal.
+  - Cleveland gives CC0 paintings with an image: highlights first, then works with a curator's
+    description. The description is the signal.
 - **PAT:** each palette name with its five RGB colors, in `pat.jsonl`.
+
+**Format.** `curate` writes `catalog.meta.json` with the catalog format. If `data/curated/`
+holds a catalog in an older format (MovieLens, goodbooks-10k, MuSe), `curate` logs a warning and
+starts fresh. It removes `catalog.jsonl`, `resolved.jsonl`, `resolve_dropped.jsonl`, and the
+images in `data/img/`. It keeps `data/raw/` and `data/cache/http/`.
 
 ### resolve
 
-`resolve` adds an image and links to each catalog item. It caches every API answer in
-`data/cache/http/`, waits between calls to each host, and appends each result as it goes. It
-drops items without an image, except poems.
+`resolve` adds an image and links to each catalog item, and more signal where the source has
+it. It caches every API answer in `data/cache/http/`, waits between calls to each host, and
+appends each result as it goes. The categories run in parallel. It drops items without an
+image, except poems.
 
-- **film:** the IMDb suggestion endpoint gives the poster for the IMDb ID from MovieLens.
-  Wikidata (IMDb ID P345, director P57) gives the director, 200 films for each query. The
-  primary link is the IMDb title page.
-- **song:** the Deezer search API (no key) finds the track by artist and title. A match needs
-  the same artist and a title that starts with the catalog title, ignoring "(feat. ...)" parts.
-  `resolve` prefers the original album over a live, remix, or compilation album, and it rejects
-  another version of the song (remix, live, karaoke, and so on) unless the catalog title names
-  that version too. Deezer gives the album cover, the album name, and the track link. The
-  Spotify link comes from the MuSe Spotify ID. The Apple Music and YouTube links are search
-  URLs for the artist and title. The preview is the path `/api/preview/deezer/<id>`, which the
-  web app's Worker serves, because Deezer preview URLs expire after about 15 minutes. Songs
-  run with 4 parallel requests; the 0.12 s gap for each Deezer host keeps them under Deezer's
-  limit of about 50 requests in 5 s.
-- `resolve` keeps exactly 3,000 songs: the best-ranked candidates that Deezer has. It tries the
-  candidates in rank order, in chunks, and stops when no untried candidate can rank above the
-  3,000th kept song. Then it removes any extra lower-ranked songs. So 1 or 4 workers, and a run
-  that resumes, keep the same 3,000. It logs `song: 3,000 kept of 4,200 candidates (N dropped:
-  reasons)`.
-- Songs that an earlier version of `resolve` found on iTunes have no Deezer id. `resolve`
-  removes them and their images at the start, so they resolve again from Deezer.
-- **book:** Open Library gives the cover and the work page.
-- **art:** the Met Collection API gives the image and the museum page. `resolve` checks
-  `isPublicDomain` for each object and keeps 2,000: 40% paintings and 20% of each other class.
+- **Targets.** `resolve` keeps exactly the target of each group: the best-ranked candidates that
+  resolve. It tries the candidates in rank order, in chunks, and skips a candidate that cannot
+  rank above the last kept item of its full group. Then it removes any extra lower-ranked items.
+  So the number of workers, and a run that resumes, do not change the result. It logs, for
+  example, `song: 3,000 kept of 4,200 candidates (N dropped: reasons)`, and a warning for a
+  group whose candidates ran out.
+- **film:** one TMDB call for each film, `/3/movie/{id}?append_to_response=credits,keywords`.
+  It gives the directors, the genres, up to 15 keywords, and the tagline. The poster is the
+  TMDB `w780` image. The primary link is the IMDb page, or the TMDB page for a film without an
+  IMDb id. Films run with 8 workers.
+- **song:** Deezer finds the track by ISRC. If that fails, the Deezer search API finds it by
+  artist and title. A match needs the same artist and a title that starts with the catalog
+  title, ignoring "(feat. ...)" parts. `resolve` prefers the original album over a live, remix,
+  or compilation album, and it rejects another version of the song. Deezer gives the album
+  cover, the album name, and the track link, which is the primary link. The Spotify, Apple
+  Music, and YouTube links are search URLs for the artist and title. The preview is the path
+  `/api/preview/deezer/<id>`, which the web app's Worker serves, because Deezer preview URLs
+  expire after about 15 minutes.
+- **song tags:** Last.fm has no batch tag lookup. So `resolve` first reads the top 1,000
+  tracks of 165 mood, scene, genre, and decade tags (165 calls), and gives each song the tags
+  whose lists hold it. A song with fewer than 3 tags from these lists gets one
+  `track.getTopTags` call. Measured on 1,126 candidates: 40% have 3 or more tags from the lists
+  alone, and the extra call gives 3 or more to 60% of the rest. So about 76% of songs have 3 or
+  more tags, with about 40% fewer calls than one call for each song.
+- **book:** the Hardcover cover. For a book without one, Open Library gives the cover. The
+  primary link is the Hardcover book page.
+- **art:** for Met objects, Wikidata gives the Commons image (P18), 200 objects for each
+  SPARQL query. `resolve` prefers a file with "MET" in its name, and it downloads the 960 px
+  Commons thumbnail. An object without a Commons image gets its image from the Met Collection
+  API. Chicago images come from its IIIF server at 843 px. Cleveland images are the `web`
+  images from its API.
 - **poem:** no media. The primary link is a Poetry Foundation search.
 
 Each image becomes a WebP file with 800 px on the long edge. `resolve` records `w`, `h`, and the
@@ -273,9 +337,11 @@ JSON object per line with one field, `text`:
 
 ## Reproducibility
 
-- Nothing under `data/` or `out/` is committed. `all` rebuilds everything from `sources.toml`.
+- Nothing under `data/` or `out/` is committed. `all` rebuilds everything from `sources.toml`
+  and the APIs.
 - Every step writes sorted JSONL with sorted keys, so two runs give the same files.
-- `curate` gave the same `catalog.jsonl` hash on two runs (measured).
+- `curate` reads the API answers from the cache, so a rerun gives the same `catalog.jsonl`.
+  To take newer data, remove `data/cache/http/` for that host.
 - Training uses fixed seeds (1337), `torch.use_deterministic_algorithms(True)`, deterministic
   cuDNN, and `CUBLAS_WORKSPACE_CONFIG=:4096:8`. A small check ran every training op (MiniLM
   forward and backward with SDPA attention, the teacher heads, hard-negative mining, the losses)
@@ -305,7 +371,8 @@ order. The label file name contains a hash of the vocab, so a new vocab gets new
 
 ## Licenses
 
-MovieLens and ArtEmis are for research or non-commercial use only. A class project is allowed.
-A public commercial launch is not. The Met Open Access images are CC0. The IMDb posters and the
-Deezer album covers and previews belong to their owners. The app shows them next to links to the
-source pages.
+Licenses and attribution are not final for this draft. ArtEmis is for research use only. The
+Met, Art Institute of Chicago, and Cleveland Museum of Art images used here are public domain
+or CC0. ListenBrainz and MusicBrainz data is CC0. The TMDB posters, the Hardcover and Open
+Library covers, and the Deezer album covers and previews belong to their owners. The app shows
+them next to links to the source pages. TMDB asks for an attribution notice in the app.
