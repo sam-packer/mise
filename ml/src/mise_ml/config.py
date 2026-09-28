@@ -25,6 +25,9 @@ CATALOG_VERSION = 2
 PAT = CURATED / "pat.jsonl"
 RESOLVED = CURATED / "resolved.jsonl"
 RESOLVE_DROPPED = CURATED / "resolve_dropped.jsonl"
+# The resolve format. A newer version lets resolve retry drops that the new code can fix.
+RESOLVE_META = CURATED / "resolve.meta.json"
+RESOLVE_VERSION = 2
 PROFILES = CURATED / "profiles.jsonl"
 MOODS = CURATED / "moods.jsonl"
 PAT_SENTENCES = CURATED / "pat_sentences.jsonl"
@@ -103,7 +106,6 @@ class ResolveConfig:
             "query.wikidata.org": 1.0,
             "commons.wikimedia.org": 0.25,
             "api.artic.edu": 1.0,
-            "www.artic.edu": 0.25,
             "openaccess-api.clevelandart.org": 0.5,
             "openaccess-cdn.clevelandart.org": 0.1,
             # 3 requests/s: Open Library's limit for a User-Agent with a contact email.

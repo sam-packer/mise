@@ -16,7 +16,6 @@ import re
 import time
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from urllib.parse import quote_plus, urlencode
 
@@ -42,6 +41,7 @@ from mise_ml.config import (
 )
 from mise_ml.http import CachedClient
 from mise_ml.log import elapsed, get, num, progress
+from mise_ml.threads import run_all
 from mise_ml.util import slugify, write_json, write_jsonl
 
 log = get(__name__)
@@ -123,8 +123,7 @@ def unique(values: Iterable[str], limit: int) -> list[str]:
 def parallel(fn: Callable[[Any], Any], items: list[Any], workers: int) -> list[Any]:
     """fn over items with a thread pool, results in item order. The per-host rate limit
     still holds; parallel calls hide the network latency."""
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        return list(pool.map(fn, items))
+    return run_all(fn, items, workers)
 
 
 # Eras and groups
@@ -727,7 +726,7 @@ def select_aic(http: CachedClient, cfg: CurateConfig) -> list[Record]:
                     "styles": unique(a.get("style_titles") or [], 6),
                     "terms": unique(terms, 12),
                 },
-                "source": {"aic": a["id"], "image_id": a["image_id"]},
+                "source": {"aic": a["id"]},
                 "links": {"primary": f"https://www.artic.edu/artworks/{a['id']}"},
             }
         )
@@ -871,9 +870,8 @@ def run() -> None:
         "art": lambda: select_art(http, cfg),
     }
     # Each category talks to its own hosts, so they run in parallel.
-    with ThreadPoolExecutor(max_workers=len(steps)) as pool:
-        futures = {c: pool.submit(fn) for c, fn in steps.items()}
-        records = [r for c in steps for r in futures[c].result()]
+    found = run_all(lambda fn: fn(), list(steps.values()), len(steps))
+    records = [r for rows in found for r in rows]
     http.close()
     records += curate_poems(cfg)
     renamed = dedupe_ids(records)

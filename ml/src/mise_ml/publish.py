@@ -10,7 +10,6 @@ every object gets an immutable Cache-Control header.
 import hashlib
 import json
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -23,6 +22,7 @@ from mise_ml import keys
 from mise_ml.config import REPO_ROOT
 from mise_ml.install import TARGET
 from mise_ml.log import elapsed, get, num, progress
+from mise_ml.threads import run_all
 
 log = get(__name__)
 
@@ -135,10 +135,15 @@ def upload(s3: Any, bucket: str, jobs: list[tuple[str, Path | bytes]], desc: str
         log.debug("put %s (%s bytes)", key, num(len(data)))
         return len(data)
 
-    sent = 0
-    with ThreadPoolExecutor(WORKERS) as pool:
-        for size in progress(pool.map(put, jobs), total=len(jobs), desc=desc, unit="file"):
-            sent += size
+    bar = progress(total=len(jobs), desc=desc, unit="file")
+
+    def put_one(job: tuple[str, Path | bytes]) -> int:
+        size = put(job)
+        bar.update()
+        return size
+
+    sent = sum(run_all(put_one, jobs, WORKERS))
+    bar.close()
     return sent
 
 

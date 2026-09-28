@@ -1,10 +1,10 @@
 import io
+import json
 import re
 import threading
 import time
 from collections import Counter, defaultdict
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from urllib.parse import quote, quote_plus, urlencode
 
@@ -20,6 +20,8 @@ from mise_ml.config import (
     IMG,
     ML_ROOT,
     RESOLVE_DROPPED,
+    RESOLVE_META,
+    RESOLVE_VERSION,
     RESOLVED,
     CurateConfig,
     ResolveConfig,
@@ -37,7 +39,15 @@ from mise_ml.curate import (
 )
 from mise_ml.http import CachedClient, FetchError
 from mise_ml.log import elapsed, get, num, progress
-from mise_ml.util import append_jsonl, iter_jsonl, sort_jsonl, write_jsonl
+from mise_ml.threads import run_all
+from mise_ml.util import (
+    append_jsonl,
+    atomic_write,
+    iter_jsonl,
+    sort_jsonl,
+    write_json,
+    write_jsonl,
+)
 
 log = get(__name__)
 
@@ -51,9 +61,13 @@ P18_QUERY = """SELECT ?item ?image WHERE {{
   VALUES ?item {{ {ids} }}
   ?item wdt:P18 ?image.
 }}"""
+# Art Institute of Chicago objects on Wikidata: P4610 is the "ARTIC artwork ID".
+AIC_P18_QUERY = """SELECT ?item ?image WHERE {{
+  VALUES ?item {{ {ids} }}
+  ?object wdt:P4610 ?item; wdt:P18 ?image.
+}}"""
 OPENLIBRARY = "https://openlibrary.org"
 MET = "https://collectionapi.metmuseum.org/public/collection/v1/objects"
-AIC_IIIF = "https://www.artic.edu/iiif/2"
 
 # Last.fm tags whose top-track lists give songs their mood tags in bulk: one call returns up
 # to 1,000 tracks. Moods first, then scenes, genres, and decades.
@@ -110,6 +124,17 @@ def song_rank(track: dict, want_track: str) -> tuple[bool, bool]:
     return (bool(NOT_ORIGINAL.search(album)), not exact)
 
 
+# Joins in an artist credit: "A feat. B", "A ft. B", "A with B", "A x B", "A & B", "A, B".
+CREDIT_SPLIT = re.compile(
+    r"\s+(?:feat\.?|ft\.?|featuring|with|x|\u00d7)\s+|\s*(?:,|&|\+)\s*", re.IGNORECASE
+)
+
+
+def lead_artist(credit: str) -> str:
+    """The first name of an artist credit: "Tyla feat. Gunna & Skillibeng" -> "Tyla"."""
+    return CREDIT_SPLIT.split(credit, maxsplit=1)[0].strip() or credit
+
+
 def commons_url(file_url: str) -> str:
     """A Commons Special:FilePath URL for a 960 px thumbnail (a standard Wikimedia size)."""
     return file_url.replace("http://", "https://", 1) + "?width=960"
@@ -121,14 +146,21 @@ class Resolver:
         self.curate = CurateConfig()
         self.http = CachedClient(cfg)
         self.met_images: dict[str, str] = {}
+        self.aic_images: dict[str, str] = {}
         self.song_tags: dict[tuple[str, str], list[tuple[int, str]]] = {}
 
     def image(self, url: str, item_id: str) -> dict | None:
         name = item_id.replace(":", "-") + ".webp"
         path = IMG / name
+        img = None
         if path.exists():
-            img = Image.open(path).convert("RGB")
-        else:
+            try:
+                img = Image.open(path).convert("RGB")
+            except OSError:
+                # A file cut short by a hard kill: remove it and fetch the image again.
+                log.warning(f"{name}: the image file is damaged; fetch it again")
+                path.unlink()
+        if img is None:
             data = self.http.get_bytes(url)
             if not data:
                 return None
@@ -141,8 +173,9 @@ class Resolver:
             img.thumbnail(
                 (self.cfg.image_long_edge, self.cfg.image_long_edge), Image.Resampling.LANCZOS
             )
-            path.parent.mkdir(parents=True, exist_ok=True)
-            img.save(path, "WEBP", quality=self.cfg.webp_quality, method=6)
+            out = io.BytesIO()
+            img.save(out, "WEBP", quality=self.cfg.webp_quality, method=6)
+            atomic_write(path, out.getvalue())
         small = img.copy()
         small.thumbnail((64, 64))
         return {
@@ -155,28 +188,41 @@ class Resolver:
 
     # batch lookups, once per run
 
-    def load_met_images(self, art: list[Record]) -> None:
-        """Commons images for Met objects, 200 Wikidata items per SPARQL query (P18)."""
-        ids = sorted({r["source"]["wikidata"] for r in art if r["source"].get("wikidata")})
+    def commons_files(self, query: str, values: list[str]) -> dict[str, list[str]]:
+        """Commons files (P18) for Wikidata SPARQL VALUES, 200 per query."""
         files: dict[str, list[str]] = defaultdict(list)
-        for start in range(0, len(ids), 200):
-            values = " ".join(f"wd:{q}" for q in ids[start : start + 200])
-            query = urlencode({"query": P18_QUERY.format(ids=values), "format": "json"})
+        for start in range(0, len(values), 200):
+            ids = " ".join(values[start : start + 200])
+            params = urlencode({"query": query.format(ids=ids), "format": "json"})
             try:
-                body = self.http.get_json(f"{WIKIDATA}?{query}") or {}
+                body = self.http.get_json(f"{WIKIDATA}?{params}") or {}
             except FetchError as e:
-                log.warning(f"art: Wikidata failed for {len(ids[start : start + 200])} items ({e})")
+                log.warning(
+                    f"art: Wikidata failed for {len(values[start : start + 200])} items ({e})"
+                )
                 continue
             for b in body.get("results", {}).get("bindings", []):
                 files[b["item"]["value"].rsplit("/", 1)[-1]].append(b["image"]["value"])
+        return files
+
+    def load_art_images(self, art: list[Record]) -> None:
+        """Commons images for Met objects (by Wikidata item) and for Art Institute of
+        Chicago objects (by ARTIC artwork ID). Chicago's IIIF image server blocks this
+        pipeline with a Cloudflare 403, so Commons is its only image source."""
+        met = sorted({r["source"]["wikidata"] for r in art if r["source"].get("wikidata")})
+        files = self.commons_files(P18_QUERY, [f"wd:{q}" for q in met])
         # Prefer the Met's own photograph: its Commons file name carries "MET".
         self.met_images = {
             q: commons_url(min(urls, key=lambda u: ("MET" not in u, u)))
             for q, urls in files.items()
         }
+        aic = sorted({str(r["source"]["aic"]) for r in art if "aic" in r["source"]}, key=int)
+        files = self.commons_files(AIC_P18_QUERY, [f'"{a}"' for a in aic])
+        self.aic_images = {a: commons_url(min(urls)) for a, urls in files.items()}
         log.info(
-            f"art: Commons images for {num(len(self.met_images))} of {num(len(ids))} Met "
-            f"objects with a Wikidata item; the rest use the Met API"
+            f"art: Commons images for {num(len(self.met_images))} of {num(len(met))} Met "
+            f"objects with a Wikidata item (the rest use the Met API) and for "
+            f"{num(len(self.aic_images))} of {num(len(aic))} Art Institute of Chicago objects"
         )
 
     def load_song_tags(self) -> None:
@@ -188,6 +234,9 @@ class Resolver:
             body = self.http.get_json(url, secret=keys.lastfm()) or {}
             for rank, t in enumerate((body.get("tracks") or {}).get("track", [])):
                 found[song_key(t["artist"]["name"], t["name"])].append((rank, tag))
+                lead = lead_artist(t["artist"]["name"])
+                if lead != t["artist"]["name"]:
+                    found[song_key(lead, t["name"])].append((rank, tag))
         self.song_tags = dict(found)
         log.info(
             f"song: tag lists for {len(LASTFM_TAGS)} Last.fm tags cover "
@@ -233,11 +282,17 @@ class Resolver:
     def deezer_track(self, r: Record) -> tuple[dict | None, str]:
         """The Deezer track: by ISRC when MusicBrainz has one, else by search."""
         title = base_title(r["title"])
-        want_artist, want_track = norm(r["creator"]), norm(title)
+        lead = lead_artist(r["creator"])
+        # The full credit keeps band names such as "Simon & Garfunkel" whole; the lead
+        # artist matches a credit such as "Dave feat. Stormzy".
+        want_artists = {norm(r["creator"]), norm(lead)}
+        want_track = norm(title)
 
         def fits(t: dict) -> bool:
+            names = [t.get("artist", {}).get("name", "")]
+            names += [c.get("name", "") for c in t.get("contributors") or []]
             return (
-                norm(t.get("artist", {}).get("name", "")) == want_artist
+                bool(want_artists & {norm(n) for n in names})
                 and norm(base_title(t.get("title", ""))).startswith(want_track)
                 and bool(t.get("album", {}).get("cover_xl"))
             )
@@ -247,9 +302,13 @@ class Resolver:
             t = self.http.get_json(f"{DEEZER}/track/isrc:{isrc}")
             if t and fits(t) and not VERSION.search(t["title"]):
                 return t, "ok"
-        query = f"{r['creator']} {title}"
-        found = self.http.get_json(f"{DEEZER}/search?{urlencode({'q': query, 'limit': 25})}")
-        matches = [t for t in (found or {}).get("data", []) if fits(t)]
+        matches: list[dict] = []
+        for artist in dict.fromkeys([r["creator"], lead]):
+            query = urlencode({"q": f"{artist} {title}", "limit": 25})
+            found = self.http.get_json(f"{DEEZER}/search?{query}")
+            matches = [t for t in (found or {}).get("data", []) if fits(t)]
+            if matches:
+                break
         if not matches:
             return None, "no_deezer_match"
         if not VERSION.search(r["title"]):
@@ -260,19 +319,24 @@ class Resolver:
 
     def lastfm_tags(self, r: Record) -> list[str]:
         """Tags from the bulk tag lists; a song with too few gets track.getTopTags."""
-        ranked = sorted(self.song_tags.get(song_key(r["creator"], r["title"]), []))
+        lead = lead_artist(r["creator"])
+        ranked = sorted(
+            self.song_tags.get(song_key(r["creator"], r["title"]))
+            or self.song_tags.get(song_key(lead, r["title"]))
+            or []
+        )
         tags = unique((tag for _, tag in ranked), self.curate.song_tags)
         if len(tags) >= SONG_MIN_TAGS:
             return tags
         params = {
             "method": "track.gettoptags",
-            "artist": r["creator"],
+            "artist": lead,
             "track": base_title(r["title"]),
             "autocorrect": 1,
             "format": "json",
         }
         body = self.http.get_json(f"{LASTFM}?{urlencode(params)}", secret=keys.lastfm()) or {}
-        artist = r["creator"].lower()
+        artist = lead.lower()
         own = [
             t["name"].strip().lower()
             for t in (body.get("toptags") or {}).get("tag", [])
@@ -327,7 +391,9 @@ class Resolver:
     def art(self, r: Record) -> Result:
         s = r["source"]
         if "aic" in s:
-            url = f"{AIC_IIIF}/{s['image_id']}/full/843,/0/default.jpg"
+            url = self.aic_images.get(str(s["aic"]))
+            if url is None:
+                return None, "no_commons_image"
         elif "cma" in s:
             url = s["image"]
         else:
@@ -395,6 +461,31 @@ def log_targets(category: str, catalog: list[Record], group_targets: dict[str, i
             )
 
 
+def retry_fixable_drops() -> None:
+    """Version 2 matches a song credit with featured artists ("Dave feat. Stormzy") and
+    takes Chicago images from Commons. Remove the drops that version 1 recorded for these
+    cases, once, so this run tries them again."""
+    version = 1
+    if RESOLVE_META.exists():
+        version = json.loads(RESOLVE_META.read_text(encoding="utf-8")).get("version", 1)
+    if version >= RESOLVE_VERSION:
+        return
+    drops = list(iter_jsonl(RESOLVE_DROPPED))
+
+    def fixable(d: Record) -> bool:
+        song = d["id"].startswith("song:") and d["reason"] == "no_deezer_match"
+        return song or (d["id"].startswith("art:") and "-aic" in d["id"])
+
+    kept = [d for d in drops if not fixable(d)]
+    if len(kept) < len(drops):
+        write_jsonl(RESOLVE_DROPPED, kept)
+    log.info(
+        f"resolve format {version} -> {RESOLVE_VERSION}: {num(len(drops) - len(kept))} drop "
+        "records (songs without a Deezer match, Chicago art) removed; they resolve again"
+    )
+    write_json(RESOLVE_META, {"version": RESOLVE_VERSION})
+
+
 def run(categories: list[str] | None = None) -> None:
     start = time.perf_counter()
     cfg = ResolveConfig()
@@ -403,6 +494,7 @@ def run(categories: list[str] | None = None) -> None:
     catalog = list(iter_jsonl(CATALOG))
     wanted = [c for c in CATEGORIES if not categories or c in categories]
     keys.require([s for c, s in (("film", "tmdb"), ("song", "lastfm")) if c in wanted])
+    retry_fixable_drops()
     resolved = list(iter_jsonl(RESOLVED))
     dropped_before = list(iter_jsonl(RESOLVE_DROPPED))
     done = {r["id"] for r in resolved} | {r["id"] for r in dropped_before}
@@ -442,7 +534,7 @@ def run(categories: list[str] | None = None) -> None:
         if category == "song" and items:
             resolver.load_song_tags()
         if category == "art" and items:
-            resolver.load_met_images([r for r in catalog if "met" in r["source"]])
+            resolver.load_art_images([r for r in catalog if r["category"] == "art"])
         fn: Callable[[Record], Result] = getattr(resolver, category)
         counts = stats[category]
         bar = progress(
@@ -476,22 +568,20 @@ def run(categories: list[str] | None = None) -> None:
 
         workers = cfg.workers.get(category, 1)
         chunk = workers * 8
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            for i in range(0, len(items), chunk):
-                # Once a group keeps its target, only a candidate that ranks above the last
-                # kept item can still change the result.
-                cut = cutoffs()
-                batch = [
-                    r
-                    for r in items[i : i + chunk]
-                    if r.get("group") not in cut or rank_key(r) < cut[r["group"]]
-                ]
-                bar.update(len(items[i : i + chunk]) - len(batch))
-                list(pool.map(one, batch))
+        for i in range(0, len(items), chunk):
+            # Once a group keeps its target, only a candidate that ranks above the last
+            # kept item can still change the result.
+            cut = cutoffs()
+            batch = [
+                r
+                for r in items[i : i + chunk]
+                if r.get("group") not in cut or rank_key(r) < cut[r["group"]]
+            ]
+            bar.update(len(items[i : i + chunk]) - len(batch))
+            run_all(one, batch, workers)
         bar.close()
 
-    with ThreadPoolExecutor(max_workers=len(wanted)) as pool:
-        list(pool.map(work, wanted))
+    run_all(work, wanted, len(wanted))
     resolver.http.close()
     trim_to_targets(group_targets)
     sort_jsonl(RESOLVED, "id")

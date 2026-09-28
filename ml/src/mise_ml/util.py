@@ -1,12 +1,29 @@
 import hashlib
 import json
+import logging
 import os
 import random
 import re
+import tempfile
 import unicodedata
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger("mise_ml.util")
+
+
+def atomic_write(path: Path, data: bytes) -> None:
+    """Write a file so that a hard kill leaves the old file or the new one, never half."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def dumps_line(row: dict[str, Any]) -> str:
@@ -33,35 +50,51 @@ def read_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
+    """The rows of a JSONL file.
+
+    A hard kill during an append can cut the last line short. That line is skipped with a
+    warning, and a rerun redoes its work. A bad line anywhere else still raises.
+    """
     if not path.exists():
         return
     with path.open(encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                yield json.loads(line)
+        lines = [line.strip() for line in f]
+    lines = [line for line in lines if line]
+    for i, line in enumerate(lines):
+        try:
+            row = json.loads(line)
+        except ValueError:
+            if i < len(lines) - 1:
+                raise
+            log.warning(f"{path.name}: the last line is cut short (a killed run?); skip it")
+            return
+        yield row
 
 
 def write_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> int:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    n = 0
-    with path.open("w", encoding="utf-8") as f:
-        for row in rows:
-            f.write(dumps_line(row))
-            n += 1
-    return n
+    lines = [dumps_line(row) for row in rows]
+    atomic_write(path, "".join(lines).encode("utf-8"))
+    return len(lines)
 
 
 def append_jsonl(path: Path, rows: Iterable[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and path.stat().st_size:
+        with path.open("rb+") as f:
+            f.seek(-1, os.SEEK_END)
+            if f.read(1) != b"\n":
+                # A killed append left half a line. Cut it, so the next row starts clean.
+                f.seek(0)
+                data = f.read()
+                f.truncate(data.rfind(b"\n") + 1)
+                log.warning(f"{path.name}: removed a last line cut short by a killed run")
     with path.open("a", encoding="utf-8") as f:
         for row in rows:
             f.write(dumps_line(row))
 
 
 def write_json(path: Path, data: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_write(path, (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
 
 
 def slugify(text: str, max_len: int = 60) -> str:
