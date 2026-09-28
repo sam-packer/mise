@@ -1,0 +1,6 @@
+# Keep LF in the working copy on every OS (Prettier checks for LF).
+* text=auto eol=lf
+
+*.onnx binary
+*.bin binary
+*.webp binary
