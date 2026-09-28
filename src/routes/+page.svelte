@@ -9,27 +9,11 @@
 	import { neutralTokens, paletteFavicon, paletteToTokens } from '$lib/color/oklab';
 	import { applyTokens, tweenTokens } from '$lib/color/tween';
 	import { loadTypeface, type LoadedFace } from '$lib/components/typeface';
+	import { EXAMPLES } from '$lib/examples';
 	import MoodLine from '$lib/components/MoodLine.svelte';
 	import Wall from '$lib/components/Wall.svelte';
 	import FullView from '$lib/components/FullView.svelte';
 	import RoomLight from '$lib/components/RoomLight.svelte';
-
-	const EXAMPLES = [
-		'a snowy december and i just made warm hot chocolate',
-		'rain on the window and nowhere to be',
-		'driving home at 2am with the windows down',
-		'the last day of summer, sunburnt and a little sad',
-		'a library so quiet you can hear the pages turn',
-		'neon puddles outside a ramen bar after midnight',
-		'golden light through the kitchen window while the bread rises',
-		'a night train through the mountains and i am the only one awake',
-		'the first cold morning and the smell of somebody else’s fireplace',
-		'dancing alone in the kitchen to a song i had forgotten',
-		'an empty beach in february, grey water and a long coat',
-		'the city from a rooftop just before the storm breaks',
-		'a slow sunday with the record player and nothing planned',
-		'walking home from a party, still humming, streetlights buzzing'
-	];
 
 	const NEUTRAL: OKLab[] = [
 		[0.97, 0, 0],
@@ -212,6 +196,7 @@
 			bind:value={text}
 			bind:ref={lineRef}
 			examples={EXAMPLES}
+			boxed={mood !== null}
 			{settled}
 			{waiting}
 			onsubmit={submit}
@@ -262,13 +247,14 @@
 	<!-- After the line in DOM order, so the first Tab lands on the line. -->
 	<a class="mark" href={resolve('/')} aria-label="mise, start over">
 		<span class="swatch" aria-hidden="true">
-			<i style:background="var(--ground)"></i>
-			<i style:background="var(--mid-1)"></i>
-			<i style:background="var(--mid-2)"></i>
-			<i style:background="var(--mid-3)"></i>
-			<i style:background="var(--ink)"></i>
+			<i style:--k={0} style:background="var(--ground)"></i>
+			<i style:--k={1} style:background="var(--mid-1)"></i>
+			<i style:--k={2} style:background="var(--mid-2)"></i>
+			<i style:--k={3} style:background="var(--mid-3)"></i>
+			<i style:--k={4} style:background="var(--ink)"></i>
 		</span>
-		mise
+		<span class="word">mise</span>
+		<span class="again" aria-hidden="true">start over</span>
 	</a>
 </main>
 
@@ -321,41 +307,82 @@
 		left: 0;
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
+		gap: 0.6rem;
 		min-height: 44px;
-		padding: max(1.5vw, 10px) max(2.5vw, 12px);
+		padding: max(1.4vw, 10px) max(2.5vw, 12px);
 		color: var(--ink);
-		font-size: 1.15rem;
-		letter-spacing: 0.03em;
 		text-decoration: none;
-		opacity: 0.75;
+	}
+
+	.mark:focus-visible {
+		outline: none;
+	}
+
+	.word {
+		font-size: 1.45rem;
+		line-height: 1;
+		letter-spacing: 0.02em;
+		opacity: 0.85;
 		transition: opacity 400ms var(--ease);
 	}
 
-	.mark:hover,
-	.mark:focus-visible {
+	.mark:hover .word,
+	.mark:focus-visible .word {
 		opacity: 1;
 	}
 
-	.mark:focus-visible {
-		outline: 1px solid var(--ink);
-		outline-offset: -6px;
+	.mark:focus-visible .word {
+		text-decoration: underline 1px;
+		text-underline-offset: 0.2em;
 	}
 
 	.swatch {
 		display: flex;
-		height: 0.8rem;
+		height: 1.1rem;
 		outline: 1px solid color-mix(in oklab, var(--ink) 25%, transparent);
 		outline-offset: 1px;
 		transition: gap 500ms var(--ease);
 	}
 
+	/* Folded to the ink band on the landing; the palette unfolds band by band with the crossfade. */
 	.swatch i {
-		width: 0.3rem;
+		width: 0;
+		transition: width 800ms var(--ease);
+		transition-delay: calc((3 - var(--k)) * 60ms);
 	}
 
-	.mark:hover .swatch {
+	.swatch i:last-child,
+	.shown .swatch i {
+		width: 0.4rem;
+	}
+
+	.shown .swatch i {
+		transition-delay: calc(var(--k) * 70ms);
+	}
+
+	.shown .mark:hover .swatch,
+	.shown .mark:focus-visible .swatch {
 		gap: 2px;
+	}
+
+	/* Only after a reveal is there anything to start over from. */
+	.again {
+		font-size: 0.85rem;
+		font-style: normal;
+		font-variant-caps: all-small-caps;
+		letter-spacing: 0.12em;
+		color: color-mix(in oklab, var(--ink) 55%, transparent);
+		opacity: 0;
+		transform: translateX(-4px);
+		transition:
+			opacity 300ms var(--ease),
+			transform 300ms var(--ease);
+	}
+
+	.shown .mark:hover .again,
+	.shown .mark:focus-visible .again {
+		opacity: 1;
+		transform: none;
 	}
 
 	.anchor {
@@ -517,8 +544,17 @@
 			animation: none;
 		}
 
-		.mark .swatch {
+		.mark .swatch,
+		.swatch i {
 			transition: none;
+		}
+
+		.swatch i {
+			width: 0.4rem;
+		}
+
+		.again {
+			transform: none;
 		}
 
 		.breath {

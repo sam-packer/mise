@@ -5,6 +5,7 @@
 	let {
 		value = $bindable(''),
 		examples,
+		boxed = false,
 		settled = false,
 		waiting = false,
 		onsubmit,
@@ -12,7 +13,9 @@
 	}: {
 		value?: string;
 		examples: string[];
-		/** The line shows the feeling on the wall: the field edge folds into a short rule. */
+		/** A feeling is on the wall: the line becomes an outlined field, to show it can change. */
+		boxed?: boolean;
+		/** The line holds the feeling on the wall, unedited. */
 		settled?: boolean;
 		/** The model is still loading. */
 		waiting?: boolean;
@@ -21,28 +24,37 @@
 	} = $props();
 
 	const id = $props.id();
+	let order = $state<string[]>([]);
 	let index = $state(0);
 	let focused = $state(false);
 	let coarse = $state(false);
-	const example = $derived(examples[index % examples.length]);
+	const example = $derived(order.length ? order[index % order.length] : '');
 	const empty = $derived(value === '');
+
+	// Shuffle on mount, not during SSR, so every load starts somewhere new without a hydration mismatch.
+	onMount(() => {
+		coarse = matchMedia('(pointer: coarse)').matches;
+		const shuffled = [...examples];
+		for (let i = shuffled.length - 1; i > 0; i--) {
+			const j = Math.floor(Math.random() * (i + 1));
+			[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+		}
+		order = shuffled;
+	});
 
 	// Rotate the ghost only while nobody is at the line, so Tab never takes a sentence mid-fade.
 	$effect(() => {
-		if (!empty || focused) return;
+		if (!empty || focused || !order.length) return;
 		const timer = setInterval(() => (index += 1), 4000);
 		return () => clearInterval(timer);
-	});
-
-	onMount(() => {
-		coarse = matchMedia('(pointer: coarse)').matches;
 	});
 
 	const hint = $derived.by(() => {
 		if (waiting) return 'getting the room ready';
 		if (coarse) return empty && focused ? 'tap to use this' : '';
-		if (empty) return focused ? 'tab to use this · enter to see it' : '';
-		return settled ? '' : 'enter to see it';
+		if (!focused) return empty || settled ? '' : 'enter to see it';
+		if (empty) return 'tab to use this · enter to see it';
+		return settled ? 'type to change it · esc to clear' : 'enter to see it';
 	});
 
 	function use() {
@@ -50,10 +62,34 @@
 		ref?.focus({ preventScroll: true });
 	}
 
+	function clear() {
+		value = '';
+		index += 1;
+		ref?.focus({ preventScroll: true });
+	}
+
+	// Select the whole feeling on the way in, so typing replaces it. A click would move the caret after
+	// the focus event and drop the selection, so the first press focuses and selects by hand.
+	function onmousedown(e: MouseEvent) {
+		if (focused || !settled || !ref) return;
+		e.preventDefault();
+		ref.focus({ preventScroll: true });
+		ref.select();
+	}
+
+	function onfocus() {
+		if (settled) ref?.select();
+	}
+
 	function onkeydown(e: KeyboardEvent) {
-		if (e.key === 'Tab' && !e.shiftKey && empty) {
+		if (e.key === 'Tab' && !e.shiftKey && empty && example) {
 			e.preventDefault();
 			use();
+			return;
+		}
+		if (e.key === 'Escape' && settled) {
+			e.preventDefault();
+			clear();
 			return;
 		}
 		if (e.key !== 'Enter') return;
@@ -64,8 +100,15 @@
 	}
 </script>
 
-<div class="line" class:empty class:settled>
+<div
+	class="line"
+	class:empty
+	class:boxed
+	onfocusin={() => (focused = true)}
+	onfocusout={() => (focused = false)}
+>
 	<label class="sr-only" for={id}>describe a feeling</label>
+	<div class="box" aria-hidden="true"></div>
 	<div class="stack">
 		<div class="mirror" aria-hidden="true">{value + ' '}</div>
 		<textarea
@@ -78,10 +121,10 @@
 			spellcheck="false"
 			enterkeyhint="go"
 			placeholder={example}
-			onfocus={() => (focused = true)}
-			onblur={() => (focused = false)}
+			{onmousedown}
+			{onfocus}
 			{onkeydown}></textarea>
-		{#if empty}
+		{#if empty && example}
 			<!-- A tap on the ghost keeps the keyboard up (no blur) and fills the line. -->
 			<div
 				class="ghost"
@@ -99,6 +142,19 @@
 		{/if}
 	</div>
 	<div class="edge" aria-hidden="true"></div>
+
+	{#if focused && !empty}
+		<button
+			type="button"
+			class="tag"
+			onmousedown={(e) => e.preventDefault()}
+			onclick={clear}
+			transition:fade={{ duration: 250 }}>clear</button
+		>
+	{:else if boxed && settled && !focused}
+		<label class="tag" for={id} aria-hidden="true" transition:fade={{ duration: 250 }}>edit</label>
+	{/if}
+
 	{#if hint}
 		{#key hint}
 			<p
@@ -165,6 +221,11 @@
 		box-shadow: none;
 	}
 
+	textarea::selection {
+		background: color-mix(in oklab, var(--ink) 22%, transparent);
+		color: var(--ink);
+	}
+
 	/* The ghost is the visible placeholder; the native one stays for assistive tech only. */
 	textarea::placeholder {
 		color: transparent;
@@ -212,10 +273,7 @@
 		margin-top: 0.45em;
 		background: var(--ink);
 		opacity: 0.24;
-		transform-origin: center;
-		transition:
-			transform 900ms var(--ease),
-			opacity 500ms var(--ease);
+		transition: opacity 500ms var(--ease);
 	}
 
 	.line:hover .edge {
@@ -224,19 +282,73 @@
 
 	.line:focus-within .edge {
 		opacity: 0.6;
-		transform: none;
 	}
 
-	.settled .edge {
-		transform: scaleX(0.08);
-		opacity: 0.4;
+	/* After a reveal the underline gives way to a faint outline: a field you can see without hovering. */
+	.box {
+		position: absolute;
+		inset: -0.55rem -0.6rem 0;
+		border: 1px solid transparent;
+		border-radius: 0.6rem;
+		pointer-events: none;
+		transition: border-color 900ms var(--ease);
 	}
 
-	.settled:not(:focus-within):hover .edge {
-		transform: scaleX(0.16);
+	.boxed .box {
+		border-color: color-mix(in oklab, var(--ink) 20%, transparent);
 	}
 
-	/* Under the edge, out of the flow: the hint never moves the page. */
+	.boxed:hover .box {
+		border-color: color-mix(in oklab, var(--ink) 38%, transparent);
+		transition-duration: 300ms;
+	}
+
+	.boxed:focus-within .box {
+		border-color: color-mix(in oklab, var(--ink) 62%, transparent);
+		transition-duration: 300ms;
+	}
+
+	.line.boxed .edge {
+		opacity: 0;
+	}
+
+	/* "edit" at rest, "clear" while editing: one quiet corner label on the field's top edge. */
+	.tag {
+		position: absolute;
+		right: -0.6rem;
+		bottom: calc(100% + 0.55rem);
+		display: flex;
+		align-items: flex-end;
+		min-width: 44px;
+		min-height: 44px;
+		justify-content: flex-end;
+		box-sizing: border-box;
+		margin: 0;
+		padding: 0 0.15rem 0.3rem 0.6rem;
+		border: 0;
+		background: none;
+		color: color-mix(in oklab, var(--ink) 50%, transparent);
+		font: inherit;
+		font-size: 0.85rem;
+		font-style: normal;
+		font-variant-caps: all-small-caps;
+		letter-spacing: 0.12em;
+		cursor: pointer;
+		transition: color 300ms var(--ease);
+	}
+
+	.tag:hover,
+	.tag:focus-visible,
+	.boxed:hover .tag {
+		color: var(--ink);
+	}
+
+	.tag:focus-visible {
+		outline: 1px solid var(--ink);
+		outline-offset: -2px;
+	}
+
+	/* Under the field, out of the flow: the hint never moves the page. */
 	.hint {
 		position: absolute;
 		top: calc(100% + 0.7rem);
@@ -261,10 +373,6 @@
 	@media (prefers-reduced-motion: reduce) {
 		.caret {
 			animation: none;
-		}
-
-		.edge {
-			transition: opacity 500ms var(--ease);
 		}
 	}
 

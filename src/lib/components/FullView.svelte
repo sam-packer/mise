@@ -333,7 +333,6 @@
 		position: relative;
 		width: 0.8rem;
 		height: 0.8rem;
-		transition: transform 400ms var(--ease);
 	}
 
 	.x::before,
@@ -350,10 +349,6 @@
 
 	.x::after {
 		transform: rotate(-45deg);
-	}
-
-	.close:hover .x {
-		transform: rotate(90deg);
 	}
 
 	@media (max-width: 720px) {
@@ -379,16 +374,6 @@
 		.progress {
 			position: static;
 			margin-top: -0.5rem;
-		}
-	}
-
-	@media (prefers-reduced-motion: reduce) {
-		.x {
-			transition: none;
-		}
-
-		.close:hover .x {
-			transform: none;
 		}
 	}
 
