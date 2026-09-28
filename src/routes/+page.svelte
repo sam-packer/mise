@@ -254,9 +254,12 @@
 			<i style:--k={4} style:background="var(--ink)"></i>
 		</span>
 		<span class="word">mise</span>
-		<span class="again" aria-hidden="true">start over</span>
 	</a>
 </main>
+
+{#if !openItem}
+	<a class="attribution" href={resolve('/attribution')}>attribution</a>
+{/if}
 
 <svelte:window onkeydown={typeAnywhere} />
 
@@ -302,14 +305,15 @@
 	}
 
 	.mark {
+		--band: 0.56rem;
 		position: absolute;
 		top: 0;
 		left: 0;
 		display: flex;
 		align-items: center;
-		gap: 0.6rem;
+		gap: 0.7rem;
 		min-height: 44px;
-		padding: max(1.4vw, 10px) max(2.5vw, 12px);
+		padding: max(1.3vw, 10px) max(2.5vw, 12px);
 		color: var(--ink);
 		text-decoration: none;
 	}
@@ -319,9 +323,9 @@
 	}
 
 	.word {
-		font-size: 1.45rem;
+		font-size: 1.9rem;
 		line-height: 1;
-		letter-spacing: 0.02em;
+		letter-spacing: 0.015em;
 		opacity: 0.85;
 		transition: opacity 400ms var(--ease);
 	}
@@ -336,53 +340,35 @@
 		text-underline-offset: 0.2em;
 	}
 
+	/* The swatch box always holds five bands, so the word never moves. On the landing every band rests
+	   behind the ink band beside the word; at reveal they fan out to the left on the compositor. */
 	.swatch {
-		display: flex;
-		height: 1.1rem;
-		outline: 1px solid color-mix(in oklab, var(--ink) 25%, transparent);
-		outline-offset: 1px;
-		transition: gap 500ms var(--ease);
+		position: relative;
+		flex: none;
+		width: calc(5 * var(--band));
+		height: 1.5rem;
 	}
 
-	/* Folded to the ink band on the landing; the palette unfolds band by band with the crossfade. */
 	.swatch i {
-		width: 0;
-		transition: width 800ms var(--ease);
-		transition-delay: calc((3 - var(--k)) * 60ms);
+		position: absolute;
+		top: 0;
+		bottom: 0;
+		left: calc(var(--k) * var(--band));
+		width: var(--band);
+		transform: translateX(calc((4 - var(--k)) * var(--band)));
+		transition: transform 650ms cubic-bezier(0.23, 1, 0.32, 1);
+		transition-delay: calc((3 - var(--k)) * 25ms);
 	}
 
-	.swatch i:last-child,
+	.swatch i:first-child {
+		box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 25%, transparent);
+	}
+
 	.shown .swatch i {
-		width: 0.4rem;
-	}
-
-	.shown .swatch i {
-		transition-delay: calc(var(--k) * 70ms);
-	}
-
-	.shown .mark:hover .swatch,
-	.shown .mark:focus-visible .swatch {
-		gap: 2px;
-	}
-
-	/* Only after a reveal is there anything to start over from. */
-	.again {
-		font-size: 0.85rem;
-		font-style: normal;
-		font-variant-caps: all-small-caps;
-		letter-spacing: 0.12em;
-		color: color-mix(in oklab, var(--ink) 55%, transparent);
-		opacity: 0;
-		transform: translateX(-4px);
-		transition:
-			opacity 300ms var(--ease),
-			transform 300ms var(--ease);
-	}
-
-	.shown .mark:hover .again,
-	.shown .mark:focus-visible .again {
-		opacity: 1;
 		transform: none;
+		transition-duration: 900ms;
+		transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+		transition-delay: calc(var(--k) * 35ms);
 	}
 
 	.anchor {
@@ -494,6 +480,38 @@
 		pointer-events: none;
 	}
 
+	.attribution {
+		position: fixed;
+		right: 0;
+		bottom: 0;
+		z-index: 2;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 44px;
+		min-height: 44px;
+		padding: max(1vw, 8px) calc(max(2.5vw, 12px) + env(safe-area-inset-right, 0px))
+			calc(max(1vw, 8px) + env(safe-area-inset-bottom, 0px)) max(1vw, 8px);
+		box-sizing: border-box;
+		color: color-mix(in oklab, var(--ink) 42%, transparent);
+		font-size: 0.8rem;
+		font-style: normal;
+		font-variant-caps: all-small-caps;
+		letter-spacing: 0.12em;
+		text-decoration: none;
+		transition: color 300ms var(--ease);
+	}
+
+	.attribution:hover,
+	.attribution:focus-visible {
+		color: var(--ink);
+	}
+
+	.attribution:focus-visible {
+		outline: 1px solid var(--ink);
+		outline-offset: -3px;
+	}
+
 	@keyframes letter {
 		from {
 			opacity: 0;
@@ -544,17 +562,9 @@
 			animation: none;
 		}
 
-		.mark .swatch,
 		.swatch i {
-			transition: none;
-		}
-
-		.swatch i {
-			width: 0.4rem;
-		}
-
-		.again {
 			transform: none;
+			transition: none;
 		}
 
 		.breath {
