@@ -321,8 +321,11 @@ def run(categories: list[str] | None = None) -> None:
     def work(category: str) -> None:
         fn: Callable[[Record], Result] = getattr(resolver, category)
         if category == "film" and by_cat["film"]:
-            log.info(f"film: asking Wikidata for the directors of {num(len(by_cat['film']))} films")
-            resolver.load_directors(by_cat["film"])
+            # Ask for every catalog film, not only the pending ones: the batches stay the same
+            # from run to run, so a restart answers them from the cache.
+            films = [r for r in catalog if r["category"] == "film"]
+            log.info(f"film: directors for {num(len(films))} films from Wikidata (cached)")
+            resolver.load_directors(films)
         counts = stats[category]
         items = by_cat[category]
         bar = progress(
