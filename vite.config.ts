@@ -1,11 +1,13 @@
 import tailwindcss from '@tailwindcss/vite';
 import adapter from '@sveltejs/adapter-cloudflare';
 import { sveltekit } from '@sveltejs/kit/vite';
-import { defineConfig } from 'vite';
+import { defaultClientConditions, defineConfig } from 'vite';
 
 export default defineConfig({
-	// The ORT WASM loads from the CDN (see worker.ts). This keeps Vite from emitting the >25 MiB .wasm files.
-	resolve: { conditions: ['onnxruntime-web-use-extern-wasm'] },
+	// The ORT WASM loads from the CDN (see worker.ts). The extra condition keeps Vite from emitting the
+	// >25 MiB .wasm files. Setting `conditions` replaces Vite's defaults, so keep them: without
+	// `browser`, `svelte` resolves to its server build and `onMount` never runs.
+	resolve: { conditions: [...defaultClientConditions, 'onnxruntime-web-use-extern-wasm'] },
 	plugins: [
 		tailwindcss(),
 		sveltekit({
