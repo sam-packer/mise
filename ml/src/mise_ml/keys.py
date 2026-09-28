@@ -49,6 +49,11 @@ def r2() -> dict[str, str]:
     }
 
 
+def missing_r2() -> list[str]:
+    """The R2 variables that are not set, without stopping. Empty once all of them are set."""
+    return [name for name in R2 if not env(name)]
+
+
 def missing(services: list[str]) -> list[str]:
     """One line for each service without a key."""
     out = []

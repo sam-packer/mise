@@ -1,15 +1,17 @@
 """Upload the bundle in ../static/bundle/ to Cloudflare R2.
 
 Images go to `img/<sha256[:20]>.webp`, shared by all versions. The other bundle files go to
-`bundles/<version>/`, where the version is a hash of their content. items.json there points
-each image at its absolute public URL. Nothing under a version prefix ever changes, so every
-object gets an immutable Cache-Control header.
+`bundles/<date>-<hash8>/`, where `<hash8>` is the first 8 hex of a SHA-256 over their content
+and `<date>` is the UTC date of the publish that first uploaded that content. items.json there
+points each image at its absolute public URL. Nothing under a version prefix ever changes, so
+every object gets an immutable Cache-Control header.
 """
 
 import hashlib
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,11 +20,16 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from mise_ml import keys
+from mise_ml.config import REPO_ROOT
 from mise_ml.install import TARGET
 from mise_ml.log import elapsed, get, num, progress
 
 log = get(__name__)
 
+BUNDLE_TS = REPO_ROOT / "src" / "lib" / "bundle.ts"
+BUNDLE_TS_COMMENT = (
+    "// `uv run mise-ml publish` rewrites this line after it uploads the bundle to R2."
+)
 WORKERS = 16
 IMMUTABLE = "public, max-age=31536000, immutable"
 TYPES = {
@@ -67,6 +74,17 @@ def existing(s3: Any, bucket: str, prefix: str) -> set[str]:
     return keys_
 
 
+def existing_bundle_prefix(s3: Any, bucket: str, hash8: str) -> str | None:
+    """The `bundles/` prefix already published for this content hash, from any date."""
+    suffix = f"-{hash8}/"
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix="bundles/", Delimiter="/"):
+        for common in page.get("CommonPrefixes", []):
+            if common["Prefix"].endswith(suffix):
+                return common["Prefix"]
+    return None
+
+
 def apply_cors(s3: Any, bucket: str) -> None:
     """Add the CORS rule unless a rule already covers it. Other rules stay as they are."""
     paste = json.dumps([CORS_RULE], indent=2)
@@ -90,6 +108,15 @@ def apply_cors(s3: Any, bucket: str) -> None:
             f"CORS: cannot read or set the bucket CORS policy ({e.response['Error']['Code']}). "
             f"Paste this into R2 > {bucket} > Settings > CORS policy:\n{paste}"
         )
+
+
+def write_bundle_ts(url: str) -> bool:
+    """Rewrite src/lib/bundle.ts to point at the published bundle. False if it already did."""
+    content = f"{BUNDLE_TS_COMMENT}\nexport const BUNDLE_URL = '{url}';\n"
+    if BUNDLE_TS.exists() and BUNDLE_TS.read_text(encoding="utf-8") == content:
+        return False
+    BUNDLE_TS.write_text(content, encoding="utf-8")
+    return True
 
 
 def upload(s3: Any, bucket: str, jobs: list[tuple[str, Path | bytes]], desc: str) -> int:
@@ -151,15 +178,22 @@ def run() -> None:
         body = files[name]
         data = body.read_bytes() if isinstance(body, Path) else body
         digest.update(f"{name}\0{hashlib.sha256(data).hexdigest()}\n".encode())
-    version = digest.hexdigest()[:12]
-    prefix = f"bundles/{version}/"
-    log.info(
-        f"bundle {manifest['version']} -> version {version}: {num(len(files))} files, "
-        f"{num(len(images))} images, bucket {cfg['bucket']}"
-    )
+    hash8 = digest.hexdigest()[:8]
 
     s3 = client(cfg)
     apply_cors(s3, cfg["bucket"])
+
+    reused = existing_bundle_prefix(s3, cfg["bucket"], hash8)
+    if reused:
+        prefix = reused
+        log.info(f"bundle {prefix} is already online, reuse")
+    else:
+        date = datetime.now(UTC).strftime("%Y-%m-%d")
+        prefix = f"bundles/{date}-{hash8}/"
+    log.info(
+        f"bundle {manifest['version']} -> {prefix.removeprefix('bundles/').rstrip('/')}: "
+        f"{num(len(files))} files, {num(len(images))} images, bucket {cfg['bucket']}"
+    )
 
     online = existing(s3, cfg["bucket"], "img/")
     img_jobs = [(k, p) for k, p in sorted(images.items()) if k not in online]
@@ -170,8 +204,8 @@ def run() -> None:
 
     online = existing(s3, cfg["bucket"], prefix)
     file_jobs = [(prefix + n, b) for n, b in files.items() if prefix + n not in online]
-    if not file_jobs:
-        log.info(f"bundle {version} is already online with the same files, skip")
+    if not file_jobs and not reused:
+        log.info(f"bundle {prefix} is already online with the same files, skip")
     # The manifest goes last, so a prefix with a manifest always has all its files.
     manifest_key = prefix + "manifest.json"
     first = [job for job in file_jobs if job[0] != manifest_key]
@@ -186,4 +220,8 @@ def run() -> None:
         f"{num(len(images) - len(img_jobs))} images and {num(len(files) - len(file_jobs))} "
         f"bundle files already online; took {elapsed(start)}"
     )
-    log.info(f"set PUBLIC_BUNDLE_URL = {cfg['public_url']}/{prefix}")
+    url = f"{cfg['public_url']}/{prefix}"
+    if write_bundle_ts(url):
+        log.info("updated src/lib/bundle.ts; commit it and deploy")
+    else:
+        log.info(f"src/lib/bundle.ts already points at {url}")

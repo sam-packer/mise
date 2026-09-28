@@ -7,12 +7,12 @@ to match: an artwork, a film, a song, a poem, a book, and a scent. The model run
 
 ```sh
 bun install
-bun run stub    # build the stub bundle into static/bundle/ (about 3 min the first time)
 bun run dev
 ```
 
-The app loads its model and catalog from `static/bundle/`. That folder is not committed, so build it
-first: either the stub above, or the trained model below.
+This loads the published bundle from `cdn.mise.art`, once one is published (see "Train" below). To
+use an offline stub instead, run `bun run stub` (builds it into `static/bundle/`, about 3 min the
+first time) and set `PUBLIC_BUNDLE_URL=/bundle/` in `.env`.
 
 Try a feeling in the terminal: `bun run query "a dark and stormy night"`.
 
@@ -27,25 +27,25 @@ uv sync
 uv run mise-ml all
 ```
 
-`all` downloads the datasets, labels them with a local LLM, trains, evaluates, and installs the result
-into `static/bundle/`. It runs overnight (an estimate). Stop it at any time: a rerun skips finished work.
-`uv run mise-ml` lists each step. [ml/README.md](ml/README.md) explains them.
+`all` downloads the datasets, labels them with a local LLM, trains, evaluates, and installs the
+result locally. If Cloudflare R2 is configured (see "Publish" in [ml/README.md](ml/README.md)),
+it also publishes the bundle there and updates `src/lib/bundle.ts` to point at it. It runs
+overnight (an estimate). Stop it at any time: a rerun skips finished work. `uv run mise-ml` lists
+each step; [ml/README.md](ml/README.md) explains them.
 
 Before the first run, add about 300 feelings to `ml/eval_feelings.jsonl`, one sentence per line. The eval
 step measures the model against them.
 
-## Deploy
+Commit the updated `src/lib/bundle.ts`, then deploy (see "Deploy" below) or push.
 
-In production the bundle lives in a Cloudflare R2 bucket, not `static/bundle/`. Publish it with
-`cd ml && uv run mise-ml publish`, then set `PUBLIC_BUNDLE_URL` in `wrangler.jsonc` to the URL it
-prints. Then run:
+## Deploy
 
 ```sh
 bun run deploy
 ```
 
-It builds the site and deploys it to Cloudflare Workers. The bundle no longer needs to be in the
-build, so a plain push works too.
+It builds the site and deploys it to Cloudflare Workers. This ships the app only: the bundle lives
+in a Cloudflare R2 bucket, not in the build.
 
 ## Layout
 

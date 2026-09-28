@@ -1,0 +1,2 @@
+# The local bundle (the stub, or a trained one from `uv run mise-ml install`) never ships.
+bundle

@@ -19,8 +19,13 @@ STEPS = {
     "export": "export ONNX, quantize, and write out/bundle",
     "eval": "report recall@10, palette delta E, choice accuracy, latency; write out/run.json",
     "install": "copy out/bundle into ../static/bundle for the web app",
-    "all": "run every step above in order, skip finished work, install if the student ships",
-    "publish": "upload ../static/bundle to Cloudflare R2 (never part of all)",
+    "all": (
+        "run every step above in order, skip finished work; install and publish if the student "
+        "ships and R2 is set"
+    ),
+    "publish": (
+        "upload ../static/bundle to Cloudflare R2; also runs at the end of `all` if R2 is set"
+    ),
 }
 
 log = logs.get("all")
@@ -49,9 +54,9 @@ def preflight() -> None:
 class Run:
     """Runs the steps of `all`, with a header line each and a summary at the end."""
 
-    def __init__(self) -> None:
+    def __init__(self, extra: int = 0) -> None:
         self.rows: list[tuple[str, str, str]] = []
-        self.total = len(STEPS) - 2 + 1  # not all or publish; eval --judge is its own
+        self.total = len(STEPS) - 2 + 1 + extra  # not all or publish; eval --judge is its own
 
     def step(
         self,
@@ -86,7 +91,19 @@ class Run:
 
 
 def run_all() -> None:
-    from mise_ml import curate, evaluate, export, fetch, install, profile, resolve, student, teacher
+    from mise_ml import (
+        curate,
+        evaluate,
+        export,
+        fetch,
+        install,
+        keys,
+        profile,
+        publish,
+        resolve,
+        student,
+        teacher,
+    )
     from mise_ml.config import (
         BUNDLE,
         CATALOG,
@@ -108,7 +125,8 @@ def run_all() -> None:
     from mise_ml.vocab import labels_path, load_vocab
 
     preflight()
-    run = Run()
+    missing_r2 = keys.missing_r2()
+    run = Run(extra=0 if missing_r2 else 1)
     run.step("fetch", fetch.run)
     raw = [src.dest for src in fetch.load_sources() if src.dest.exists()]
     run.step("curate", curate.run, ([*raw, SOURCES], CurateConfig(), [CATALOG, CATALOG_META, PAT]))
@@ -138,6 +156,13 @@ def run_all() -> None:
         log.warning("to use the student anyway, run: uv run mise-ml install")
         raise SystemExit(1)
     run.step("install", install.run)
+    if not missing_r2:
+        run.step("publish", publish.run)
+    else:
+        log.info(
+            "R2 is not configured (%s); run `uv run mise-ml publish` to put the bundle online",
+            ", ".join(missing_r2),
+        )
     run.summary()
 
 
