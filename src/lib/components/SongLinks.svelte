@@ -1,11 +1,13 @@
 <script lang="ts">
 	import type { Item } from '$lib/mood/types';
 
-	type Platform = 'spotify' | 'apple' | 'youtube';
+	type Platform = 'spotify' | 'apple' | 'deezer' | 'youtube';
+	const PLATFORMS: Platform[] = ['spotify', 'apple', 'deezer', 'youtube'];
 	const KEY = 'moodboard:platform';
 	const LABELS: Record<Platform, string> = {
 		spotify: 'Spotify',
 		apple: 'Apple Music',
+		deezer: 'Deezer',
 		youtube: 'YouTube'
 	};
 
@@ -14,7 +16,7 @@
 	function stored(): Platform {
 		try {
 			const v = localStorage.getItem(KEY);
-			if (v === 'spotify' || v === 'apple' || v === 'youtube') return v;
+			if (PLATFORMS.includes(v as Platform)) return v as Platform;
 		} catch {
 			// storage may be unavailable
 		}
@@ -22,9 +24,7 @@
 	}
 
 	let platform = $state<Platform>(stored());
-	const available = $derived(
-		(['spotify', 'apple', 'youtube'] as Platform[]).filter((p) => links[p])
-	);
+	const available = $derived(PLATFORMS.filter((p) => links[p]));
 	const href = $derived(links[platform] ?? links[available[0]] ?? links.primary);
 	const name = $derived(
 		links[platform] ? LABELS[platform] : available[0] ? LABELS[available[0]] : 'the song'
