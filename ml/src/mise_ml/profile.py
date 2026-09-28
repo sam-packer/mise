@@ -1,4 +1,3 @@
-import csv
 import functools
 import random
 import time
@@ -12,7 +11,6 @@ from mise_ml.config import (
     PAT,
     PAT_SENTENCES,
     PROFILES,
-    RAW,
     RESOLVED,
     SEED,
     ProfileConfig,
@@ -317,25 +315,11 @@ def run_pat(cfg: ProfileConfig, llm: Any) -> None:
 # labels: palette, light, typeface, scent for each feeling
 
 
-def artemis_feelings(limit: int) -> list[str]:
-    path = RAW / "artemis" / "artemis_dataset_release_v0.csv"
-    if not path.exists():
-        return []
-    with path.open(encoding="utf-8") as f:
-        texts = {
-            row["utterance"].strip().lower()
-            for row in csv.DictReader(f)
-            if is_feeling(row.get("utterance", ""))
-        }
-    return sorted(texts, key=hash_fraction)[:limit]
-
-
 def label_pool(cfg: ProfileConfig) -> list[str]:
     evals = load_eval_texts()
     moods = [f for r in iter_jsonl(MOODS) for f in r["feelings"]]
-    extra = artemis_feelings(3000)
     paraphrases = sorted({q for r in iter_jsonl(PROFILES) for q in r["queries"]}, key=hash_fraction)
-    pool = list(dict.fromkeys(evals + moods + extra))
+    pool = list(dict.fromkeys(evals + moods))
     room = max(0, cfg.label_queries - len(pool))
     return list(dict.fromkeys(pool + paraphrases[:room]))
 

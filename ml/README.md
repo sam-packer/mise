@@ -102,7 +102,6 @@ Review the new file, then update `sources.toml`.
 | Met Open Access CSV | public-domain artworks and their subject tags | CC0 |
 | PoetryDB | public-domain poems | poems are public domain |
 | Text2Colors PAT (mirror) | 10,183 name-to-palette pairs | see below |
-| ArtEmis (optional, manual) | extra feeling sentences | research use only |
 
 - PoetryDB is an API, not a file. `fetch` reads every author in sorted order and writes
   `data/raw/poetrydb/poems.jsonl` sorted by author and title. PoetryDB answers HTTP 503 for a
@@ -112,8 +111,6 @@ Review the new file, then update `sources.toml`.
   pipeline uses a mirror of `data/hexcolor_vf/`. The original code is MIT. The mirror has no
   license. When you use PAT, cite Bahng et al., "Coloring with Words: Guiding Image
   Colorization Through Text-based Palette Generation", ECCV 2018.
-- ArtEmis is gated and optional. If you put `artemis_dataset_release_v0.csv` in
-  `data/raw/artemis/`, `profile` uses up to 3,000 of its utterances as extra feelings.
 
 ### curate (§9.1)
 
@@ -254,7 +251,7 @@ bf16, with thinking mode off. It runs four jobs:
 2. **moods:** 6,000 synthetic feelings, 25 for each prompt, from random scene hints.
 3. **pat:** one feeling sentence for each PAT palette name. The PAT palette stays the label.
 4. **labels:** five colors, a light, a typeface, and a scent for about 30,000 feelings: your eval
-   feelings, the synthetic moods, the ArtEmis sentences, and item feelings to fill the rest.
+   feelings, the synthetic moods, and item feelings to fill the rest.
 
 Every prompt asks for feelings as a sentence about a scene or a moment, 6 to 30 words. It never
 asks for a list of mood words.
@@ -464,8 +461,7 @@ order. The label file name contains a hash of the vocab, so a new vocab gets new
 
 ## Licenses
 
-Licenses and attribution are not final for this draft. ArtEmis is for research use only. The
-Met, Art Institute of Chicago, and Cleveland Museum of Art images used here are public domain
+Licenses and attribution are not final for this draft. The Met, Art Institute of Chicago, and Cleveland Museum of Art images used here are public domain
 or CC0. ListenBrainz and MusicBrainz data is CC0. The TMDB posters, the Hardcover and Open
 Library covers, and the Deezer album covers and previews belong to their owners. The app shows
 them next to links to the source pages. TMDB asks for an attribution notice in the app.

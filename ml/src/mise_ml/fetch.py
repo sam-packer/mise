@@ -134,8 +134,6 @@ def fetch(src: Source) -> str:
         return "skipped"
     status = "verified"
     if not dest.exists():
-        if src.kind == "manual":
-            return "absent"
         if src.kind == "snapshot":
             snapshot_poetrydb(dest)
         elif not download(src.url, dest):
@@ -157,11 +155,10 @@ def fetch(src: Source) -> str:
 def run() -> None:
     start = time.perf_counter()
     sources = load_sources()
-    wanted = [s for s in sources if s.kind != "manual"]
-    have = sum(1 for s in wanted if s.dest.exists())
+    have = sum(1 for s in sources if s.dest.exists())
     log.info(
-        f"reading {SOURCES.name}: {len(wanted)} sources ({have} present, "
-        f"{len(wanted) - have} to download) and {len(sources) - len(wanted)} optional manual ones"
+        f"reading {SOURCES.name}: {len(sources)} sources ({have} present, "
+        f"{len(sources) - have} to download)"
     )
     results: dict[str, list[Source]] = defaultdict(list)
     for src in progress(sources, desc="fetch", unit="source"):
@@ -175,8 +172,5 @@ def run() -> None:
     )
     for src in results["failed"]:
         log.warning(f"could not get {src.name}. {' '.join(src.note.split())}")
-    optional = [s.name for s in results["absent"]]
-    if optional:
-        log.info(f"optional, not present: {'; '.join(optional)} (see the notes in sources.toml)")
     if results["failed"]:
         raise SystemExit(1)

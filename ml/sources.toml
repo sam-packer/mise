@@ -3,8 +3,7 @@
 # fetch downloads each missing file and checks its size and SHA-256.
 # A mismatch stops fetch: the source changed upstream.
 # Nothing under data/ is committed. fetch rebuilds it from these sources.
-# kind: "file" (download), "zip" (download and extract), "snapshot" (built from an API),
-# "manual" (gated; you download it by hand; optional).
+# kind: "file" (download), "zip" (download and extract), "snapshot" (built from an API).
 
 [[source]]
 name = "Met Open Access CSV"
@@ -60,13 +59,3 @@ sha256 = "bd15d6f4a53f94dcf0f34c492fd888984f0b50c1778752cf5d8d189a3b54f296"
 bytes = 68469
 license = "Text2Colors repo is MIT; this mirror has no license; cite Bahng et al., ECCV 2018"
 note = "See the note for the PAT train names."
-
-[[source]]
-name = "ArtEmis (optional)"
-url = "https://www.artemisdataset.org/#dataset"
-path = "artemis/artemis_dataset_release_v0.csv"
-kind = "manual"
-license = "research use only, no redistribution"
-note = """Optional and gated. Request access at https://www.artemisdataset.org and put
-artemis_dataset_release_v0.csv in data/raw/artemis/. Its utterances become extra feeling
-sentences for the label pass."""
