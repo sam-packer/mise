@@ -1,1 +1,58 @@
 @import 'tailwindcss';
+
+@layer base {
+	:root {
+		color-scheme: light dark;
+
+		--serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+		--ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+		--ground: light-dark(#fff, #09090b);
+		--ink: light-dark(oklch(0.32 0 0), oklch(0.86 0 0));
+		--mid-1: light-dark(oklch(0.94 0 0), oklch(0.25 0 0));
+		--mid-2: var(--mid-1);
+		--mid-3: var(--mid-1);
+		--paper-ink: var(--ink);
+	}
+
+	html {
+		background: var(--ground);
+		overflow-x: hidden;
+	}
+
+	body {
+		min-height: 100dvh;
+		margin: 0;
+		background: var(--ground);
+		color: var(--ink);
+		font-family: var(--serif);
+		font-style: italic;
+		line-height: 1.5;
+		-webkit-font-smoothing: antialiased;
+		text-rendering: optimizeLegibility;
+		overflow-x: hidden;
+	}
+
+	::selection {
+		background: var(--ink);
+		color: var(--ground);
+	}
+
+	::view-transition-group(mood-tile) {
+		animation-duration: 520ms;
+		animation-timing-function: var(--ease);
+	}
+
+	::view-transition-old(mood-tile),
+	::view-transition-new(mood-tile) {
+		animation: none;
+		height: 100%;
+		object-fit: cover;
+		overflow: clip;
+	}
+
+	::view-transition-old(root),
+	::view-transition-new(root) {
+		animation-duration: 320ms;
+	}
+}
