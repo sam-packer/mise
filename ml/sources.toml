@@ -1,0 +1,137 @@
+# Raw sources for `uv run moodml fetch`. Paths are relative to data/raw/.
+# fetch downloads each missing file and checks its size and SHA-256.
+# A mismatch stops fetch: the source changed upstream.
+# Nothing under data/ is committed. fetch rebuilds it from these sources.
+# kind: "file" (download), "zip" (download and extract), "snapshot" (built from an API),
+# "manual" (gated; you download it by hand; optional).
+
+[[source]]
+name = "MovieLens ml-latest (includes the Tag Genome)"
+url = "https://files.grouplens.org/datasets/movielens/ml-latest.zip"
+path = "movielens/ml-latest.zip"
+kind = "zip"
+sha256 = "66a9e518c747d76b241d9a859b001a2619d3ed1672ceef599eb50daf73a7b4a3"
+bytes = 350896731
+license = "GroupLens research license: research and non-commercial use only, no redistribution"
+
+[[source]]
+name = "goodbooks-10k books"
+url = "https://raw.githubusercontent.com/zygmuntz/goodbooks-10k/master/books.csv"
+path = "goodbooks/books.csv"
+sha256 = "4d21d0e0433128657c752e3a3d0405ac0ec11675d6c70c64cb0abf4ab1acb76a"
+bytes = 3286659
+license = "CC BY-SA 4.0"
+
+[[source]]
+name = "goodbooks-10k book tags"
+url = "https://raw.githubusercontent.com/zygmuntz/goodbooks-10k/master/book_tags.csv"
+path = "goodbooks/book_tags.csv"
+sha256 = "8ff2f0659be9ddbe10bf47ba33b5b69024f893f017ac665236f15bc97d862950"
+bytes = 16665883
+license = "CC BY-SA 4.0"
+
+[[source]]
+name = "goodbooks-10k tags"
+url = "https://raw.githubusercontent.com/zygmuntz/goodbooks-10k/master/tags.csv"
+path = "goodbooks/tags.csv"
+sha256 = "87f316957564fa21c316a4f50afc87f07906f478f990eec027aaca00c536c449"
+bytes = 722480
+license = "CC BY-SA 4.0"
+
+[[source]]
+name = "MuSe (Zenodo release)"
+url = "https://zenodo.org/api/records/4281165/files/muse_dataset.csv/content"
+path = "muse/muse_dataset.csv"
+sha256 = "56be88aea7dfa2c0446e0d7cc033d95c3550a3dc4364ac91c815cf998265fd2b"
+bytes = 10026011
+license = "CC BY 4.0"
+skip_if = "muse/muse_v3.csv"
+note = """Download muse_dataset.csv from https://zenodo.org/records/4281165 and put it in
+data/raw/muse/."""
+
+[[source]]
+name = "Spotify tracks dataset (popularity for MuSe ranking)"
+url = "https://huggingface.co/datasets/maharshipandya/spotify-tracks-dataset/resolve/635b034f69257814eff850a5c2b3346fe458134f/dataset.csv"
+path = "spotify/dataset.csv"
+sha256 = "b202fa49909b2d5cef71a04b1d21243cfeb36414535f2ca9272aa646721177bd"
+bytes = 20118244
+license = "BSD"
+skip_if = "muse/muse_v3.csv"
+note = """Download dataset.csv from
+https://huggingface.co/datasets/maharshipandya/spotify-tracks-dataset and put it in
+data/raw/spotify/."""
+
+[[source]]
+name = "MuSe (Kaggle release, optional, richer)"
+url = "https://www.kaggle.com/datasets/cakiki/muse-the-musical-sentiment-dataset"
+path = "muse/muse_v3.csv"
+kind = "manual"
+license = "see the Kaggle page"
+note = """Optional. The Kaggle release adds tags, genre and tag counts but needs a login.
+Put muse_v3.csv in data/raw/muse/. When it is present, curate uses it instead of the Zenodo
+file, and fetch skips the Zenodo and Spotify files."""
+
+[[source]]
+name = "Met Open Access CSV"
+url = "https://media.githubusercontent.com/media/metmuseum/openaccess/master/MetObjects.csv"
+path = "met/MetObjects.csv"
+sha256 = "de617b9c947458e426111207f81a65bd1379a151c0077d3ce29cfc22fc0b9183"
+bytes = 317650992
+license = "CC0 1.0"
+
+[[source]]
+name = "PoetryDB snapshot"
+url = "https://poetrydb.org/author"
+path = "poetrydb/poems.jsonl"
+kind = "snapshot"
+license = "public-domain poems; PoetryDB code is GPL-2.0"
+
+[[source]]
+name = "Text2Colors PAT train names"
+url = "https://raw.githubusercontent.com/martin2421/TRU-COMP/HEAD/COMP%203710%20-%20Artificial%20Intelligence/PAT/data/hexcolor_vf/train_names.pkl"
+path = "text2colors/train_names.pkl"
+sha256 = "b57ee2792464cabf4942a72de5fb37efbb18d371f064db7ec46d89498e931c81"
+bytes = 346557
+license = "Text2Colors repo is MIT; this mirror has no license; cite Bahng et al., ECCV 2018"
+note = """The mirror failed. The original repo https://github.com/awesome-davian/Text2Colors
+does not hold the data, and its Google Drive file is gone. Find another copy of
+data/hexcolor_vf/ and put the four pickles in data/raw/text2colors/. Cite Bahng et al.,
+"Coloring with Words: Guiding Image Colorization Through Text-based Palette Generation",
+ECCV 2018."""
+
+[[source]]
+name = "Text2Colors PAT train palettes"
+url = "https://raw.githubusercontent.com/martin2421/TRU-COMP/HEAD/COMP%203710%20-%20Artificial%20Intelligence/PAT/data/hexcolor_vf/train_palettes_rgb.pkl"
+path = "text2colors/train_palettes_rgb.pkl"
+sha256 = "60d09536832b438d8af42e913cf0a7894ffca72e84bda22ddb0ea47c5bf98f70"
+bytes = 622481
+license = "Text2Colors repo is MIT; this mirror has no license; cite Bahng et al., ECCV 2018"
+note = "See the note for the PAT train names."
+
+[[source]]
+name = "Text2Colors PAT test names"
+url = "https://raw.githubusercontent.com/martin2421/TRU-COMP/HEAD/COMP%203710%20-%20Artificial%20Intelligence/PAT/data/hexcolor_vf/test_names.pkl"
+path = "text2colors/test_names.pkl"
+sha256 = "e60c2bf017e4528381582b720963154db283d5a754e6184b969d15de14dc8321"
+bytes = 37893
+license = "Text2Colors repo is MIT; this mirror has no license; cite Bahng et al., ECCV 2018"
+note = "See the note for the PAT train names."
+
+[[source]]
+name = "Text2Colors PAT test palettes"
+url = "https://raw.githubusercontent.com/martin2421/TRU-COMP/HEAD/COMP%203710%20-%20Artificial%20Intelligence/PAT/data/hexcolor_vf/test_palettes_rgb.pkl"
+path = "text2colors/test_palettes_rgb.pkl"
+sha256 = "bd15d6f4a53f94dcf0f34c492fd888984f0b50c1778752cf5d8d189a3b54f296"
+bytes = 68469
+license = "Text2Colors repo is MIT; this mirror has no license; cite Bahng et al., ECCV 2018"
+note = "See the note for the PAT train names."
+
+[[source]]
+name = "ArtEmis (optional)"
+url = "https://www.artemisdataset.org/#dataset"
+path = "artemis/artemis_dataset_release_v0.csv"
+kind = "manual"
+license = "research use only, no redistribution"
+note = """Optional and gated. Request access at https://www.artemisdataset.org and put
+artemis_dataset_release_v0.csv in data/raw/artemis/. Its utterances become extra feeling
+sentences for the label pass."""
