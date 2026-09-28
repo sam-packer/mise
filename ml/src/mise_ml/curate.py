@@ -187,7 +187,7 @@ def curate_books(cfg: CurateConfig) -> list[Record]:
     books = books.sort_values("ratings_count", ascending=False).head(cfg.book_top)
     tag_names = pd.read_csv(root / "tags.csv").set_index("tag_id")["tag_name"].to_dict()
     book_tags = pd.read_csv(root / "book_tags.csv")
-    book_tags = book_tags[book_tags["goodreads_book_id"].isin(books["book_id"])]
+    book_tags = book_tags[book_tags["goodreads_book_id"].isin(books["goodreads_book_id"])]
     book_tags = book_tags.sort_values(["goodreads_book_id", "count"], ascending=[True, False])
     shelves = (
         book_tags.groupby("goodreads_book_id")["tag_id"]
@@ -208,9 +208,14 @@ def curate_books(cfg: CurateConfig) -> list[Record]:
                 "year": year,
                 "rank": int(row.ratings_count),
                 "signal": {
-                    "shelves": clean_shelves(shelves.get(row.book_id, []), cfg.book_shelf_tags)
+                    "shelves": clean_shelves(
+                        shelves.get(row.goodreads_book_id, []), cfg.book_shelf_tags
+                    )
                 },
-                "source": {"goodreads": int(row.book_id), "isbn": normalize_isbn(row.isbn)},
+                "source": {
+                    "goodreads": int(row.goodreads_book_id),
+                    "isbn": normalize_isbn(row.isbn),
+                },
                 "links": {},
             }
         )

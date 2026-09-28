@@ -6,6 +6,7 @@ the left, the feature is the last-token hidden state, and it is L2-normalized.
 """
 
 import functools
+import hashlib
 import json
 from pathlib import Path
 
@@ -74,7 +75,9 @@ class FeatureStore:
     def __init__(self, name: str, template: str, cfg: TeacherConfig) -> None:
         self.template = template
         self.cfg = cfg
-        stem = f"{slugify(cfg.backbone)}-{cfg.revision[:12]}-{name}"
+        # The template and token limit change the features too, so they are part of the name.
+        setup = hashlib.sha256(f"{template}\0{cfg.max_length}".encode()).hexdigest()[:8]
+        stem = f"{slugify(cfg.backbone)}-{cfg.revision[:12]}-{name}-{setup}"
         self.array_path: Path = FEATURES / f"{stem}.npy"
         self.text_path: Path = FEATURES / f"{stem}.json"
 

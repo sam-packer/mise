@@ -59,10 +59,11 @@ class GrammarProcessor(LogitsProcessor):
         self.started = False
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.Tensor:
+        last = input_ids[:, -1].tolist() if self.started else []
         for i, matcher in enumerate(self.matchers):
             if matcher.is_terminated():
                 continue
-            if self.started and not matcher.accept_token(int(input_ids[i, -1])):
+            if self.started and not matcher.accept_token(last[i]):
                 raise RuntimeError("grammar rejected a token it allowed")
             if not matcher.is_terminated():
                 matcher.fill_next_token_bitmask(self.bitmask, i)
@@ -199,12 +200,14 @@ class Job:
             entries = [
                 e for e in iter_jsonl(self.cache) if e["sig"] == sig and e.get("data") is not None
             ]
+        # Keep each parsed record on its own merits: a cached answer can cover keys that are
+        # no longer wanted, and its other keys must not be lost with them.
         records: dict[str, Record] = {}
         for e in entries:
-            fresh = [k for k in e["keys"] if prints.get(k) == e["prints"].get(k)]
-            if len(fresh) == len(e["keys"]):
-                for rec in parse(e["keys"], e["data"]):
-                    records[rec["key"]] = rec
+            for rec in parse(e["keys"], e["data"]):
+                k = rec["key"]
+                if prints.get(k) is not None and prints[k] == e["prints"].get(k):
+                    records[k] = rec
         write_jsonl(self.output, [records[k] for k in sorted(records)])
         print(f"[{self.name}] {len(records)} of {len(keys)} keys have a record -> {self.output}")
 
