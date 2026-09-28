@@ -9,6 +9,7 @@ authors = [
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "boto3>=1.43.103",
+    "flash-linear-attention>=0.5.2",
     "httpx>=0.28.1",
     "jsonschema>=4.26.0",
     "numpy>=2.5.3",
@@ -22,6 +23,7 @@ dependencies = [
     "torchvision",
     "tqdm>=4.70.1",
     "transformers>=5.17.0",
+    "triton-windows>=3.8.0.post28",
     "xgrammar>=0.2.8",
 ]
 
