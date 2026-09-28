@@ -5,6 +5,7 @@ processor masks every token that would break the schema, so each finished answer
 JSON. jsonschema checks it again, because a hit on max_new_tokens can still cut an answer.
 """
 
+import gc
 import hashlib
 import json
 import time
@@ -53,6 +54,19 @@ def sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def limit_gpu_memory() -> None:
+    # Force allocator OOM before Windows can spill CUDA allocations into system RAM.
+    free, total = torch.cuda.mem_get_info()
+    budget = min(int(total * 0.9), free - 2 * 2**30)
+    if budget <= 0:
+        raise RuntimeError("not enough free GPU memory to leave 2 GiB of headroom")
+    torch.cuda.set_per_process_memory_fraction(budget / total)
+    log.info(
+        f"GPU allocation budget {budget / 2**30:.1f} GiB; "
+        f"{(free - budget) / 2**30:.1f} GiB free headroom"
+    )
+
+
 class GrammarProcessor(LogitsProcessor):
     """Masks, row by row, the tokens that the row's JSON grammar does not allow next."""
 
@@ -82,6 +96,7 @@ class LocalLLM:
         start = time.perf_counter()
         log.info(f"loading {cfg.model} at {cfg.revision[:12]} in bf16 (about 19 GB)")
         self.cfg = cfg
+        limit_gpu_memory()
         self.processor = AutoProcessor.from_pretrained(cfg.model, revision=cfg.revision)
         self.processor.tokenizer.padding_side = "left"
         self.model = AutoModelForImageTextToText.from_pretrained(
@@ -127,14 +142,16 @@ class LocalLLM:
         try:
             return self._generate(requests, max_new_tokens)
         except torch.OutOfMemoryError:
-            torch.cuda.empty_cache()
             if len(requests) == 1:
                 raise
-            half = len(requests) // 2
-            log.warning(f"out of GPU memory on a batch of {len(requests)}; retrying as two halves")
-            first, t1 = self.generate(requests[:half], max_new_tokens)
-            second, t2 = self.generate(requests[half:], max_new_tokens)
-            return first + second, t1 + t2
+        # Leave the exception handler first: its traceback retains the failed batch's tensors.
+        gc.collect()
+        torch.cuda.empty_cache()
+        half = len(requests) // 2
+        log.warning(f"out of GPU memory on a batch of {len(requests)}; retrying as two halves")
+        first, t1 = self.generate(requests[:half], max_new_tokens)
+        second, t2 = self.generate(requests[half:], max_new_tokens)
+        return first + second, t1 + t2
 
     @torch.inference_mode()
     def _generate(self, requests: list[Request], max_new_tokens: int) -> tuple[list[str], int]:

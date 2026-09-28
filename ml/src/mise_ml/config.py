@@ -131,7 +131,7 @@ class ProfileConfig:
     model: str = "Qwen/Qwen3.5-9B"
     revision: str = "c202236235762e1c871ad0ccb60c8ee5ba337b9a"
     # Generation pays a fixed per-step cost (grammar masks, reference conv1d, the generate loop),
-    # so larger batches raise throughput. 32 fits a 32 GB GPU with the fla kernels installed.
+    # so larger batches raise throughput. Batches split when they exceed the GPU budget.
     batch_size: int = 32
     image_batch_size: int = 8
     synthetic_moods: int = 6000
