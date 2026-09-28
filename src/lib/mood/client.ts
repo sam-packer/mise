@@ -2,7 +2,8 @@
 
 import type { Mood } from './types';
 
-export type WorkerRequest = { type: 'infer'; id: number; text: string };
+export type WorkerRequest =
+	{ type: 'init'; base: string } | { type: 'infer'; id: number; text: string };
 export type WorkerResponse =
 	| { type: 'ready' }
 	| { type: 'failed'; message: string }
@@ -24,10 +25,13 @@ export const ready: Promise<void> = new Promise((res, rej) => {
 	rejectReady = rej;
 });
 
-/** Create the worker and start loading. Safe to call more than once. */
-export function start() {
+/** Create the worker and start loading. Safe to call more than once.
+ * `base` is the bundle root URL (same-origin path or a cross-origin URL); it must end in '/'. */
+export function start(base = '/bundle/') {
 	if (worker || typeof Worker === 'undefined') return;
+	// Keep this exact `new Worker(new URL(...))` form: it is how Vite finds and bundles the worker.
 	worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+	worker.postMessage({ type: 'init', base } satisfies WorkerRequest);
 	worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
 		const msg = e.data;
 		if (msg.type === 'ready') resolveReady();

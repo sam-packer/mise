@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount, tick, untrack } from 'svelte';
 	import { fade } from 'svelte/transition';
+	import { env } from '$env/dynamic/public';
 	import { page } from '$app/state';
 	import { goto, pushState } from '$app/navigation';
 	import { resolve } from '$app/paths';
@@ -52,10 +53,18 @@
 	/** For a song, the album carries the feeling better than the single track. */
 	const work = (item: Item) => (item.category === 'song' ? (item.album ?? item.title) : item.title);
 
+	// The bundle root: a public env var in production (an R2 URL), '/bundle/' for local dev and the stub.
+	const bundleUrl = env.PUBLIC_BUNDLE_URL?.trim();
+	const bundleBase = bundleUrl
+		? bundleUrl.endsWith('/')
+			? bundleUrl
+			: `${bundleUrl}/`
+		: '/bundle/';
+
 	onMount(() => {
 		reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 		applyTokens(neutralTokens(matchMedia('(prefers-color-scheme: dark)').matches));
-		start();
+		start(bundleBase);
 		ready.then(
 			() => (modelReady = true),
 			() => {}

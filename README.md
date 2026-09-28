@@ -35,11 +35,16 @@ step measures the model against them.
 
 ## Deploy
 
+In production the bundle lives in a Cloudflare R2 bucket, not `static/bundle/`. Publish it with
+`cd ml && uv run mise-ml publish`, then set `PUBLIC_BUNDLE_URL` in `wrangler.jsonc` to the URL it
+prints. Then run:
+
 ```sh
 bun run deploy
 ```
 
-It builds the site and deploys it to Cloudflare Workers, with whatever bundle is in `static/bundle/`.
+It builds the site and deploys it to Cloudflare Workers. The bundle no longer needs to be in the
+build, so a plain push works too.
 
 ## Layout
 
