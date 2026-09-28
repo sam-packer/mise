@@ -10,7 +10,7 @@ import hashlib
 import json
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -291,22 +291,23 @@ class Job:
             group.sort(key=lambda u: (len(u.request.user), u.keys))
             size = self.cfg.image_batch_size if has_image else self.cfg.batch_size
             desc = f"{self.name}{' (images)' if has_image else ''}"
-            bar = progress(total=len(group), desc=desc, unit="req")
             starting_stats = stats.copy()
             start = time.perf_counter()
-            for i in range(0, len(group), size):
-                batch = group[i : i + size]
-                self._run_batch(batch, sig, prints, llm, stats)
-                group_stats = stats - starting_stats
-                bar.set_postfix(
-                    valid=group_stats["valid"],
-                    retried=group_stats["retried"],
-                    skipped=group_stats["skipped"],
-                    tok_s=f"{group_stats['tokens'] / max(time.perf_counter() - start, 1e-9):.0f}",
-                    refresh=False,
-                )
-                bar.update(len(batch))
-            bar.close()
+            with progress(total=len(group), desc=desc, unit="req") as bar:
+                for i in range(0, len(group), size):
+                    batch = group[i : i + size]
+                    for _ in self._run_batch(batch, sig, prints, llm, stats):
+                        group_stats = stats - starting_stats
+                        rate = group_stats["tokens"] / max(time.perf_counter() - start, 1e-9)
+                        bar.set_postfix(
+                            valid=group_stats["valid"],
+                            retried=group_stats["retried"],
+                            skipped=group_stats["skipped"],
+                            tok_s=f"{rate:.0f}",
+                            refresh=False,
+                        )
+                        bar.update(1)
+                        bar.refresh()
         return stats
 
     def _run_batch(
@@ -316,16 +317,24 @@ class Job:
         prints: dict[str, str],
         llm: LocalLLM,
         stats: Counter[str],
-    ) -> None:
+    ) -> Iterator[None]:
         limit = max(u.request.max_new_tokens for u in batch)
         texts, tokens = llm.generate([u.request for u in batch], limit)
         stats["tokens"] += tokens
-        rows = []
-        for unit, text in zip(batch, texts, strict=True):
-            data = valid_json(text, unit.request.schema)
+        answers = [
+            (unit, text, valid_json(text, unit.request.schema))
+            for unit, text in zip(batch, texts, strict=True)
+        ]
+        # Save and count completed answers before starting the slower retries.
+        answers.sort(key=lambda answer: answer[2] is None)
+        for unit, text, data in answers:
             if data is None:
                 # One retry alone, with room for a longer answer.
                 stats["retried"] += 1
+                log.info(
+                    f"{self.name}: retrying {unit.keys[0]!r} after invalid or incomplete JSON "
+                    f"(up to {2 * unit.request.max_new_tokens} tokens)"
+                )
                 log.debug(f"{self.name}: retry {unit.keys[0]!r}: {text[-200:]!r}")
                 retry, tokens = llm.generate([unit.request], 2 * unit.request.max_new_tokens)
                 stats["tokens"] += tokens
@@ -335,12 +344,15 @@ class Job:
                     log.debug(f"{self.name}: skip {unit.keys}: no valid JSON after a retry")
             if data is not None:
                 stats["valid"] += 1
-            rows.append(
-                {
-                    "sig": sig,
-                    "keys": unit.keys,
-                    "prints": {k: prints[k] for k in unit.keys},
-                    "data": data,
-                }
+            append_jsonl(
+                self.cache,
+                [
+                    {
+                        "sig": sig,
+                        "keys": unit.keys,
+                        "prints": {k: prints[k] for k in unit.keys},
+                        "data": data,
+                    }
+                ],
             )
-        append_jsonl(self.cache, rows)
+            yield None
