@@ -1,42 +1,56 @@
-# sv
+# mise
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+Describe a feeling in a sentence. The page takes its colors, light, and typeface, and shows a small wall
+to match: an artwork, a film, a song, a poem, a book, and a scent. The model runs in the browser.
 
-## Creating a project
-
-If you're seeing this, you've probably already done this step. Congrats!
-
-```sh
-# create a new project
-npx sv create my-app
-```
-
-To recreate this project with the same configuration:
+## Run the app
 
 ```sh
-# recreate this project
-bun x sv@0.17.1 create --template minimal --types ts --add prettier eslint tailwindcss="plugins:typography,forms" sveltekit-adapter="adapter:cloudflare+cfTarget:workers" ai-tools="ide:claude-code,other+delivery:plugin" --install bun moodboard
+bun install
+bun run stub    # build the stub bundle into static/bundle/ (about 3 min the first time)
+bun run dev
 ```
 
-## Developing
+The app loads its model and catalog from `static/bundle/`. That folder is not committed, so build it
+first: either the stub above, or the trained model below.
 
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
+Try a feeling in the terminal: `bun run query "a dark and stormy night"`.
+
+## Train the real model
+
+You need an NVIDIA GPU with about 32 GB (an RTX 5090) and about 60 GB of free disk. No API keys.
 
 ```sh
-npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
+cd ml
+uv sync
+uv run mise-ml all
 ```
 
-## Building
+`all` downloads the datasets, labels them with a local LLM, trains, evaluates, and installs the result
+into `static/bundle/`. It runs overnight (an estimate). Stop it at any time: a rerun skips finished work.
+`uv run mise-ml` lists each step. [ml/README.md](ml/README.md) explains them.
 
-To create a production version of your app:
+Before the first run, add about 300 feelings to `ml/eval_feelings.jsonl`, one sentence per line. The eval
+step measures the model against them.
+
+## Deploy
 
 ```sh
-npm run build
+bun run deploy
 ```
 
-You can preview the production build with `npm run preview`.
+It builds the site and deploys it to Cloudflare Workers, with whatever bundle is in `static/bundle/`.
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+## Layout
+
+| Path       | Contents                                         |
+| ---------- | ------------------------------------------------ |
+| `src/`     | the SvelteKit app                                |
+| `scripts/` | the stub bundle build, from hand-curated sources |
+| `ml/`      | the training pipeline (`mise-ml`)                |
+| `docs/`    | the design spec                                  |
+
+## Credit
+
+The idea of turning a described feeling into picks across media was sparked by
+[Wave](https://github.com/SophiaYifei/wave-recsys). mise shares no code or design with it.

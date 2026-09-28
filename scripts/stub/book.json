@@ -1,0 +1,562 @@
+[
+	{
+		"title": "The Secret History",
+		"creator": "Donna Tartt",
+		"year": 1992,
+		"hint": "the secret history donna tartt",
+		"vibe": "greek, snow, and something terrible in vermont",
+		"mood": "autumn on a small college campus; long nights with clever friends and too much to drink; a secret and a snowy winter of guilt"
+	},
+	{
+		"title": "Norwegian Wood",
+		"creator": "Haruki Murakami",
+		"year": 1987,
+		"hint": "norwegian wood murakami",
+		"vibe": "a meadow, a well, and a girl who isn't well",
+		"mood": "first love and grief in your twenties; walking through tokyo in the rain; remembering someone you lost when a song plays"
+	},
+	{
+		"title": "Little Women",
+		"creator": "Louisa May Alcott",
+		"year": 1868,
+		"hint": "little women louisa may alcott",
+		"vibe": "christmas won't be christmas without any presents",
+		"mood": "sisters by the fire on a snowy christmas; a warm family home with little money and a lot of love; growing up"
+	},
+	{
+		"title": "On the Road",
+		"creator": "Jack Kerouac",
+		"year": 1957,
+		"hint": "on the road kerouac",
+		"vibe": "the only people for me are the mad ones",
+		"mood": "a road trip across the country with friends; driving all night with the windows down; hitchhiking, jazz and restless young freedom"
+	},
+	{
+		"title": "The Great Gatsby",
+		"creator": "F. Scott Fitzgerald",
+		"year": 1925,
+		"hint": "the great gatsby fitzgerald",
+		"vibe": "a green light across the bay",
+		"mood": "glittering summer parties that feel empty; longing for someone across the water; champagne and loneliness"
+	},
+	{
+		"title": "Wuthering Heights",
+		"creator": "Emily Brontë",
+		"year": 1847,
+		"hint": "wuthering heights emily bronte",
+		"vibe": "whatever our souls are made of, his and mine are the same",
+		"mood": "wild wind and storms on the moors; an obsessive, doomed love; a ghost knocking at the window on a dark night"
+	},
+	{
+		"title": "Jane Eyre",
+		"creator": "Charlotte Brontë",
+		"year": 1847,
+		"hint": "jane eyre charlotte bronte",
+		"vibe": "reader, i married him",
+		"mood": "a lonely governess in a candlelit gothic house; secrets in the attic; a fierce quiet heart and a stormy love"
+	},
+	{
+		"title": "Rebecca",
+		"creator": "Daphne du Maurier",
+		"year": 1938,
+		"hint": "rebecca daphne du maurier",
+		"vibe": "last night i dreamt i went to manderley again",
+		"mood": "a grand house by the sea haunted by someone's memory; jealousy and fog; a gothic mystery on stormy nights"
+	},
+	{
+		"title": "Mrs Dalloway",
+		"creator": "Virginia Woolf",
+		"year": 1925,
+		"hint": "mrs dalloway virginia woolf",
+		"vibe": "she would buy the flowers herself",
+		"mood": "a bright june day walking through london to buy flowers; preparing for a party; memory and the passing of time"
+	},
+	{
+		"title": "To the Lighthouse",
+		"creator": "Virginia Woolf",
+		"year": 1927,
+		"hint": "to the lighthouse virginia woolf",
+		"vibe": "a summer house, a lighthouse, and ten years gone",
+		"mood": "a family summer house by the sea; a promise of going to the lighthouse tomorrow; time passing and the people who are gone"
+	},
+	{
+		"title": "The Year of Magical Thinking",
+		"creator": "Joan Didion",
+		"year": 2005,
+		"hint": "the year of magical thinking didion",
+		"vibe": "life changes in the instant",
+		"mood": "grieving a husband who died suddenly at dinner; sitting in hospitals with a sick daughter; clear, cold, numb grief"
+	},
+	{
+		"title": "Giovanni's Room",
+		"creator": "James Baldwin",
+		"year": 1956,
+		"hint": "giovanni's room baldwin",
+		"vibe": "a small room in paris and a love he runs from",
+		"mood": "a doomed love affair in paris; a cramped room and late nights in bars; shame, longing and regret"
+	},
+	{
+		"title": "The Catcher in the Rye",
+		"creator": "J. D. Salinger",
+		"year": 1951,
+		"hint": "the catcher in the rye salinger",
+		"vibe": "where do the ducks go in winter",
+		"mood": "wandering new york alone in december; lonely teenager in hotel rooms and bars; missing your little sister and wanting to go home"
+	},
+	{
+		"title": "Pride and Prejudice",
+		"creator": "Jane Austen",
+		"year": 1813,
+		"hint": "pride and prejudice austen",
+		"vibe": "a truth universally acknowledged",
+		"mood": "country balls, sisters and witty arguments; falling for someone you thought you hated; a long walk through the english countryside"
+	},
+	{
+		"title": "Anne of Green Gables",
+		"creator": "L. M. Montgomery",
+		"year": 1908,
+		"hint": "anne of green gables montgomery",
+		"vibe": "tomorrow is a new day with no mistakes in it",
+		"mood": "a joyful imaginative childhood on a farm; cherry blossoms, orchards and a best friend; finally finding a home"
+	},
+	{
+		"title": "The Remains of the Day",
+		"creator": "Kazuo Ishiguro",
+		"year": 1989,
+		"hint": "the remains of the day ishiguro",
+		"vibe": "the evening is the best part of the day",
+		"mood": "a long drive through the english countryside thinking about a wasted life; regret and a love never spoken; restraint"
+	},
+	{
+		"title": "Never Let Me Go",
+		"creator": "Kazuo Ishiguro",
+		"year": 2005,
+		"hint": "never let me go ishiguro",
+		"vibe": "a boarding school and a quiet terrible fate",
+		"mood": "remembering school friends and a love that came too late; a grey english coast; quiet acceptance of loss"
+	},
+	{
+		"title": "A Little Life",
+		"creator": "Hanya Yanagihara",
+		"year": 2015,
+		"hint": "a little life yanagihara",
+		"vibe": "four friends and the weight of one of them",
+		"mood": "a lifelong friendship in new york; love that can't fix old pain; devastating grief and tenderness"
+	},
+	{
+		"title": "Normal People",
+		"creator": "Sally Rooney",
+		"year": 2018,
+		"hint": "normal people sally rooney",
+		"vibe": "a small town, a college, and one person who knows you",
+		"mood": "young love on and off through school and university; misunderstandings and long texts; tender, anxious and intimate"
+	},
+	{
+		"title": "The Bell Jar",
+		"creator": "Sylvia Plath",
+		"year": 1963,
+		"hint": "the bell jar plath",
+		"vibe": "a summer in new york that should have been perfect",
+		"mood": "a summer in the city that feels suffocating; depression under a glass jar; numb, clever and lost"
+	},
+	{
+		"title": "Frankenstein",
+		"creator": "Mary Shelley",
+		"year": 1818,
+		"hint": "frankenstein mary shelley",
+		"vibe": "a dreary night of november",
+		"mood": "a dark and stormy night in a laboratory; lightning and ice; loneliness of a creature who wants to be loved"
+	},
+	{
+		"title": "Dracula",
+		"creator": "Bram Stoker",
+		"year": 1897,
+		"hint": "dracula bram stoker",
+		"vibe": "listen to them, the children of the night",
+		"mood": "a castle in the mountains at night; wolves, fog and storms; gothic dread by candlelight"
+	},
+	{
+		"title": "The Road",
+		"creator": "Cormac McCarthy",
+		"year": 2006,
+		"hint": "the road cormac mccarthy",
+		"vibe": "carrying the fire",
+		"mood": "a father and son walking through ash and cold; bleak, grey and hopeless with one small light of love"
+	},
+	{
+		"title": "One Hundred Years of Solitude",
+		"creator": "Gabriel García Márquez",
+		"year": 1967,
+		"hint": "one hundred years of solitude",
+		"vibe": "yellow butterflies and a house full of ghosts",
+		"mood": "a big sprawling family over generations; magical rain that lasts years; a hot tropical town, memory and solitude"
+	},
+	{
+		"title": "Like Water for Chocolate",
+		"creator": "Laura Esquivel",
+		"year": 1989,
+		"hint": "like water for chocolate esquivel",
+		"vibe": "every recipe tastes of forbidden love",
+		"mood": "a kitchen full of cooking and family; feelings poured into food; passionate love that can't be spoken"
+	},
+	{
+		"title": "The Little Prince",
+		"creator": "Antoine de Saint-Exupéry",
+		"year": 1943,
+		"hint": "the little prince saint-exupery",
+		"vibe": "what is essential is invisible to the eye",
+		"mood": "stranded in the desert under the stars; childlike wonder and a gentle goodbye; missing a friend"
+	},
+	{
+		"title": "Kitchen",
+		"creator": "Banana Yoshimoto",
+		"year": 1988,
+		"hint": "kitchen banana yoshimoto",
+		"vibe": "the place i like best in this world is the kitchen",
+		"mood": "sleeping on the kitchen floor after a death; grief softened by late-night cooking and new friends; quiet tokyo nights"
+	},
+	{
+		"title": "The Hobbit",
+		"creator": "J. R. R. Tolkien",
+		"year": 1937,
+		"hint": "the hobbit tolkien",
+		"vibe": "a round green door and an unexpected party",
+		"mood": "a cosy home with tea and cake; leaving for a great adventure; mountains, dragons and wanting to be home by the fire"
+	},
+	{
+		"title": "The Night Circus",
+		"creator": "Erin Morgenstern",
+		"year": 2011,
+		"hint": "the night circus morgenstern",
+		"vibe": "the circus arrives without warning",
+		"mood": "a magical black-and-white circus open only at night; caramel, bonfires and wonder; a dreamy romance"
+	},
+	{
+		"title": "Beloved",
+		"creator": "Toni Morrison",
+		"year": 1987,
+		"hint": "beloved toni morrison",
+		"vibe": "124 was spiteful",
+		"mood": "a house haunted by grief and the past; a mother's terrible love; heavy, painful and powerful"
+	},
+	{
+		"title": "Their Eyes Were Watching God",
+		"creator": "Zora Neale Hurston",
+		"year": 1937,
+		"hint": "their eyes were watching god hurston",
+		"vibe": "a pear tree in blossom and a hurricane",
+		"mood": "a woman finding love and freedom; a porch in florida in the evening; a hurricane and grief"
+	},
+	{
+		"title": "The Old Man and the Sea",
+		"creator": "Ernest Hemingway",
+		"year": 1952,
+		"hint": "the old man and the sea hemingway",
+		"vibe": "a man can be destroyed but not defeated",
+		"mood": "alone at sea at dawn; a long struggle and quiet dignity; endurance, the sun and the salt"
+	},
+	{
+		"title": "Ethan Frome",
+		"creator": "Edith Wharton",
+		"year": 1911,
+		"hint": "ethan frome wharton",
+		"vibe": "a sled, an elm tree, and a winter that never ends",
+		"mood": "a long frozen new england winter on a lonely farm; a forbidden love and a sled ride down an icy hill; bleak snow and regret"
+	},
+	{
+		"title": "Crime and Punishment",
+		"creator": "Fyodor Dostoevsky",
+		"year": 1866,
+		"hint": "crime and punishment dostoevsky",
+		"vibe": "a tiny hot room and a guilty fever",
+		"mood": "feverish and paranoid in a sweltering city; guilt keeping you awake at night; a small room and a heavy conscience"
+	},
+	{
+		"title": "The Stranger",
+		"creator": "Albert Camus",
+		"year": 1942,
+		"hint": "the stranger camus",
+		"vibe": "mother died today, or maybe yesterday",
+		"mood": "numb and indifferent under a blinding sun; a funeral you feel nothing at; a hot day at the beach that goes wrong"
+	},
+	{
+		"title": "Siddhartha",
+		"creator": "Hermann Hesse",
+		"year": 1922,
+		"hint": "siddhartha hesse",
+		"vibe": "the river is everywhere at once",
+		"mood": "sitting by a river finding peace; a long spiritual journey; calm acceptance after a restless life"
+	},
+	{
+		"title": "Walden",
+		"creator": "Henry David Thoreau",
+		"year": 1854,
+		"hint": "walden thoreau",
+		"vibe": "i went to the woods to live deliberately",
+		"mood": "living alone in a cabin by a pond; quiet seasons in the woods; simple life and solitude"
+	},
+	{
+		"title": "The Secret Garden",
+		"creator": "Frances Hodgson Burnett",
+		"year": 1911,
+		"hint": "the secret garden burnett",
+		"vibe": "a key, a wall, and roses coming back",
+		"mood": "finding a hidden garden in spring; a lonely child growing happy; things coming back to life after a grey winter"
+	},
+	{
+		"title": "Bonjour Tristesse",
+		"creator": "Françoise Sagan",
+		"year": 1954,
+		"hint": "bonjour tristesse sagan",
+		"vibe": "a villa on the riviera and a summer that turns",
+		"mood": "a lazy summer at a villa on the french riviera; sun, sea and teenage scheming; carefree joy that ends in sadness"
+	},
+	{
+		"title": "A Moveable Feast",
+		"creator": "Ernest Hemingway",
+		"year": 1964,
+		"hint": "a moveable feast hemingway",
+		"vibe": "paris was always worth it",
+		"mood": "being young and poor in paris; writing in cafes on rainy days; oysters, wine and friends"
+	},
+	{
+		"title": "Station Eleven",
+		"creator": "Emily St. John Mandel",
+		"year": 2014,
+		"hint": "station eleven mandel",
+		"vibe": "because survival is insufficient",
+		"mood": "after the world ends; a travelling theatre in the snow; nostalgia for airports and electricity; hope among ruins"
+	},
+	{
+		"title": "Klara and the Sun",
+		"creator": "Kazuo Ishiguro",
+		"year": 2021,
+		"hint": "klara and the sun ishiguro",
+		"vibe": "the sun's special nourishment",
+		"mood": "sunlight through a window and a sick child; quiet devotion and hope; a gentle, sad kind of love"
+	},
+	{
+		"title": "The Goldfinch",
+		"creator": "Donna Tartt",
+		"year": 2013,
+		"hint": "the goldfinch donna tartt",
+		"vibe": "a small bird chained to a perch",
+		"mood": "grief after losing your mother; an old antique shop in new york; a painting you carry through years of guilt"
+	},
+	{
+		"title": "The Perks of Being a Wallflower",
+		"creator": "Stephen Chbosky",
+		"year": 1999,
+		"hint": "the perks of being a wallflower",
+		"vibe": "and in that moment, we were infinite",
+		"mood": "driving through a tunnel with friends and the music up; an awkward first year of high school; finding your people"
+	},
+	{
+		"title": "Eleanor Oliphant Is Completely Fine",
+		"creator": "Gail Honeyman",
+		"year": 2017,
+		"hint": "eleanor oliphant is completely fine",
+		"vibe": "the same office, the same vodka, every weekend",
+		"mood": "lonely routine at an office job; weekends alone in a small flat; a kind coworker and slowly healing"
+	},
+	{
+		"title": "The Wind in the Willows",
+		"creator": "Kenneth Grahame",
+		"year": 1908,
+		"hint": "the wind in the willows grahame",
+		"vibe": "messing about in boats",
+		"mood": "a lazy day on the riverbank with friends; picnics and boats; a cosy burrow in the snowy woods"
+	},
+	{
+		"title": "Pachinko",
+		"creator": "Min Jin Lee",
+		"year": 2017,
+		"hint": "pachinko min jin lee",
+		"vibe": "history has failed us, but no matter",
+		"mood": "a family across generations and countries; sacrifice and survival; a mother's love and a long hard life"
+	},
+	{
+		"title": "Persuasion",
+		"creator": "Jane Austen",
+		"year": 1817,
+		"hint": "persuasion jane austen",
+		"vibe": "you pierce my soul",
+		"mood": "a second chance at love years later; autumn walks by the sea; quiet regret turning into hope"
+	},
+	{
+		"title": "When Breath Becomes Air",
+		"creator": "Paul Kalanithi",
+		"year": 2016,
+		"hint": "when breath becomes air kalanithi",
+		"vibe": "a young surgeon becomes the patient",
+		"mood": "a doctor facing his own death; hospital hallways and scans; what makes life meaningful at the end"
+	},
+	{
+		"title": "The Lion, the Witch and the Wardrobe",
+		"creator": "C. S. Lewis",
+		"year": 1950,
+		"hint": "the lion the witch and the wardrobe",
+		"vibe": "always winter and never christmas",
+		"mood": "stepping through a wardrobe into a snowy forest; a lamppost in the snow; turkish delight and the thaw of spring"
+	},
+	{
+		"title": "On Earth We're Briefly Gorgeous",
+		"creator": "Ocean Vuong",
+		"year": 2019,
+		"hint": "on earth were briefly gorgeous",
+		"vibe": "a letter to a mother who cannot read it",
+		"mood": "writing a letter to your mother; tobacco fields in summer and a first love; grief, tenderness and immigrant memory"
+	},
+	{
+		"title": "Conversations with Friends",
+		"creator": "Sally Rooney",
+		"year": 2017,
+		"hint": "conversations with friends rooney",
+		"vibe": "dublin, poetry readings, and an affair",
+		"mood": "long late-night conversations in dublin; an affair with an older man; a summer in france and clever, anxious feelings"
+	},
+	{
+		"title": "Beautiful World, Where Are You",
+		"creator": "Sally Rooney",
+		"year": 2021,
+		"hint": "beautiful world where are you rooney",
+		"vibe": "emails between two friends about the end of the world",
+		"mood": "two best friends writing long emails about love and the world ending; a seaside town in ireland; tender uncertainty in your thirties"
+	},
+	{
+		"title": "Kafka on the Shore",
+		"creator": "Haruki Murakami",
+		"year": 2002,
+		"hint": "key:/works/OL2625431W",
+		"vibe": "a runaway, a library, and fish falling from the sky",
+		"mood": "running away from home to a quiet library by the sea; dreams and talking cats; a strange lonely summer"
+	},
+	{
+		"title": "After Dark",
+		"creator": "Haruki Murakami",
+		"year": 2004,
+		"hint": "after dark murakami",
+		"vibe": "one night in tokyo, midnight to dawn",
+		"mood": "awake all night in tokyo; a denny's at midnight, a love hotel, a sleeping sister; the city between midnight and dawn"
+	},
+	{
+		"title": "Slouching Towards Bethlehem",
+		"creator": "Joan Didion",
+		"year": 1968,
+		"hint": "slouching towards bethlehem didion",
+		"vibe": "goodbye to all that",
+		"mood": "being young in new york and leaving it; california heat and santa ana winds; cool, sharp observation"
+	},
+	{
+		"title": "Bluets",
+		"creator": "Maggie Nelson",
+		"year": 2009,
+		"hint": "bluets maggie nelson",
+		"vibe": "suppose i were to begin by saying that i had fallen in love with a colour",
+		"mood": "heartbreak and an obsession with the colour blue; caring for a hurt friend; fragments written late at night"
+	},
+	{
+		"title": "My Year of Rest and Relaxation",
+		"creator": "Ottessa Moshfegh",
+		"year": 2018,
+		"hint": "my year of rest and relaxation",
+		"vibe": "sleeping through a year in manhattan",
+		"mood": "trying to sleep for a whole year in an apartment in new york; bodega coffee and old movies; numb, dark and funny"
+	},
+	{
+		"title": "Just Kids",
+		"creator": "Patti Smith",
+		"year": 2010,
+		"hint": "just kids patti smith",
+		"vibe": "two young artists at the chelsea hotel",
+		"mood": "being young, poor and in love with art in new york; the chelsea hotel; friendship that lasts until death"
+	},
+	{
+		"title": "The Lonely City",
+		"creator": "Olivia Laing",
+		"year": 2016,
+		"hint": "the lonely city olivia laing",
+		"vibe": "hopper, warhol, and a sublet in new york",
+		"mood": "alone in a big city after a breakup; looking at lonely paintings; late nights on the internet"
+	},
+	{
+		"title": "Outline",
+		"creator": "Rachel Cusk",
+		"year": 2014,
+		"hint": "outline rachel cusk",
+		"vibe": "a summer in athens listening to strangers",
+		"mood": "teaching a writing course in hot athens; listening to strangers tell their lives; quiet after a divorce"
+	},
+	{
+		"title": "Dept. of Speculation",
+		"creator": "Jenny Offill",
+		"year": 2014,
+		"hint": "dept of speculation offill",
+		"vibe": "a marriage told in fragments",
+		"mood": "a marriage cracking in a small brooklyn apartment; a crying baby at 3am; clever, funny, wounded fragments"
+	},
+	{
+		"title": "My Brilliant Friend",
+		"creator": "Elena Ferrante",
+		"year": 2011,
+		"hint": "my brilliant friend ferrante",
+		"vibe": "two girls in a naples neighbourhood",
+		"mood": "a lifelong, jealous friendship between two girls; a poor hot neighbourhood in naples; summers on ischia"
+	},
+	{
+		"title": "The Vegetarian",
+		"creator": "Han Kang",
+		"year": 2007,
+		"hint": "the vegetarian han kang",
+		"vibe": "a woman who wants to become a tree",
+		"mood": "a quiet woman who stops eating meat after a dream; a family that turns on her; eerie, violent and beautiful"
+	},
+	{
+		"title": "The Memory Police",
+		"creator": "Yoko Ogawa",
+		"year": 1994,
+		"hint": "the memory police ogawa",
+		"vibe": "on the island, things disappear",
+		"mood": "an island where things vanish one by one; hiding a friend; a quiet, snowy, sad calm"
+	},
+	{
+		"title": "Convenience Store Woman",
+		"creator": "Sayaka Murata",
+		"year": 2016,
+		"hint": "convenience store woman murata",
+		"vibe": "irasshaimase",
+		"mood": "working at a convenience store under bright lights for years; feeling normal only at work; odd, funny and lonely"
+	},
+	{
+		"title": "All the Lovers in the Night",
+		"creator": "Mieko Kawakami",
+		"year": 2011,
+		"hint": "key:/works/OL24800864W",
+		"vibe": "counting the lights on christmas eve",
+		"mood": "a lonely proofreader in tokyo walking at night to count the lights; a shy friendship with an older man; quiet longing"
+	},
+	{
+		"title": "Housekeeping",
+		"creator": "Marilynne Robinson",
+		"year": 1980,
+		"hint": "housekeeping marilynne robinson",
+		"vibe": "a flooded house by a lake",
+		"mood": "two sisters raised by a drifting aunt in a cold lake town; floods, trains and loss; dreamy, lonely beauty"
+	},
+	{
+		"title": "The Years",
+		"creator": "Annie Ernaux",
+		"year": 2008,
+		"hint": "the years annie ernaux",
+		"vibe": "a whole life in family dinners and photographs",
+		"mood": "looking at old photos and family dinners across decades; time passing through a whole life; collective memory"
+	},
+	{
+		"title": "The God of Small Things",
+		"creator": "Arundhati Roy",
+		"year": 1997,
+		"hint": "the god of small things roy",
+		"vibe": "twins, a river, and the love laws",
+		"mood": "a humid monsoon in kerala; twins and a forbidden love by the river; childhood and a family tragedy"
+	}
+]

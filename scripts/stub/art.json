@@ -1,0 +1,479 @@
+[
+	{
+		"title": "Wheat Field with Cypresses",
+		"creator": "Vincent van Gogh",
+		"year": 1889,
+		"hint": "Wheat Field with Cypresses",
+		"match": "gogh",
+		"vibe": "a windy summer field under rolling clouds",
+		"mood": "a hot windy summer day in the countryside; wheat moving like the sea; restless joy under a big sky"
+	},
+	{
+		"title": "The Harvesters",
+		"creator": "Pieter Bruegel the Elder",
+		"year": 1565,
+		"hint": "The Harvesters Bruegel",
+		"match": "bruegel",
+		"vibe": "lunch in the shade of a pear tree at harvest",
+		"mood": "a long hot summer afternoon at work in the fields; lunch with friends in the shade; golden, sleepy and communal"
+	},
+	{
+		"title": "Under the Wave off Kanagawa",
+		"creator": "Katsushika Hokusai",
+		"year": 1831,
+		"hint": "Great Wave Kanagawa",
+		"match": "hokusai",
+		"vibe": "a wave with fingers and a small mountain",
+		"mood": "a storm at sea and tiny boats; feeling overwhelmed by something huge; courage in the face of nature"
+	},
+	{
+		"title": "Young Woman with a Water Pitcher",
+		"creator": "Johannes Vermeer",
+		"year": 1662,
+		"hint": "Young Woman with a Water Pitcher",
+		"match": "vermeer",
+		"vibe": "morning light on a blue-and-white room",
+		"mood": "a calm morning in a quiet room; soft daylight on the table; a small everyday moment of peace"
+	},
+	{
+		"title": "A Maid Asleep",
+		"creator": "Johannes Vermeer",
+		"year": 1657,
+		"hint": "A Maid Asleep",
+		"match": "vermeer",
+		"vibe": "a half-open door and a tired afternoon",
+		"mood": "dozing at the table on a quiet afternoon; an empty room behind an open door; stillness and daydreams"
+	},
+	{
+		"title": "The Penitent Magdalen",
+		"creator": "Georges de La Tour",
+		"year": 1640,
+		"hint": "Penitent Magdalen La Tour",
+		"match": "la tour",
+		"vibe": "a candle, a mirror, and a skull",
+		"mood": "alone at night by a single candle; thinking about life and death; quiet grief and reflection in the dark"
+	},
+	{
+		"title": "Two Men Contemplating the Moon",
+		"creator": "Caspar David Friedrich",
+		"year": 1825,
+		"hint": "Two Men Contemplating the Moon",
+		"match": "friedrich",
+		"vibe": "two friends and a crescent moon through bare trees",
+		"mood": "a moonlit walk in the woods with a friend; standing in silence under the moon; awe and melancholy at night"
+	},
+	{
+		"title": "Moonlight, Strandgade 30",
+		"creator": "Vilhelm Hammershøi",
+		"year": 1900,
+		"hint": "Moonlight, Strandgade 30",
+		"match": "hammersh",
+		"vibe": "an empty room, moonlight on the floor",
+		"mood": "an empty quiet apartment at night; moonlight on the floorboards; loneliness, silence and calm"
+	},
+	{
+		"title": "The Gulf Stream",
+		"creator": "Winslow Homer",
+		"year": 1899,
+		"hint": "The Gulf Stream Homer",
+		"match": "homer",
+		"vibe": "a broken boat, sharks, and a waterspout",
+		"mood": "stranded and alone in a storm at sea; danger all around; waiting to be rescued"
+	},
+	{
+		"title": "Northeaster",
+		"creator": "Winslow Homer",
+		"year": 1895,
+		"hint": "Northeaster Homer",
+		"match": "homer",
+		"vibe": "spray exploding on the rocks",
+		"mood": "a wild storm crashing on a rocky coast; wind and spray; raw power of the sea on a grey day"
+	},
+	{
+		"title": "Moonlight, Wood Island Light",
+		"creator": "Winslow Homer",
+		"year": 1894,
+		"hint": "Moonlight, Wood Island Light",
+		"match": "homer",
+		"vibe": "moonlit surf and a distant lighthouse",
+		"mood": "the sea at night under the moon; waves on the rocks and a far lighthouse; mysterious calm"
+	},
+	{
+		"title": "The Calm Sea",
+		"creator": "Gustave Courbet",
+		"year": 1869,
+		"hint": "The Calm Sea Courbet",
+		"match": "courbet",
+		"vibe": "a flat sea, two boats, and nothing happening",
+		"mood": "a beach at dawn with nobody around; flat calm water and a pale sky; stillness and a clear head"
+	},
+	{
+		"title": "Snap the Whip",
+		"creator": "Winslow Homer",
+		"year": 1872,
+		"hint": "Snap the Whip",
+		"match": "homer",
+		"vibe": "barefoot boys in a line outside the schoolhouse",
+		"mood": "the last day of school and summer starting; kids running barefoot in a field; wild carefree childhood"
+	},
+	{
+		"title": "In the Generalife",
+		"creator": "John Singer Sargent",
+		"year": 1912,
+		"hint": "In the Generalife",
+		"match": "sargent",
+		"vibe": "three women sketching in a sunlit garden",
+		"mood": "a slow hot afternoon in a spanish garden with friends; sketching in the shade; lazy holiday chatter"
+	},
+	{
+		"title": "The Boulevard Montmartre on a Winter Morning",
+		"creator": "Camille Pissarro",
+		"year": 1897,
+		"hint": "Boulevard Montmartre on a Winter Morning",
+		"match": "pissarro",
+		"vibe": "a busy paris street from a hotel window",
+		"mood": "looking down on a busy city street on a grey winter morning; carriages, crowds and cold air; urban bustle"
+	},
+	{
+		"title": "The Dance Class",
+		"creator": "Edgar Degas",
+		"year": 1874,
+		"hint": "The Dance Class Degas",
+		"match": "degas",
+		"vibe": "tutus, waiting, and an old teacher with a cane",
+		"mood": "a ballet class waiting for their turn; nervous, bored and dreamy; practice in a big bright room"
+	},
+	{
+		"title": "Madame X (Madame Pierre Gautreau)",
+		"creator": "John Singer Sargent",
+		"year": 1884,
+		"hint": "Madame X Sargent",
+		"match": "sargent",
+		"vibe": "a black dress and a scandal",
+		"mood": "dressed in black for a glamorous evening; confident, cold and elegant; the night everyone talked about"
+	},
+	{
+		"title": "Aristotle with a Bust of Homer",
+		"creator": "Rembrandt van Rijn",
+		"year": 1653,
+		"hint": "Aristotle with a Bust of Homer",
+		"match": "rembrandt",
+		"vibe": "a gold chain and a hand on a marble head",
+		"mood": "deep in thought in a dark study; golden lamplight; wisdom, doubt and old age"
+	},
+	{
+		"title": "The Death of Socrates",
+		"creator": "Jacques-Louis David",
+		"year": 1787,
+		"hint": "The Death of Socrates",
+		"match": "david",
+		"vibe": "one finger raised, friends in despair",
+		"mood": "a friend facing death calmly while everyone grieves; a prison room of sorrow; courage and loss"
+	},
+	{
+		"title": "The Card Players",
+		"creator": "Paul Cézanne",
+		"year": 1890,
+		"hint": "The Card Players Cezanne",
+		"match": "zanne",
+		"vibe": "pipes, cards, and nobody talking",
+		"mood": "a quiet game of cards with old friends in a village cafe; focus and silence; ordinary afternoon"
+	},
+	{
+		"title": "Circus Sideshow (Parade de cirque)",
+		"creator": "Georges Seurat",
+		"year": 1888,
+		"hint": "Circus Sideshow Seurat",
+		"match": "seurat",
+		"vibe": "gaslight, a trombone, and a crowd waiting",
+		"mood": "a circus show at night under gaslights; a mysterious crowd; eerie festival in the dark"
+	},
+	{
+		"title": "The Musicians",
+		"creator": "Caravaggio",
+		"year": 1597,
+		"hint": "The Musicians Caravaggio",
+		"match": "caravaggio",
+		"vibe": "young players tuning up, cheeks flushed",
+		"mood": "friends playing music together in a small room; sensual, warm and intimate; practice before a performance"
+	},
+	{
+		"title": "View of Toledo",
+		"creator": "El Greco",
+		"year": 1599,
+		"hint": "View of Toledo",
+		"match": "greco",
+		"vibe": "a green city under a black and silver sky",
+		"mood": "a storm about to break over a city on a hill; dramatic dark clouds and eerie light; a dark and stormy afternoon"
+	},
+	{
+		"title": "Whalers",
+		"creator": "J. M. W. Turner",
+		"year": 1845,
+		"hint": "Whalers Turner",
+		"match": "turner",
+		"vibe": "a boat lost in golden mist",
+		"mood": "boats in a stormy golden haze at sea; everything dissolving into light and spray; chaos and beauty"
+	},
+	{
+		"title": "The Oxbow",
+		"creator": "Thomas Cole",
+		"year": 1836,
+		"hint": "The Oxbow Cole",
+		"match": "cole",
+		"vibe": "a storm moving off the river valley",
+		"mood": "a thunderstorm clearing over a green river valley; standing on a hill after the rain; relief and wide views"
+	},
+	{
+		"title": "Heart of the Andes",
+		"creator": "Frederic Edwin Church",
+		"year": 1859,
+		"hint": "Heart of the Andes",
+		"match": "church",
+		"vibe": "a waterfall, a cross, and snow peaks",
+		"mood": "an epic mountain landscape in the tropics; waterfalls and distant snowy peaks; wonder at the size of the world"
+	},
+	{
+		"title": "The Rocky Mountains, Lander's Peak",
+		"creator": "Albert Bierstadt",
+		"year": 1863,
+		"hint": "Rocky Mountains Lander's Peak",
+		"match": "bierstadt",
+		"vibe": "sunlit peaks above a camp by the lake",
+		"mood": "a camp by a lake under huge mountains; sunlight on the peaks; the promise of the wild west"
+	},
+	{
+		"title": "Island of the Dead",
+		"creator": "Arnold Böcklin",
+		"year": 1880,
+		"hint": "Island of the Dead",
+		"match": "cklin",
+		"vibe": "a white figure rowing toward the cypresses",
+		"mood": "rowing toward a silent island of cypress trees; a funeral at dusk; death, grief and stillness"
+	},
+	{
+		"title": "The Horse Fair",
+		"creator": "Rosa Bonheur",
+		"year": 1853,
+		"hint": "The Horse Fair",
+		"match": "bonheur",
+		"vibe": "dust and thundering horses",
+		"mood": "a busy loud fair with horses rearing; dust and energy; the excitement of a crowd"
+	},
+	{
+		"title": "Max Schmitt in a Single Scull",
+		"creator": "Thomas Eakins",
+		"year": 1871,
+		"hint": "Max Schmitt in a Single Scull",
+		"match": "eakins",
+		"vibe": "a rower resting on a still autumn river",
+		"mood": "rowing on a calm river on a clear autumn afternoon; still water and long shadows; quiet and focused"
+	},
+	{
+		"title": "Woman Ironing",
+		"creator": "Edgar Degas",
+		"year": 1873,
+		"hint": "Woman Ironing Degas",
+		"match": "degas",
+		"vibe": "white shirts, steam, and a long shift",
+		"mood": "doing laundry late at night; the steam and warmth of ironing; tired, quiet, ordinary work"
+	},
+	{
+		"title": "Corridor in the Asylum",
+		"creator": "Vincent van Gogh",
+		"year": 1889,
+		"hint": "Corridor in the Asylum",
+		"match": "gogh",
+		"vibe": "a long corridor of arches and one small figure",
+		"mood": "walking down a long hospital hallway alone; waiting and worrying; institutional light and quiet fear"
+	},
+	{
+		"title": "Cypresses",
+		"creator": "Vincent van Gogh",
+		"year": 1889,
+		"hint": "Cypresses Van Gogh",
+		"match": "gogh",
+		"vibe": "dark flames of green against the blue",
+		"mood": "a windy afternoon in the south of france; dark trees twisting in the heat; restless energy"
+	},
+	{
+		"title": "Irises",
+		"creator": "Vincent van Gogh",
+		"year": 1890,
+		"hint": "Irises Van Gogh",
+		"match": "gogh",
+		"vibe": "a bouquet of violet on yellow",
+		"mood": "fresh flowers on the table in spring; bright colour and new life; hope during a hard time"
+	},
+	{
+		"title": "Self-Portrait with a Straw Hat",
+		"creator": "Vincent van Gogh",
+		"year": 1887,
+		"hint": "Self-Portrait with a Straw Hat",
+		"match": "gogh",
+		"vibe": "a straw hat and an intense stare",
+		"mood": "a summer day in the city as a struggling artist; intense, lonely and bright; looking at yourself honestly"
+	},
+	{
+		"title": "First Steps, after Millet",
+		"creator": "Vincent van Gogh",
+		"year": 1890,
+		"hint": "First Steps, after Millet",
+		"match": "gogh",
+		"vibe": "a father kneels, a baby totters forward",
+		"mood": "a baby taking first steps toward her father in the garden; simple family happiness; tender pride"
+	},
+	{
+		"title": "Haystacks: Autumn",
+		"creator": "Jean-François Millet",
+		"year": 1874,
+		"hint": "Haystacks Autumn Millet",
+		"match": "millet",
+		"vibe": "sheep grazing by haystacks under a grey sky",
+		"mood": "a quiet autumn day on a farm; haystacks and sheep under grey clouds; the end of harvest"
+	},
+	{
+		"title": "The Love Letter",
+		"creator": "Jean Honoré Fragonard",
+		"year": 1770,
+		"hint": "The Love Letter Fragonard",
+		"match": "fragonard",
+		"vibe": "a secret glance over a bouquet",
+		"mood": "receiving a secret love note; a coy flirtatious smile; blue silk and flowers in a pretty room"
+	},
+	{
+		"title": "Mezzetin",
+		"creator": "Antoine Watteau",
+		"year": 1719,
+		"hint": "Mezzetin Watteau",
+		"match": "watteau",
+		"vibe": "a lovesick guitar player in a garden",
+		"mood": "singing a love song nobody will answer; unrequited love at dusk in a garden; wistful and theatrical"
+	},
+	{
+		"title": "Soap Bubbles",
+		"creator": "Jean Siméon Chardin",
+		"year": 1734,
+		"hint": "Soap Bubbles Chardin",
+		"match": "chardin",
+		"vibe": "one bubble, about to burst",
+		"mood": "a lazy afternoon blowing bubbles from a window; a child watching; fragile passing moments"
+	},
+	{
+		"title": "Madame Georges Charpentier and Her Children",
+		"creator": "Auguste Renoir",
+		"year": 1878,
+		"hint": "Madame Georges Charpentier and Her Children",
+		"match": "renoir",
+		"vibe": "a black dress, a big dog, and two little girls",
+		"mood": "a mother at home with her children in a rich warm living room; family comfort and elegance"
+	},
+	{
+		"title": "By the Seashore",
+		"creator": "Auguste Renoir",
+		"year": 1883,
+		"hint": "By the Seashore Renoir",
+		"match": "renoir",
+		"vibe": "knitting in a wicker chair by the cliffs",
+		"mood": "a calm afternoon knitting by the sea; soft wind and blue water; relaxed seaside holiday"
+	},
+	{
+		"title": "Boating",
+		"creator": "Édouard Manet",
+		"year": 1874,
+		"hint": "Boating Manet",
+		"match": "manet",
+		"vibe": "a straw hat, a blue river, a lazy afternoon",
+		"mood": "a lazy summer afternoon in a boat with someone; bright blue water and white clothes; relaxed flirtation"
+	},
+	{
+		"title": "The Monet Family in Their Garden at Argenteuil",
+		"creator": "Édouard Manet",
+		"year": 1874,
+		"hint": "Monet Family in Their Garden at Argenteuil",
+		"match": "manet",
+		"vibe": "a family lounging in the summer grass",
+		"mood": "a family relaxing in the garden on a summer day; chickens and flowers; easy domestic happiness"
+	},
+	{
+		"title": "Dancers, Pink and Green",
+		"creator": "Edgar Degas",
+		"year": 1890,
+		"hint": "Dancers, Pink and Green",
+		"match": "degas",
+		"vibe": "tutus in the wings, waiting to go on",
+		"mood": "nervous backstage before a performance; bright stage lights and the crowd waiting; excitement and nerves"
+	},
+	{
+		"title": "Sudden Shower over Shin-Ōhashi Bridge and Atake",
+		"creator": "Utagawa Hiroshige",
+		"year": 1857,
+		"hint": "Sudden Shower over Shin-Ohashi Bridge",
+		"match": "hiroshige",
+		"vibe": "people running across a bridge in slanted rain",
+		"mood": "caught in a sudden rain shower crossing a bridge; people rushing with umbrellas; a grey rainy afternoon in the city"
+	},
+	{
+		"title": "Evening Snow at Kanbara",
+		"creator": "Utagawa Hiroshige",
+		"year": 1833,
+		"hint": "Evening Snow at Kanbara",
+		"match": "hiroshige",
+		"vibe": "a village buried in soft evening snow",
+		"mood": "a silent snowy evening in a small village; people walking bent through the snow; hush and cold"
+	},
+	{
+		"title": "Irises at Yatsuhashi",
+		"creator": "Ogata Kōrin",
+		"year": 1710,
+		"hint": "Irises at Yatsuhashi",
+		"match": "rin",
+		"vibe": "irises on gold, a zigzag bridge",
+		"mood": "a spring garden of blue irises and a wooden bridge; elegant calm; gold light and memory of travel"
+	},
+	{
+		"title": "Moonlight Marine",
+		"creator": "Albert Pinkham Ryder",
+		"year": 1890,
+		"hint": "Moonlight Marine",
+		"match": "ryder",
+		"vibe": "a dark boat, a glowing cloud",
+		"mood": "a small boat alone on the sea late at night under the moon; moving quietly through the dark after midnight; lonely and mysterious"
+	},
+	{
+		"title": "The Repast of the Lion",
+		"creator": "Henri Rousseau",
+		"year": 1907,
+		"hint": "The Repast of the Lion",
+		"match": "rousseau",
+		"vibe": "a lion feasting in a dreamlike jungle",
+		"mood": "a lush strange jungle; wild, dreamlike and a little dangerous; a vivid dream"
+	},
+	{
+		"title": "Study for A Sunday on La Grande Jatte",
+		"creator": "Georges Seurat",
+		"year": 1884,
+		"hint": "Study for A Sunday on La Grande Jatte",
+		"match": "seurat",
+		"vibe": "parasols and dogs on a sunday by the river",
+		"mood": "a sunny sunday in the park by the river; people strolling and resting in the shade; a calm summer weekend"
+	},
+	{
+		"title": "Joan of Arc",
+		"creator": "Jules Bastien-Lepage",
+		"year": 1879,
+		"hint": "Joan of Arc Bastien-Lepage",
+		"match": "bastien",
+		"vibe": "a farm girl hearing voices in the garden",
+		"mood": "a moment of calling in a quiet overgrown garden; faith, fear and destiny; a young person about to change everything"
+	},
+	{
+		"title": "Autumn Oaks",
+		"creator": "George Inness",
+		"year": 1878,
+		"hint": "Autumn Oaks Inness",
+		"match": "inness",
+		"vibe": "orange trees and a lazy pasture",
+		"mood": "a golden autumn afternoon in the country; oak trees turning orange; peaceful farmland"
+	}
+]

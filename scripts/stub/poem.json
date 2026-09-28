@@ -1,0 +1,418 @@
+[
+	{
+		"title": "To Autumn",
+		"creator": "John Keats",
+		"year": 1819,
+		"hint": "To Autumn",
+		"vibe": "season of mists and mellow fruitfulness",
+		"mood": "a golden autumn afternoon; orchards heavy with apples; the soft sadness of the year ending"
+	},
+	{
+		"title": "In Drear-Nighted December",
+		"creator": "John Keats",
+		"year": 1817,
+		"hint": "In Drear-Nighted December",
+		"vibe": "the tree forgets its green felicity",
+		"mood": "a freezing december night and bare trees; wishing you could forget a sorrow the way winter forgets summer"
+	},
+	{
+		"title": "Ode on a Grecian Urn",
+		"creator": "John Keats",
+		"year": 1819,
+		"hint": "Ode on a Grecian Urn",
+		"vibe": "beauty is truth, truth beauty",
+		"mood": "standing in a quiet museum in front of something ancient; a moment of love frozen forever; stillness and awe"
+	},
+	{
+		"title": "Bright Star",
+		"creator": "John Keats",
+		"year": 1819,
+		"hint": "Bright Star, Would I Were Steadfast",
+		"vibe": "pillowed upon my fair love's ripening breast",
+		"mood": "lying next to the one you love wanting the moment to last forever; a star over the sea; tender longing"
+	},
+	{
+		"title": "I Wandered Lonely as a Cloud",
+		"creator": "William Wordsworth",
+		"year": 1807,
+		"hint": "I Wandered Lonely As a Cloud",
+		"vibe": "a crowd of golden daffodils",
+		"mood": "a spring walk by the lake full of daffodils; remembering it later lying on the couch; quiet joy"
+	},
+	{
+		"title": "Lines Written in Early Spring",
+		"creator": "William Wordsworth",
+		"year": 1798,
+		"hint": "Lines Written in Early Spring",
+		"vibe": "a thousand blended notes in a grove",
+		"mood": "sitting in a green wood on the first warm day of spring; birds and flowers everywhere; happy and a little sad about people"
+	},
+	{
+		"title": "Ozymandias",
+		"creator": "Percy Bysshe Shelley",
+		"year": 1818,
+		"hint": "Ozymandias",
+		"vibe": "look on my works and despair",
+		"mood": "ruins in an empty desert; everything we build falls away; humbling vastness and time"
+	},
+	{
+		"title": "Ode to the West Wind",
+		"creator": "Percy Bysshe Shelley",
+		"year": 1819,
+		"hint": "Ode to the West Wind",
+		"vibe": "if winter comes, can spring be far behind",
+		"mood": "a wild autumn storm tearing the leaves from the trees; wanting to be swept up and changed; fierce hope"
+	},
+	{
+		"title": "The Tyger",
+		"creator": "William Blake",
+		"year": 1794,
+		"hint": "The Tyger",
+		"vibe": "burning bright in the forests of the night",
+		"mood": "awe and fear in a dark forest at night; something fierce and beautiful; the forge of creation"
+	},
+	{
+		"title": "London",
+		"creator": "William Blake",
+		"year": 1794,
+		"hint": "London",
+		"vibe": "marks of weakness, marks of woe",
+		"mood": "walking through a grim city at midnight; seeing sadness in every face; anger at a broken world"
+	},
+	{
+		"title": "Infant Joy",
+		"creator": "William Blake",
+		"year": 1789,
+		"hint": "Infant Joy",
+		"vibe": "i have no name, i am but two days old",
+		"mood": "holding a newborn baby for the first time; a tiny happy face; pure new joy"
+	},
+	{
+		"title": "Sonnet 18",
+		"creator": "William Shakespeare",
+		"year": 1609,
+		"hint": "Sonnet 18: Shall I compare thee",
+		"vibe": "shall i compare thee to a summer's day",
+		"mood": "loving someone on a perfect summer day; wanting to keep them forever; warm and sure romance"
+	},
+	{
+		"title": "Sonnet 73",
+		"creator": "William Shakespeare",
+		"year": 1609,
+		"hint": "Sonnet 73: That time of year",
+		"vibe": "bare ruined choirs where late the sweet birds sang",
+		"mood": "late autumn and growing old; yellow leaves and the last embers of a fire; loving something because it won't last"
+	},
+	{
+		"title": "She Walks in Beauty",
+		"creator": "Lord Byron",
+		"year": 1814,
+		"hint": "She Walks in Beauty",
+		"vibe": "like the night of cloudless climes and starry skies",
+		"mood": "seeing someone beautiful at an evening party; starlight and dark hair; quiet admiration"
+	},
+	{
+		"title": "So, We'll Go No More a-Roving",
+		"creator": "Lord Byron",
+		"year": 1817,
+		"hint": "So We'll Go No More a-Roving",
+		"vibe": "so late into the night",
+		"mood": "the end of youthful nights out; walking home under the moon, tired; accepting that some things are over"
+	},
+	{
+		"title": "In Memoriam: Dark House",
+		"creator": "Alfred, Lord Tennyson",
+		"year": 1850,
+		"hint": "Dark house, by which once more I stand",
+		"vibe": "on the bald street breaks the blank day",
+		"mood": "standing outside the house of a friend who died, at dawn in the rain; grief that makes the city empty"
+	},
+	{
+		"title": "In Memoriam: Again at Christmas",
+		"creator": "Alfred, Lord Tennyson",
+		"year": 1850,
+		"hint": "Again at Christmas did we weave",
+		"vibe": "the holly round the christmas hearth",
+		"mood": "the first christmas after a death in the family; snow falling and games by the fire; missing someone at the table"
+	},
+	{
+		"title": "In Memoriam: When on My Bed the Moonlight Falls",
+		"creator": "Alfred, Lord Tennyson",
+		"year": 1850,
+		"hint": "When on my bed the moonlight fall",
+		"vibe": "a silver light on the name on the wall",
+		"mood": "lying awake at night with moonlight on the bed, thinking of someone who is gone; quiet sleepless grief"
+	},
+	{
+		"title": "A Birthday",
+		"creator": "Christina Rossetti",
+		"year": 1862,
+		"hint": "A Birthday",
+		"vibe": "my heart is like a singing bird",
+		"mood": "overflowing happiness because love has come; a spring morning; a heart ready to burst"
+	},
+	{
+		"title": "Winter: My Secret",
+		"creator": "Christina Rossetti",
+		"year": 1862,
+		"hint": "Winter: My Secret",
+		"vibe": "i wear my mask for warmth",
+		"mood": "a playful snowy day wrapped in shawls and scarves; keeping a secret with a smile; cosy, teasing winter"
+	},
+	{
+		"title": "Spring Quiet",
+		"creator": "Christina Rossetti",
+		"year": 1862,
+		"hint": "Spring Quiet",
+		"vibe": "gone were but the winter, come were but the spring",
+		"mood": "longing for a quiet green place in spring; a thrush singing in the hedge; wanting to be left alone in peace"
+	},
+	{
+		"title": "Hope Is the Thing with Feathers",
+		"creator": "Emily Dickinson",
+		"year": 1891,
+		"hint": "\"Hope\" is the thing with feathers",
+		"vibe": "and sings the tune without the words",
+		"mood": "a small stubborn hope during a hard time; a bird singing in a storm; quiet resilience"
+	},
+	{
+		"title": "I Felt a Funeral, in My Brain",
+		"creator": "Emily Dickinson",
+		"year": 1896,
+		"hint": "I felt a Funeral, in my Brain",
+		"vibe": "and then a plank in reason broke",
+		"mood": "anxiety and panic crushing your mind; a funeral in your head; falling apart inside"
+	},
+	{
+		"title": "We Grow Accustomed to the Dark",
+		"creator": "Emily Dickinson",
+		"year": 1935,
+		"hint": "We grow accustomed to the Dark",
+		"vibe": "when light is put away",
+		"mood": "walking home in the dark after saying goodbye; eyes slowly adjusting to the night; learning to live with loss"
+	},
+	{
+		"title": "I Started Early, Took My Dog",
+		"creator": "Emily Dickinson",
+		"year": 1891,
+		"hint": "I started Early",
+		"vibe": "the mermaids in the basement came out to look at me",
+		"mood": "a walk on the beach at dawn with the dog; the tide coming in around your shoes; strange and dreamy by the sea"
+	},
+	{
+		"title": "I'll Tell You How the Sun Rose",
+		"creator": "Emily Dickinson",
+		"year": 1890,
+		"hint": "I'll tell you how the Sun rose",
+		"vibe": "a ribbon at a time",
+		"mood": "watching the sunrise ribbon by ribbon; waking early in the country; the day slowly beginning and ending"
+	},
+	{
+		"title": "My Life Closed Twice Before Its Close",
+		"creator": "Emily Dickinson",
+		"year": 1896,
+		"hint": "My life closed twice before its close",
+		"vibe": "parting is all we know of heaven",
+		"mood": "losing someone again after losing someone before; grief that you know too well; parting and heaven"
+	},
+	{
+		"title": "Song of the Open Road",
+		"creator": "Walt Whitman",
+		"year": 1856,
+		"hint": "Song of the Open Road",
+		"vibe": "afoot and light-hearted i take to the open road",
+		"mood": "setting out on a road trip; healthy, free and happy; the whole world ahead"
+	},
+	{
+		"title": "Annabel Lee",
+		"creator": "Edgar Allan Poe",
+		"year": 1849,
+		"hint": "Annabel Lee",
+		"vibe": "in a kingdom by the sea",
+		"mood": "grieving a young love who died; lying by her tomb by the sea at night; haunted devotion"
+	},
+	{
+		"title": "The Raven",
+		"creator": "Edgar Allan Poe",
+		"year": 1845,
+		"hint": "The Raven",
+		"vibe": "once upon a midnight dreary",
+		"mood": "a dark and stormy midnight alone with old books; grief for a lost love; a tapping at the door"
+	},
+	{
+		"title": "A Dream Within a Dream",
+		"creator": "Edgar Allan Poe",
+		"year": 1849,
+		"hint": "A Dream Within a Dream",
+		"vibe": "grains of golden sand slipping through my fingers",
+		"mood": "standing on a beach at night feeling everything slip away; unreal, sad and dreamlike"
+	},
+	{
+		"title": "A Red, Red Rose",
+		"creator": "Robert Burns",
+		"year": 1794,
+		"hint": "A Red, Red Rose",
+		"vibe": "till a' the seas gang dry",
+		"mood": "a sweet promise of love before going far away; june roses and a song; devotion"
+	},
+	{
+		"title": "Pied Beauty",
+		"creator": "Gerard Manley Hopkins",
+		"year": 1877,
+		"hint": "Pied Beauty",
+		"vibe": "glory be to god for dappled things",
+		"mood": "delight in everything speckled and strange; a bright spring day in the country; gratitude"
+	},
+	{
+		"title": "Spring and Fall",
+		"creator": "Gerard Manley Hopkins",
+		"year": 1880,
+		"hint": "Spring and Fall",
+		"vibe": "margaret, are you grieving over goldengrove unleaving",
+		"mood": "a child crying at falling autumn leaves; the first sense that everything dies; tender sadness"
+	},
+	{
+		"title": "The Rainy Day",
+		"creator": "Henry Wadsworth Longfellow",
+		"year": 1842,
+		"hint": "The Rainy Day",
+		"vibe": "into each life some rain must fall",
+		"mood": "a cold dark rainy day and a heavy heart; the wind and the vine; patience and comfort"
+	},
+	{
+		"title": "Christmas Bells",
+		"creator": "Henry Wadsworth Longfellow",
+		"year": 1863,
+		"hint": "Christmas Bells",
+		"vibe": "peace on earth, good-will to men",
+		"mood": "church bells on christmas day in a hard year; despair and then hope; a snowy christmas morning"
+	},
+	{
+		"title": "The Children's Hour",
+		"creator": "Henry Wadsworth Longfellow",
+		"year": 1860,
+		"hint": "The Children's Hour",
+		"vibe": "between the dark and the daylight",
+		"mood": "the evening hour at home when the kids run in to play; a warm family house at dusk; love and laughter"
+	},
+	{
+		"title": "My Lost Youth",
+		"creator": "Henry Wadsworth Longfellow",
+		"year": 1855,
+		"hint": "My Lost Youth",
+		"vibe": "the thoughts of youth are long, long thoughts",
+		"mood": "walking through your hometown years later; nostalgia for the harbour and the friends you had; bittersweet memory"
+	},
+	{
+		"title": "Woods in Winter",
+		"creator": "Henry Wadsworth Longfellow",
+		"year": 1839,
+		"hint": "Woods in Winter",
+		"vibe": "the hoarse wind through the leafless trees",
+		"mood": "a lonely walk through snowy woods in winter; the cold wind and frozen streams; remembering summer"
+	},
+	{
+		"title": "Adlestrop",
+		"creator": "Edward Thomas",
+		"year": 1917,
+		"hint": "Adlestrop",
+		"vibe": "the express-train drew up there unwontedly",
+		"mood": "a train stopping at a quiet country station on a hot june afternoon; birdsong and nothing happening; a perfect still moment"
+	},
+	{
+		"title": "Rain",
+		"creator": "Edward Thomas",
+		"year": 1916,
+		"hint": "Rain",
+		"vibe": "rain, midnight rain, nothing but the wild rain",
+		"mood": "lying awake alone listening to the rain at midnight; thinking of the dead and the lonely; bleak rainy night"
+	},
+	{
+		"title": "Lights Out",
+		"creator": "Edward Thomas",
+		"year": 1917,
+		"hint": "Lights Out",
+		"vibe": "i have come to the borders of sleep",
+		"mood": "drifting off to sleep at the end of everything; a dark forest you must enter alone; calm surrender"
+	},
+	{
+		"title": "The Owl",
+		"creator": "Edward Thomas",
+		"year": 1917,
+		"hint": "The Owl",
+		"vibe": "downhill i came, hungry, and yet not starved",
+		"mood": "coming in from a freezing night to a warm inn with food and fire; hearing an owl and thinking of those still outside"
+	},
+	{
+		"title": "The Night Journey",
+		"creator": "Rupert Brooke",
+		"year": 1911,
+		"hint": "The Night Journey",
+		"vibe": "hands and lit faces eddy to a line",
+		"mood": "riding home through the dark at night with the window open and lights flashing past; a train or a car rushing through the city at 2am; restless and alive"
+	},
+	{
+		"title": "Picture-Books in Winter",
+		"creator": "Robert Louis Stevenson",
+		"year": 1885,
+		"hint": "Picture-Books in Winter",
+		"vibe": "summer fading, winter comes",
+		"mood": "a snowy winter afternoon curled up with picture books by the fire; cosy childhood at home; frost on the windows"
+	},
+	{
+		"title": "Bed in Summer",
+		"creator": "Robert Louis Stevenson",
+		"year": 1885,
+		"hint": "Bed in Summer",
+		"vibe": "i have to go to bed by day",
+		"mood": "a kid sent to bed on a bright summer evening; hearing others play outside; long light days"
+	},
+	{
+		"title": "Farewell to the Farm",
+		"creator": "Robert Louis Stevenson",
+		"year": 1885,
+		"hint": "Farewell to the Farm",
+		"vibe": "goodbye, goodbye, to everything",
+		"mood": "the last day of summer, climbing into the car and saying goodbye to everything; waving at the farm and the fields; sad and excited"
+	},
+	{
+		"title": "The Night Is Darkening Round Me",
+		"creator": "Emily Brontë",
+		"year": 1837,
+		"hint": "The Night is Darkening Around Me",
+		"vibe": "the wild winds coldly blow",
+		"mood": "a dark and stormy night on the moors; snow and wind and trees bending; a spell you cannot leave"
+	},
+	{
+		"title": "Sympathy",
+		"creator": "Paul Laurence Dunbar",
+		"year": 1899,
+		"hint": "Sympathy",
+		"vibe": "i know why the caged bird sings",
+		"mood": "feeling trapped while the world is sunny outside; beating against the bars; a prayer for freedom"
+	},
+	{
+		"title": "To the Virgins, to Make Much of Time",
+		"creator": "Robert Herrick",
+		"year": 1648,
+		"hint": "To the Virgins, to Make Much of Time",
+		"vibe": "gather ye rosebuds while ye may",
+		"mood": "being young in springtime; carpe diem; enjoy it now before it fades"
+	},
+	{
+		"title": "I Am",
+		"creator": "John Clare",
+		"year": 1848,
+		"hint": "I Am",
+		"vibe": "i long for scenes where man hath never trod",
+		"mood": "forgotten by friends and utterly alone; longing to lie under the sky and sleep; lonely peace"
+	},
+	{
+		"title": "Trees",
+		"creator": "Joyce Kilmer",
+		"year": 1913,
+		"hint": "Trees",
+		"vibe": "a poem lovely as a tree",
+		"mood": "a simple quiet walk under trees; rain and snow on branches; humble gratitude for nature"
+	}
+]
