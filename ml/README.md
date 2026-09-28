@@ -54,8 +54,10 @@ At the end, `all` checks the ship rule (see "eval" below):
 - If the student fails, `all` stops. It prints why and the path of `out/eval_report.json`. To
   use the student anyway, run `uv run mise-ml install`.
 
-`all` installs the bundle only on your computer. To put it online, run `uv run mise-ml publish`
-after `all` (see "Publish" below).
+After `install`, `all` checks for the R2 variables (see "Publish" below). If they are all set, it
+runs `publish`, which puts the bundle online and updates `../src/lib/bundle.ts`. If any are
+missing, `all` names them and logs that `uv run mise-ml publish` puts the bundle online once they
+are set.
 
 To run one step, use `uv run mise-ml <step>`. To see the steps in run order, run
 `uv run mise-ml` with no step.
@@ -87,7 +89,7 @@ The times are estimates for an RTX 5090, except where the text says "measured".
 | `eval --judge` | teacher, student, bundle | `data/curated/judgments.jsonl` | 1–2 h |
 | `eval` | all of the above | `out/eval_report.json`, `out/run.json` | 5 min |
 | `install` | `out/bundle/` | `../static/bundle/` | seconds |
-| `publish` (not in `all`) | `../static/bundle/` | the R2 bucket | minutes the first time |
+| `publish` (in `all` only if R2 is set) | `../static/bundle/` | the R2 bucket, `../src/lib/bundle.ts` | minutes the first time |
 
 ### fetch
 
@@ -329,24 +331,21 @@ uv run mise-ml publish
 
 - **Images** go to `img/<first 20 hex of the SHA-256 of the file>.webp`. `publish` lists the
   keys under `img/` once and uploads only the images that are not there yet, 16 at a time.
-- **Bundle files** go to `bundles/<version>/`: `manifest.json`, `model/`, `vectors.bin`,
+- **Bundle files** go to `bundles/<date>-<hash8>/`: `manifest.json`, `model/`, `vectors.bin`,
   `vocab.json`, `anchors.*` (stub only), and `items.json`. In this `items.json`, each
   `image.src` is the absolute URL `<R2_PUBLIC_URL>/img/<hash>.webp`. `manifest.json` goes last.
-- **Version.** The stub version holds only the build date, and the export version hashes only
-  the model and the vectors. So `publish` makes its own version: the first 12 hex of a SHA-256
-  over all bundle files, with the rewritten `items.json`. A new bundle always gets a new
-  prefix. If the prefix already holds the files, `publish` skips them and says so.
+- **Version.** `hash8` is the first 8 hex of a SHA-256 over all bundle files, with the rewritten
+  `items.json`; `date` is the UTC date of the publish that first uploaded that content, such as
+  `2026-09-27-a1b2c3d4`. Before uploading, `publish` looks for a `bundles/` prefix that already
+  ends with that hash, from any date, and reuses it instead of uploading a copy. A new prefix
+  starting from the identical content therefore never appears twice.
 - **Headers.** Each object gets `Cache-Control: public, max-age=31536000, immutable`, because
   no key ever gets new content. JSON is `application/json`, `.onnx` and `.bin` are
   `application/octet-stream`, and images are `image/webp`.
 
-At the end, `publish` prints the counts, the bytes, the time, and the line to copy:
-`set PUBLIC_BUNDLE_URL = <R2_PUBLIC_URL>/bundles/<version>/`. Put that value in the `vars` of
-`../wrangler.jsonc`:
-
-```jsonc
-"vars": { "PUBLIC_BUNDLE_URL": "https://cdn.mise.art/bundles/<version>/" }
-```
+At the end, `publish` rewrites `../src/lib/bundle.ts` to `export const BUNDLE_URL =
+'<R2_PUBLIC_URL>/bundles/<date>-<hash8>/';` and logs that the file changed. Commit it, then
+`bun run deploy` (or push, if a deploy runs on push).
 
 **CORS.** The app's web worker fetches the model and the JSON from another origin, so the bucket
 needs a CORS rule. `publish` adds the rule if no rule covers it yet, and keeps the other rules.

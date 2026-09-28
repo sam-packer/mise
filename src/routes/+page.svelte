@@ -5,6 +5,7 @@
 	import { page } from '$app/state';
 	import { goto, pushState } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { BUNDLE_URL } from '$lib/bundle';
 	import type { Item, Mood, OKLab } from '$lib/mood/types';
 	import { infer, ready, start } from '$lib/mood/client';
 	import { neutralTokens, paletteFavicon, paletteToTokens } from '$lib/color/oklab';
@@ -53,13 +54,10 @@
 	/** For a song, the album carries the feeling better than the single track. */
 	const work = (item: Item) => (item.category === 'song' ? (item.album ?? item.title) : item.title);
 
-	// The bundle root: a public env var in production (an R2 URL), '/bundle/' for local dev and the stub.
-	const bundleUrl = env.PUBLIC_BUNDLE_URL?.trim();
-	const bundleBase = bundleUrl
-		? bundleUrl.endsWith('/')
-			? bundleUrl
-			: `${bundleUrl}/`
-		: '/bundle/';
+	// The bundle root: BUNDLE_URL, unless PUBLIC_BUNDLE_URL is set (a local stub for testing).
+	const bundleOverride = env.PUBLIC_BUNDLE_URL?.trim();
+	const bundleUrl = bundleOverride || BUNDLE_URL;
+	const bundleBase = bundleUrl.endsWith('/') ? bundleUrl : `${bundleUrl}/`;
 
 	onMount(() => {
 		reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -100,6 +98,8 @@
 			waiting = false;
 			face = null;
 			text = '';
+			// The line kept focus through goto's keepFocus, which paused the ghost's rotation. Let it resume.
+			lineRef?.blur();
 			void tweenTokens(neutralTokens(matchMedia('(prefers-color-scheme: dark)').matches));
 			return;
 		}
@@ -380,6 +380,20 @@
 		transition-delay: calc(var(--k) * 35ms);
 	}
 
+	/* A hover or focus on the mark spreads the bands evenly around the middle one, transform only
+	   so it never touches layout or moves the word. No stagger: every band moves together. */
+	.mark:hover .swatch i,
+	.mark:focus-visible .swatch i {
+		transform: translateX(calc((4 - var(--k)) * var(--band) + (var(--k) - 2) * 2px));
+		transition: transform 400ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+
+	.shown .mark:hover .swatch i,
+	.shown .mark:focus-visible .swatch i {
+		transform: translateX(calc((var(--k) - 2) * 2px));
+		transition: transform 400ms cubic-bezier(0.16, 1, 0.3, 1);
+	}
+
 	.anchor {
 		margin: 0.9rem 0 0;
 		font-size: 0.95rem;
@@ -572,6 +586,14 @@
 		}
 
 		.swatch i {
+			transform: none;
+			transition: none;
+		}
+
+		.mark:hover .swatch i,
+		.mark:focus-visible .swatch i,
+		.shown .mark:hover .swatch i,
+		.shown .mark:focus-visible .swatch i {
 			transform: none;
 			transition: none;
 		}

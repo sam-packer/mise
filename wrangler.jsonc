@@ -9,7 +9,5 @@
 		"directory": ".svelte-kit/cloudflare"
 	},
 	"workers_dev": true,
-	"preview_urls": true,
-	// `uv run mise-ml publish` prints the value to put here, once the bundle is in R2.
-	"vars": { "PUBLIC_BUNDLE_URL": "" }
+	"preview_urls": true
 }
