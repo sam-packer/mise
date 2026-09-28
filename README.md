@@ -47,6 +47,10 @@ bun run deploy
 It builds the site and deploys it to Cloudflare Workers. This ships the app only: the bundle lives
 in a Cloudflare R2 bucket, not in the build.
 
+A link to a feeling looks like `mise.art/<code>`. The Worker keeps each code's feeling in the KV
+namespace `MOODS`. To make a new one, run `bunx wrangler kv namespace create moods` and put its id in
+`wrangler.jsonc`.
+
 ## Layout
 
 | Path       | Contents                                         |

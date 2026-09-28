@@ -6,6 +6,7 @@
 	import { goto, pushState } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { BUNDLE_URL } from '$lib/bundle';
+	import { feelingCode, feelings, normalize } from '$lib/code';
 	import type { Item, Mood, OKLab } from '$lib/mood/types';
 	import { infer, ready, start } from '$lib/mood/client';
 	import { neutralTokens, paletteFavicon, paletteToTokens } from '$lib/color/oklab';
@@ -27,7 +28,9 @@
 
 	type Open = NonNullable<App.PageState['open']>;
 
-	let text = $state(page.url.searchParams.get('m') ?? '');
+	let { data } = $props();
+
+	let text = $state(untrack(() => data.text));
 	let mood = $state<Mood | null>(null);
 	let waiting = $state(false);
 	let leaving = $state(false);
@@ -41,7 +44,7 @@
 	let seq = 0;
 	let reduced = false;
 
-	const urlMood = $derived((page.url.searchParams.get('m') ?? '').trim());
+	const urlMood = $derived(data.text);
 	const open = $derived(mood && page.state.open ? page.state.open : null);
 	const openItem = $derived(
 		!mood || !open ? null : open === 'anchor' ? (mood.anchor ?? null) : mood.picks[open]
@@ -77,10 +80,13 @@
 	}
 
 	// The URL is the source of truth: Enter pushes it, back and forward move it, and this reacts.
+	// A code the store does not know shows the landing with a note.
 	$effect(() => {
 		const q = urlMood;
+		const note = data.note;
 		untrack(() => {
 			if (q !== (mood?.query ?? '')) void show(q);
+			if (note) error = note;
 		});
 	});
 
@@ -139,17 +145,23 @@
 		);
 	}
 
-	function submit(raw: string) {
-		const q = raw.trim();
+	async function submit(raw: string) {
+		const q = normalize(raw);
 		if (!q) return;
 		if (q === urlMood) {
 			if (!mood || mood.query !== q) void show(q);
 			return;
 		}
+		// The code comes from the text, so the page moves at once and the store catches up on its own.
+		const code = await feelingCode(q);
+		feelings.set(code, q);
+		fetch('/api/feeling', {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ text: q })
+		}).catch(() => {});
 		// A real navigation, not pushState: shallow routing leaves page.url unchanged, so the effect would not run.
-		// The path is the resolved root; only the query changes.
-		// eslint-disable-next-line svelte/no-navigation-without-resolve
-		void goto(`${resolve('/')}?m=${encodeURIComponent(q)}`, { keepFocus: true, noScroll: true });
+		void goto(resolve('/[[code=code]]', { code }), { keepFocus: true, noScroll: true });
 	}
 
 	function viewTransition(update: () => void | Promise<void>): Promise<void> {

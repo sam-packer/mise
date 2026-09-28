@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { fade } from 'svelte/transition';
+	import { MAX_FEELING } from '$lib/code';
 
 	let {
 		value = $bindable(''),
@@ -116,6 +117,7 @@
 			bind:this={ref}
 			bind:value
 			rows="1"
+			maxlength={MAX_FEELING}
 			autocomplete="off"
 			autocapitalize="off"
 			spellcheck="false"
