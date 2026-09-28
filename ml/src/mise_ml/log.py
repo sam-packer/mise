@@ -19,6 +19,7 @@ from tqdm.contrib.logging import logging_redirect_tqdm
 from mise_ml.config import DATA, ML_ROOT, OUT
 
 ROOT = "mise_ml"
+LIBRARIES = ("transformers", "huggingface_hub")
 LOGS = OUT / "logs"
 
 
@@ -26,9 +27,11 @@ class ShortNameFormatter(logging.Formatter):
     """Shows `mise_ml.resolve` as `resolve`, and WARNING as WARN so the columns line up."""
 
     LEVELS = {"WARNING": "WARN", "CRITICAL": "CRIT"}
+    LIBRARY_NAMES = {"transformers": "hf", "huggingface_hub": "hub", "py": "warnings"}
 
     def format(self, record: logging.LogRecord) -> str:
-        record.short = record.name.rsplit(".", 1)[-1]
+        top = record.name.split(".", 1)[0]
+        record.short = self.LIBRARY_NAMES.get(top) or record.name.rsplit(".", 1)[-1]
         record.level = self.LEVELS.get(record.levelname, record.levelname)
         return super().format(record)
 
@@ -80,6 +83,26 @@ def log_environment(log: logging.Logger) -> None:
     )
 
 
+def route_libraries(console: logging.Handler, file: logging.Handler) -> None:
+    """Send transformers and huggingface_hub logs through the same handlers.
+
+    transformers installs its own stderr handler, which would bypass the tqdm redirect and
+    the log file. Their INFO lines go to the file only; WARNING and above also reach the
+    console.
+    """
+    import transformers.utils.logging as tf_logging
+
+    tf_logging.disable_default_handler()
+    library_console = logging.StreamHandler()
+    library_console.setLevel(logging.WARNING)
+    library_console.setFormatter(console.formatter)
+    for name in LIBRARIES:
+        lib = logging.getLogger(name)
+        lib.handlers = [library_console, file]
+        lib.setLevel(logging.INFO)
+        lib.propagate = False
+
+
 @contextlib.contextmanager
 def session(step: str) -> Iterator[logging.Logger]:
     """Set up logging for one command. All steps of one `all` run share one file."""
@@ -109,14 +132,17 @@ def session(step: str) -> Iterator[logging.Logger]:
     warnings_log = logging.getLogger("py.warnings")
     warnings_log.handlers = [file]
     warnings_log.propagate = False
+    route_libraries(console, file)
 
     log = get("cli")
     log.debug("log file %s", path)
-    with logging_redirect_tqdm(loggers=[root]):
-        # The redirect swaps in its own console handler, which keeps no level.
-        for handler in root.handlers:
-            if not isinstance(handler, logging.FileHandler):
-                handler.setLevel(logging.INFO)
+    libraries = [logging.getLogger(name) for name in LIBRARIES]
+    with logging_redirect_tqdm(loggers=[root, *libraries]):
+        # The redirect swaps in its own console handlers, which keep no level.
+        for logger, level in [(root, logging.INFO)] + [(lib, logging.WARNING) for lib in libraries]:
+            for handler in logger.handlers:
+                if not isinstance(handler, logging.FileHandler):
+                    handler.setLevel(level)
         log_environment(log)
         try:
             yield log
