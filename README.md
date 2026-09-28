@@ -18,7 +18,8 @@ Try a feeling in the terminal: `bun run query "a dark and stormy night"`.
 
 ## Train the real model
 
-You need an NVIDIA GPU with about 32 GB (an RTX 5090) and about 60 GB of free disk. No API keys.
+You need an NVIDIA GPU with about 32 GB (an RTX 5090), about 60 GB of free disk, and keys for TMDB,
+Hardcover, ListenBrainz, and Last.fm in `ml/.env` (see `ml/.env.example`).
 
 ```sh
 cd ml
@@ -53,7 +54,6 @@ build, so a plain push works too.
 | `src/`     | the SvelteKit app                                |
 | `scripts/` | the stub bundle build, from hand-curated sources |
 | `ml/`      | the training pipeline (`mise-ml`)                |
-| `docs/`    | the design spec                                  |
 
 ## Credit
 
