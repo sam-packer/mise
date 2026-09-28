@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "boto3>=1.43.103",
     "httpx>=0.28.1",
     "jsonschema>=4.26.0",
     "numpy>=2.5.3",

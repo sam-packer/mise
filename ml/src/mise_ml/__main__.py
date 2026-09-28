@@ -20,6 +20,7 @@ STEPS = {
     "eval": "report recall@10, palette delta E, choice accuracy, latency; write out/run.json",
     "install": "copy out/bundle into ../static/bundle for the web app",
     "all": "run every step above in order, skip finished work, install if the student ships",
+    "publish": "upload ../static/bundle to Cloudflare R2 (never part of all)",
 }
 
 log = logs.get("all")
@@ -50,7 +51,7 @@ class Run:
 
     def __init__(self) -> None:
         self.rows: list[tuple[str, str, str]] = []
-        self.total = sum(1 for name in STEPS if name != "all") + 1  # eval --judge is its own
+        self.total = len(STEPS) - 2 + 1  # not all or publish; eval --judge is its own
 
     def step(
         self,
@@ -146,6 +147,7 @@ def print_steps() -> None:
     for name, text in STEPS.items():
         print(f"  {name:<14} {text}")
     print("\nFrom zero: uv sync, then uv run mise-ml all")
+    print("To put the installed bundle online: uv run mise-ml publish")
 
 
 def main() -> None:

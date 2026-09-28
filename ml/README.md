@@ -54,6 +54,9 @@ At the end, `all` checks the ship rule (see "eval" below):
 - If the student fails, `all` stops. It prints why and the path of `out/eval_report.json`. To
   use the student anyway, run `uv run mise-ml install`.
 
+`all` installs the bundle only on your computer. To put it online, run `uv run mise-ml publish`
+after `all` (see "Publish" below).
+
 To run one step, use `uv run mise-ml <step>`. To see the steps in run order, run
 `uv run mise-ml` with no step.
 
@@ -84,6 +87,7 @@ The times are estimates for an RTX 5090, except where the text says "measured".
 | `eval --judge` | teacher, student, bundle | `data/curated/judgments.jsonl` | 1–2 h |
 | `eval` | all of the above | `out/eval_report.json`, `out/run.json` | 5 min |
 | `install` | `out/bundle/` | `../static/bundle/` | seconds |
+| `publish` (not in `all`) | `../static/bundle/` | the R2 bucket | minutes the first time |
 
 ### fetch
 
@@ -300,6 +304,76 @@ differ from an uninterrupted run.
 `install` copies `out/bundle/` to a new folder next to `../static/bundle/`. When the copy is
 complete, it swaps the new folder in and deletes the old one. So a failed copy never leaves half
 a bundle. It prints the manifest version and the item count of each category.
+
+### publish
+
+The web app runs on Cloudflare Workers. The bundle does not go into the app's static assets. It
+goes into a Cloudflare R2 bucket. `publish` uploads the bundle that is in `../static/bundle/`
+now: the stub, or the trained bundle after `install`. It never changes the local files.
+
+Set up the bucket one time:
+
+1. Create the bucket: `bunx wrangler r2 bucket create mise`.
+2. Connect a custom domain, such as `cdn.mise.art`: R2 > `mise` > Settings > Custom Domains.
+3. Create an API token: R2 > Manage API tokens > Create API token. Choose "Object Read & Write"
+   and scope it to the bucket.
+4. Set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` (default
+   `mise`), and `R2_PUBLIC_URL` (such as `https://cdn.mise.art`) in `.env`. See `.env.example`.
+   `publish` names each missing variable and stops.
+
+Then run:
+
+```
+uv run mise-ml publish
+```
+
+- **Images** go to `img/<first 20 hex of the SHA-256 of the file>.webp`. `publish` lists the
+  keys under `img/` once and uploads only the images that are not there yet, 16 at a time.
+- **Bundle files** go to `bundles/<version>/`: `manifest.json`, `model/`, `vectors.bin`,
+  `vocab.json`, `anchors.*` (stub only), and `items.json`. In this `items.json`, each
+  `image.src` is the absolute URL `<R2_PUBLIC_URL>/img/<hash>.webp`. `manifest.json` goes last.
+- **Version.** The stub version holds only the build date, and the export version hashes only
+  the model and the vectors. So `publish` makes its own version: the first 12 hex of a SHA-256
+  over all bundle files, with the rewritten `items.json`. A new bundle always gets a new
+  prefix. If the prefix already holds the files, `publish` skips them and says so.
+- **Headers.** Each object gets `Cache-Control: public, max-age=31536000, immutable`, because
+  no key ever gets new content. JSON is `application/json`, `.onnx` and `.bin` are
+  `application/octet-stream`, and images are `image/webp`.
+
+At the end, `publish` prints the counts, the bytes, the time, and the line to copy:
+`set PUBLIC_BUNDLE_URL = <R2_PUBLIC_URL>/bundles/<version>/`. Put that value in the `vars` of
+`../wrangler.jsonc`:
+
+```jsonc
+"vars": { "PUBLIC_BUNDLE_URL": "https://cdn.mise.art/bundles/<version>/" }
+```
+
+**CORS.** The app's web worker fetches the model and the JSON from another origin, so the bucket
+needs a CORS rule. `publish` adds the rule if no rule covers it yet, and keeps the other rules.
+An "Object Read & Write" token usually cannot change the CORS policy. Then `publish` logs a
+WARN with the JSON below and continues. Paste the JSON into R2 > `mise` > Settings > CORS
+policy:
+
+```json
+[
+  {
+    "AllowedOrigins": [
+      "https://mise.art",
+      "https://www.mise.art",
+      "http://localhost:5173",
+      "http://localhost:4173"
+    ],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "MaxAgeSeconds": 86400
+  }
+]
+```
+
+S3 CORS rules do not accept a wildcard in the middle of an origin. To use the app on
+workers.dev, add `https://mise.<your subdomain>.workers.dev` to `AllowedOrigins` yourself.
+Your subdomain is in Workers & Pages > your account's workers.dev subdomain. Preview URLs get a
+new host for each version, so they need their own origin line.
 
 ### eval (§9.5)
 

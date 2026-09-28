@@ -1,0 +1,189 @@
+"""Upload the bundle in ../static/bundle/ to Cloudflare R2.
+
+Images go to `img/<sha256[:20]>.webp`, shared by all versions. The other bundle files go to
+`bundles/<version>/`, where the version is a hash of their content. items.json there points
+each image at its absolute public URL. Nothing under a version prefix ever changes, so every
+object gets an immutable Cache-Control header.
+"""
+
+import hashlib
+import json
+import time
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Any
+
+import boto3
+from botocore.config import Config
+from botocore.exceptions import ClientError
+
+from mise_ml import keys
+from mise_ml.install import TARGET
+from mise_ml.log import elapsed, get, num, progress
+
+log = get(__name__)
+
+WORKERS = 16
+IMMUTABLE = "public, max-age=31536000, immutable"
+TYPES = {
+    ".json": "application/json",
+    ".onnx": "application/octet-stream",
+    ".bin": "application/octet-stream",
+    ".txt": "text/plain; charset=utf-8",
+    ".webp": "image/webp",
+}
+CORS_RULE = {
+    "AllowedOrigins": [
+        "https://mise.art",
+        "https://www.mise.art",
+        "http://localhost:5173",
+        "http://localhost:4173",
+    ],
+    "AllowedMethods": ["GET", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "MaxAgeSeconds": 86400,
+}
+
+
+def content_type(key: str) -> str:
+    return TYPES.get(Path(key).suffix, "application/octet-stream")
+
+
+def client(cfg: dict[str, str]) -> Any:
+    return boto3.client(
+        "s3",
+        endpoint_url=f"https://{cfg['account_id']}.r2.cloudflarestorage.com",
+        region_name="auto",
+        aws_access_key_id=cfg["access_key_id"],
+        aws_secret_access_key=cfg["secret_access_key"],
+        config=Config(max_pool_connections=WORKERS + 4, retries={"mode": "standard"}),
+    )
+
+
+def existing(s3: Any, bucket: str, prefix: str) -> set[str]:
+    keys_ = set()
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+        keys_.update(obj["Key"] for obj in page.get("Contents", []))
+    return keys_
+
+
+def apply_cors(s3: Any, bucket: str) -> None:
+    """Add the CORS rule unless a rule already covers it. Other rules stay as they are."""
+    paste = json.dumps([CORS_RULE], indent=2)
+    try:
+        try:
+            rules = s3.get_bucket_cors(Bucket=bucket)["CORSRules"]
+        except ClientError as e:
+            if e.response["Error"]["Code"] != "NoSuchCORSConfiguration":
+                raise
+            rules = []
+        for rule in rules:
+            if set(CORS_RULE["AllowedOrigins"]) <= set(rule.get("AllowedOrigins", [])) and set(
+                CORS_RULE["AllowedMethods"]
+            ) <= set(rule.get("AllowedMethods", [])):
+                log.info("CORS: the bucket already allows the app origins")
+                return
+        s3.put_bucket_cors(Bucket=bucket, CORSConfiguration={"CORSRules": [*rules, CORS_RULE]})
+        log.info(f"CORS: added a rule for {', '.join(CORS_RULE['AllowedOrigins'])}")
+    except ClientError as e:
+        log.warning(
+            f"CORS: cannot read or set the bucket CORS policy ({e.response['Error']['Code']}). "
+            f"Paste this into R2 > {bucket} > Settings > CORS policy:\n{paste}"
+        )
+
+
+def upload(s3: Any, bucket: str, jobs: list[tuple[str, Path | bytes]], desc: str) -> int:
+    """Put each (key, file or bytes) with its Content-Type. Returns the bytes sent."""
+
+    def put(job: tuple[str, Path | bytes]) -> int:
+        key, body = job
+        data = body.read_bytes() if isinstance(body, Path) else body
+        s3.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=data,
+            ContentType=content_type(key),
+            CacheControl=IMMUTABLE,
+        )
+        log.debug("put %s (%s bytes)", key, num(len(data)))
+        return len(data)
+
+    sent = 0
+    with ThreadPoolExecutor(WORKERS) as pool:
+        for size in progress(pool.map(put, jobs), total=len(jobs), desc=desc, unit="file"):
+            sent += size
+    return sent
+
+
+def run() -> None:
+    start = time.perf_counter()
+    cfg = keys.r2()
+    manifest_path = TARGET / "manifest.json"
+    if not manifest_path.exists():
+        raise SystemExit(f"no bundle at {TARGET}; run `uv run mise-ml install` first")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    items = json.loads((TARGET / "items.json").read_text(encoding="utf-8"))
+
+    # Images: key by content, and point items.json at the public URL.
+    images: dict[str, Path] = {}
+    by_file: dict[Path, str] = {}
+    for item in progress(items, desc="hash images", unit="item"):
+        if not item["image"]:
+            continue
+        path = TARGET / "img" / item["image"]["src"].rsplit("/", 1)[-1]
+        if path not in by_file:
+            if not path.exists():
+                raise SystemExit(f"{item['id']}: image {path} is missing; run install again")
+            by_file[path] = f"img/{hashlib.sha256(path.read_bytes()).hexdigest()[:20]}.webp"
+        key = by_file[path]
+        images[key] = path
+        item["image"]["src"] = f"{cfg['public_url']}/{key}"
+
+    # Bundle files: everything outside img/, with the rewritten items.json.
+    files: dict[str, Path | bytes] = {
+        p.relative_to(TARGET).as_posix(): p
+        for p in sorted(TARGET.rglob("*"))
+        if p.is_file() and p.relative_to(TARGET).parts[0] != "img"
+    }
+    files["items.json"] = json.dumps(items, ensure_ascii=False, separators=(",", ":")).encode()
+    digest = hashlib.sha256()
+    for name in sorted(files):
+        body = files[name]
+        data = body.read_bytes() if isinstance(body, Path) else body
+        digest.update(f"{name}\0{hashlib.sha256(data).hexdigest()}\n".encode())
+    version = digest.hexdigest()[:12]
+    prefix = f"bundles/{version}/"
+    log.info(
+        f"bundle {manifest['version']} -> version {version}: {num(len(files))} files, "
+        f"{num(len(images))} images, bucket {cfg['bucket']}"
+    )
+
+    s3 = client(cfg)
+    apply_cors(s3, cfg["bucket"])
+
+    online = existing(s3, cfg["bucket"], "img/")
+    img_jobs = [(k, p) for k, p in sorted(images.items()) if k not in online]
+    log.info(
+        f"images: {num(len(images) - len(img_jobs))} already online, {num(len(img_jobs))} to upload"
+    )
+    img_bytes = upload(s3, cfg["bucket"], img_jobs, "images")
+
+    online = existing(s3, cfg["bucket"], prefix)
+    file_jobs = [(prefix + n, b) for n, b in files.items() if prefix + n not in online]
+    if not file_jobs:
+        log.info(f"bundle {version} is already online with the same files, skip")
+    # The manifest goes last, so a prefix with a manifest always has all its files.
+    manifest_key = prefix + "manifest.json"
+    first = [job for job in file_jobs if job[0] != manifest_key]
+    file_bytes = upload(s3, cfg["bucket"], first, "bundle")
+    file_bytes += upload(
+        s3, cfg["bucket"], [j for j in file_jobs if j[0] == manifest_key], "manifest"
+    )
+
+    log.info(
+        f"uploaded {num(len(img_jobs))} images and {num(len(file_jobs))} bundle files "
+        f"({(img_bytes + file_bytes) / 2**20:.1f} MiB); skipped "
+        f"{num(len(images) - len(img_jobs))} images and {num(len(files) - len(file_jobs))} "
+        f"bundle files already online; took {elapsed(start)}"
+    )
+    log.info(f"set PUBLIC_BUNDLE_URL = {cfg['public_url']}/{prefix}")

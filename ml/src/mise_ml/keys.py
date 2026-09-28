@@ -15,8 +15,38 @@ KEYS = {
 }
 
 
+# Cloudflare R2, for `publish` only. Each variable is required.
+R2 = {
+    "R2_ACCOUNT_ID": "the Cloudflare account id (the host of the S3 endpoint)",
+    "R2_ACCESS_KEY_ID": "the access key id of an R2 API token",
+    "R2_SECRET_ACCESS_KEY": "the secret access key of that token",
+    "R2_PUBLIC_URL": "the public custom domain of the bucket, such as https://cdn.mise.art",
+}
+R2_BUCKET_DEFAULT = "mise"
+
+
 def env(name: str) -> str:
     return os.environ.get(name, "").strip()
+
+
+def r2() -> dict[str, str]:
+    """The R2 settings. Names each missing variable and stops if one is missing."""
+    for name in (*R2, "R2_BUCKET"):
+        log.debug("%s: %s", name, "set" if env(name) else "missing")
+    problems = [
+        f"missing {name} ({use}); set it in ml/.env" for name, use in R2.items() if not env(name)
+    ]
+    for problem in problems:
+        log.error(problem)
+    if problems:
+        raise SystemExit(1)
+    return {
+        "account_id": env("R2_ACCOUNT_ID"),
+        "access_key_id": env("R2_ACCESS_KEY_ID"),
+        "secret_access_key": env("R2_SECRET_ACCESS_KEY"),
+        "bucket": env("R2_BUCKET") or R2_BUCKET_DEFAULT,
+        "public_url": env("R2_PUBLIC_URL").rstrip("/"),
+    }
 
 
 def missing(services: list[str]) -> list[str]:
