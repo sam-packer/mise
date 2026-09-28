@@ -73,8 +73,10 @@ class ResolveConfig:
             "v3.sg.media-imdb.com": 0.4,
             "m.media-amazon.com": 0.2,
             "query.wikidata.org": 1.0,
-            "openlibrary.org": 1.0,
-            "covers.openlibrary.org": 0.5,
+            # 3 requests/s: Open Library's limit for a User-Agent with a contact email.
+            "openlibrary.org": 0.34,
+            # Covers by cover ID are not rate-limited.
+            "covers.openlibrary.org": 0.05,
             "collectionapi.metmuseum.org": 0.1,
             "images.metmuseum.org": 0.1,
             "poetrydb.org": 1.0,
@@ -84,7 +86,7 @@ class ResolveConfig:
     timeout: float = 30.0
     retries: int = 4
     # Parallel requests per category. The per-host intervals above still cap the rate.
-    workers: dict[str, int] = field(default_factory=lambda: {"song": 4})
+    workers: dict[str, int] = field(default_factory=lambda: {"song": 4, "book": 4, "film": 2})
 
 
 @dataclass(frozen=True)
