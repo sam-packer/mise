@@ -71,6 +71,31 @@ def client(cfg: dict[str, str]) -> Any:
     )
 
 
+def require_buckets(s3: Any, cfg: dict[str, str]) -> None:
+    """Name each missing or unreachable bucket before any upload starts."""
+    problems = []
+    for key, role in (("bucket", "public bundle"), ("catalog_bucket", "private catalog")):
+        name = cfg[key]
+        try:
+            s3.head_bucket(Bucket=name)
+        except ClientError as e:
+            code = e.response["Error"]["Code"]
+            if code in ("404", "NoSuchBucket", "NotFound"):
+                problems.append(
+                    f"the {role} bucket {name!r} does not exist; create it with "
+                    f"`bunx wrangler r2 bucket create {name}`"
+                )
+            else:
+                problems.append(
+                    f"the {role} bucket {name!r} is not reachable ({code}); give the R2 API "
+                    "token object read and write access to it"
+                )
+    for problem in problems:
+        log.error(problem)
+    if problems:
+        raise SystemExit(1)
+
+
 def existing(s3: Any, bucket: str, prefix: str) -> set[str]:
     keys_ = set()
     for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
@@ -189,6 +214,7 @@ def run() -> None:
     catalog_hash = content_hash(private)
 
     s3 = client(cfg)
+    require_buckets(s3, cfg)
     apply_cors(s3, cfg["bucket"])
 
     reused = existing_prefix(s3, cfg["bucket"], "bundles/", hash8)
