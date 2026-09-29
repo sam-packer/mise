@@ -32,6 +32,7 @@ RESOLVE_META = CURATED / "resolve.meta.json"
 RESOLVE_VERSION = 2
 PROFILES = CURATED / "profiles.jsonl"
 MOODS = CURATED / "moods.jsonl"
+DISTILL = CURATED / "distill.jsonl"
 PAT_SENTENCES = CURATED / "pat_sentences.jsonl"
 JUDGMENTS = CURATED / "judgments.jsonl"
 EVAL_REPORT = OUT / "eval_report.json"
@@ -144,6 +145,8 @@ class ProfileConfig:
     labels_per_request: int = 10
     pat_per_request: int = 25
     judge_pool_per_system: int = 20
+    distill_feelings: int = 40000
+    distill_per_request: int = 20
 
 
 @dataclass(frozen=True)
