@@ -1,9 +1,4 @@
-"""Upload public assets and the private catalog to separate R2 buckets.
-
-Store images under img/<hash20>.webp and public files under bundles/<date>-<hash8>/.
-Store the private catalog under catalog/<date>-<hash8>/ in its own bucket.
-Set each item's image URL to the public image URL before hashing the catalog.
-"""
+"""Upload the public bundle and content-addressed images to R2."""
 
 import hashlib
 import json
@@ -17,19 +12,11 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from mise_ml import keys
-from mise_ml.config import INSTALLED_CATALOG, REPO_ROOT
-from mise_ml.delivery import (
-    catalog_files,
-    check_binding,
-    content_hash,
-    install_local_catalog,
-    public_files,
-    write_catalog_ts,
-)
+from mise_ml.config import REPO_ROOT
+from mise_ml.delivery import content_hash, public_files
 from mise_ml.install import TARGET
 from mise_ml.log import elapsed, get, num, progress
 from mise_ml.threads import run_all
-from mise_ml.vectorize import Vectorize, publish_search
 
 log = get(__name__)
 
@@ -75,7 +62,7 @@ def client(cfg: dict[str, str]) -> Any:
 def require_buckets(s3: Any, cfg: dict[str, str]) -> None:
     """Name each missing or unreachable bucket before any upload starts."""
     problems = []
-    for key, role in (("bucket", "public bundle"), ("catalog_bucket", "private catalog")):
+    for key, role in (("bucket", "public bundle"),):
         name = cfg[key]
         try:
             s3.head_bucket(Bucket=name)
@@ -181,16 +168,12 @@ def upload(s3: Any, bucket: str, jobs: list[tuple[str, Path | bytes]], desc: str
 def run() -> None:
     start = time.perf_counter()
     cfg = keys.r2()
-    check_binding(cfg["catalog_bucket"])
-    if cfg["catalog_bucket"] == cfg["bucket"]:
-        raise SystemExit("the public bundle and private catalog need separate R2 buckets")
     manifest_path = TARGET / "manifest.json"
     if not manifest_path.exists():
         raise SystemExit(f"no bundle at {TARGET}; run `uv run train` first")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    private = catalog_files(INSTALLED_CATALOG, manifest)
     public = public_files(TARGET)
-    items = json.loads((INSTALLED_CATALOG / "items.json").read_text(encoding="utf-8"))
+    items = json.loads((TARGET / manifest["files"]["items"]["path"]).read_text(encoding="utf-8"))
 
     # Images: key by content, and point items.json at the public URL.
     images: dict[str, Path] = {}
@@ -207,18 +190,24 @@ def run() -> None:
         images[key] = path
         item["image"]["src"] = f"{cfg['public_url']}/{key}"
 
-    # Keep catalog data out of the public bucket.
+    # Publish records with their content-addressed image URLs.
     files: dict[str, Path | bytes] = {
         name: path for name, path in public.items() if not name.startswith("img/")
     }
-    private["items.json"] = json.dumps(items, ensure_ascii=False, separators=(",", ":")).encode()
+    files[manifest["files"]["items"]["path"]] = json.dumps(
+        items, ensure_ascii=False, separators=(",", ":")
+    ).encode()
+    manifest["assets"] = {
+        name: fmt for name, fmt in manifest["assets"].items() if not name.startswith("img/")
+    }
+    manifest["assets"].update({f"{cfg['public_url']}/{key}": "webp" for key in images})
+    files["manifest.json"] = json.dumps(
+        manifest, ensure_ascii=False, separators=(",", ":")
+    ).encode()
     hash8 = content_hash(files)
-    catalog_hash = content_hash(private)
 
     s3 = client(cfg)
     require_buckets(s3, cfg)
-    vectorize = Vectorize(cfg["account_id"])
-    vectorize.check()
     apply_cors(s3, cfg["bucket"])
 
     reused = existing_prefix(s3, cfg["bucket"], "bundles/", hash8)
@@ -228,13 +217,6 @@ def run() -> None:
     else:
         date = datetime.now(UTC).strftime("%Y-%m-%d")
         prefix = f"bundles/{date}-{hash8}/"
-    catalog_prefix = existing_prefix(s3, cfg["catalog_bucket"], "catalog/", catalog_hash)
-    if catalog_prefix is None:
-        catalog_prefix = f"catalog/{datetime.now(UTC):%Y-%m-%d}-{catalog_hash}/"
-    # Derived search data does not change the existing catalog content hash or R2 prefix.
-    private["search-index.json"] = publish_search(
-        vectorize, s3, cfg["catalog_bucket"], private, catalog_prefix
-    )
     log.info(
         f"bundle {manifest['version']} -> {prefix.removeprefix('bundles/').rstrip('/')}: "
         f"{num(len(files))} files, {num(len(images))} images, bucket {cfg['bucket']}"
@@ -258,41 +240,15 @@ def run() -> None:
     file_bytes += upload(
         s3, cfg["bucket"], [j for j in file_jobs if j[0] == manifest_key], "manifest"
     )
-    online = existing(s3, cfg["catalog_bucket"], catalog_prefix)
-    catalog_jobs = [
-        (catalog_prefix + name, body)
-        for name, body in private.items()
-        if catalog_prefix + name not in online
-    ]
-    catalog_key = catalog_prefix + "catalog.json"
-    catalog_bytes = upload(
-        s3,
-        cfg["catalog_bucket"],
-        [job for job in catalog_jobs if job[0] != catalog_key],
-        "catalog",
-    )
-    catalog_bytes += upload(
-        s3,
-        cfg["catalog_bucket"],
-        [job for job in catalog_jobs if job[0] == catalog_key],
-        "catalog metadata",
-    )
-    log.info(
-        f"uploaded {num(len(catalog_jobs))} private catalog files "
-        f"({catalog_bytes / 2**20:.1f} MiB) to {cfg['catalog_bucket']}/{catalog_prefix}"
-    )
-
     log.info(
         f"uploaded {num(len(img_jobs))} images and {num(len(file_jobs))} bundle files "
         f"({(img_bytes + file_bytes) / 2**20:.1f} MiB); skipped "
         f"{num(len(images) - len(img_jobs))} images and {num(len(files) - len(file_jobs))} "
         f"bundle files already online; took {elapsed(start)}"
     )
-    install_local_catalog(private, catalog_prefix)
     url = f"{cfg['public_url']}/{prefix}"
     if write_bundle_ts(url):
         log.info("updated src/lib/bundle.ts")
     else:
         log.info(f"src/lib/bundle.ts already points at {url}")
-    write_catalog_ts(catalog_prefix)
-    log.info("commit src/lib/bundle.ts and src/lib/server/catalog.ts, then run bun run deploy")
+    log.info("commit src/lib/bundle.ts, then run bun run deploy")

@@ -135,7 +135,6 @@ def write_run_json() -> None:
     )
     bundle_files = sorted(p for p in config.BUNDLE.glob("*") if p.is_file())
     bundle_files += sorted((config.BUNDLE / "model").glob("*"))
-    bundle_files += sorted(p for p in config.CATALOG_BUNDLE.glob("*") if p.is_file())
     report = json.loads(config.EVAL_REPORT.read_text()) if config.EVAL_REPORT.exists() else None
     write_json(
         config.RUN_JSON,
