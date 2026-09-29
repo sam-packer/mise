@@ -18,7 +18,7 @@ Run `bun run stub` for a local sample. This needs Bun and network access, but no
 The stub writes to `ml/out/stub/bundle/` and `ml/out/stub/catalog/`. It leaves the trained
 export in `ml/out/bundle/` and `ml/out/catalog/` unchanged. It copies its public files to
 `static/bundle/`, puts its catalog in local R2, and sets `CATALOG_PREFIX` in `.dev.vars`.
-For a trained export, run `uv run mise-ml install` from `ml/` instead.
+For a trained export, run `uv run train` from `ml/` instead.
 Set `PUBLIC_BUNDLE_URL=/bundle/` in the dev server environment to use the local public files.
 
 Git ignores `.dev.vars`. Install keeps its other settings and does not change
@@ -44,15 +44,18 @@ Hardcover, ListenBrainz, and Last.fm in `ml/.env` (see `ml/.env.example`).
 ```sh
 cd ml
 uv sync
-uv run mise-ml all
+uv run download
+uv run label
+uv run train
+uv run publish
 ```
 
-`all` downloads the datasets, labels them with a local LLM, trains, evaluates, and installs the
-result locally. If Cloudflare R2 is configured (see "Publish" in [ml/README.md](ml/README.md)),
-it also publishes the bundle and catalog there. It updates `src/lib/bundle.ts` and
-`src/lib/server/catalog.ts` to select the release. It runs
-overnight (an estimate). Stop it at any time: a rerun skips finished work. `uv run mise-ml` lists
-each step; [ml/README.md](ml/README.md) explains them.
+Run `download` to fetch and resolve the catalog. Run `label` for the local LLM pass.
+Run `train` to train, export, evaluate, and install only when the ship gate passes.
+Run `publish` separately to upload the installed bundle and catalog to R2. It updates
+`src/lib/bundle.ts` and `src/lib/server/catalog.ts` to select the release.
+The full pipeline can run overnight. Stop at any time; a rerun skips finished work.
+Use `--help` with any command. See [ml/README.md](ml/README.md) for details.
 
 Before the first run, add about 300 feelings to `ml/eval_feelings.jsonl`, one sentence per line. The eval
 step measures the model against them.
@@ -89,7 +92,7 @@ namespace `MOODS`. To make a new one, run `bunx wrangler kv namespace create moo
 | ---------- | ------------------------------------------------ |
 | `src/`     | the SvelteKit app                                |
 | `scripts/` | the stub bundle build, from hand-curated sources |
-| `ml/`      | the training pipeline (`mise-ml`)                |
+| `ml/`      | the training pipeline                            |
 
 ## Credit
 
