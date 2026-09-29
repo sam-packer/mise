@@ -219,12 +219,21 @@ def judge() -> None:
     log.info(f"judge: {num(fits)} pairs judged a fit")
 
 
-def judged_scores(out: Outputs, texts: list[str], catalog: Catalog) -> np.ndarray:
+def judged_fits(catalog: Catalog) -> dict[tuple[str, str], set[int]]:
     fits: dict[tuple[str, str], set[int]] = defaultdict(set)
     for r in iter_jsonl(JUDGMENTS):
         text, cat, item_id = r["key"].split(SEP)
         if r["fit"] and item_id in catalog.index:
             fits[(text, cat)].add(catalog.index[item_id])
+    return fits
+
+
+def judged_scores(
+    out: Outputs,
+    texts: list[str],
+    catalog: Catalog,
+    fits: dict[tuple[str, str], set[int]],
+) -> np.ndarray:
     tops = top_by_category(out, catalog, 10)
     scores = []
     for t, text in enumerate(texts):
@@ -235,11 +244,6 @@ def judged_scores(out: Outputs, texts: list[str], catalog: Catalog) -> np.ndarra
                 per_feeling.append(len(rel & set(tops[t][cat])) / min(len(rel), 10))
         scores.append(float(np.mean(per_feeling)) if per_feeling else float("nan"))
     return np.asarray(scores)
-
-
-def judged_recall(out: Outputs, texts: list[str], catalog: Catalog) -> float:
-    scores = judged_scores(out, texts, catalog)
-    return float(scores.mean()) if len(scores) else float("nan")
 
 
 def paired_gap(a: np.ndarray, b: np.ndarray) -> dict[str, Any]:
@@ -261,7 +265,7 @@ def paired_gap(a: np.ndarray, b: np.ndarray) -> dict[str, Any]:
 def ship_gate(
     held: dict[str, np.ndarray],
     judged: dict[str, np.ndarray],
-    n_eval: int,
+    n_judged: int,
     judgments_complete: bool,
 ) -> dict[str, Any]:
     gaps = {
@@ -270,8 +274,10 @@ def ship_gate(
         "student_baseline_heldout": paired_gap(held["student"], held["baseline"]),
     }
     reasons = []
-    if n_eval < 100:
-        reasons.append(f"judged set is too small: {n_eval} eval feelings; at least 100 required")
+    if n_judged < 100:
+        reasons.append(
+            f"judged set is too small: {n_judged} feelings with fits; at least 100 required"
+        )
     if not judgments_complete:
         reasons.append("judgments are missing for the current retrieval pool; run uv run train")
     for name, result in gaps.items():
@@ -350,11 +356,6 @@ def run() -> dict[str, Any]:
             "recall@10_heldout": recall_at_k(
                 out.query[n_eval:], held_pos, out.items, catalog.categories
             ),
-            "recall@10_judged": judged_recall(
-                Outputs(out.query[:n_eval], out.items, out.palette, out.choices),
-                eval_texts,
-                catalog,
-            ),
             "eval": label_metrics(out, eval_rows, qs, 0),
             "heldout": label_metrics(out, held_rows, qs, n_eval),
         }
@@ -366,11 +367,6 @@ def run() -> dict[str, Any]:
     report["baseline"] = {
         "recall@10_heldout": recall_at_k(
             baseline.query[n_eval:], held_pos, baseline.items, catalog.categories
-        ),
-        "recall@10_judged": judged_recall(
-            Outputs(baseline.query[:n_eval], baseline.items, baseline.palette, []),
-            eval_texts,
-            catalog,
         ),
         "eval": {},
         "heldout": {},
@@ -385,12 +381,25 @@ def run() -> dict[str, Any]:
         name: recall_scores(out.query[n_eval:], held_pos, out.items, catalog.categories)
         for name, out in systems.items()
     }
+    fits = judged_fits(catalog)
+    judged_mask = np.asarray(
+        [any(fits.get((text, cat)) for cat in CATEGORIES) for text in eval_texts], dtype=bool
+    )
+    n_judged = int(judged_mask.sum())
+    dropped = n_eval - n_judged
+    log.info("judged recall: dropped %d feelings with no fits; %d remain", dropped, n_judged)
+    report["counts"].update(judged=n_judged, judged_dropped_no_fits=dropped)
     judged = {
         name: judged_scores(
-            Outputs(out.query[:n_eval], out.items, out.palette, out.choices), eval_texts, catalog
-        )
+            Outputs(out.query[:n_eval], out.items, out.palette, out.choices),
+            eval_texts,
+            catalog,
+            fits,
+        )[judged_mask]
         for name, out in systems.items()
     }
+    for name, scores in judged.items():
+        report[name]["recall@10_judged"] = float(scores.mean()) if len(scores) else float("nan")
     known = {r["key"] for r in iter_jsonl(JUDGMENTS)}
     complete = all(
         SEP.join((text, cat, catalog.items[i]["id"])) in known
@@ -407,7 +416,7 @@ def run() -> dict[str, Any]:
         for cat, indices in tops.items()
         for i in indices
     )
-    report["ship"] = ship_gate(held_scores, judged, n_eval, complete)
+    report["ship"] = ship_gate(held_scores, judged, n_judged, complete)
     write_json(EVAL_REPORT, report)
 
     def cell(value: float | None, width: int, digits: int = 3) -> str:
