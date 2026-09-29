@@ -22,9 +22,11 @@ log = logs.get("cli")
 
 def preflight(command: str) -> None:
     from mise_ml import keys
-    from mise_ml.config import EVAL_FEELINGS, VOCAB_PATH
+    from mise_ml.config import DISTILL, EVAL_FEELINGS, VOCAB_PATH
 
     problems = []
+    if command == "train" and not DISTILL.is_file():
+        problems.append(f"missing {DISTILL}; run uv run label")
     if command == "download":
         problems.extend(keys.missing(list(keys.KEYS)))
     if command == "publish":
@@ -86,6 +88,7 @@ def run_train(run: Run) -> None:
     from mise_ml.config import (
         BUNDLE,
         CATALOG_BUNDLE,
+        DISTILL,
         EVAL_FEELINGS,
         EVAL_REPORT,
         MODELS,
@@ -105,7 +108,7 @@ def run_train(run: Run) -> None:
     source = Path(__file__).parent
     common = [source / f"{name}.py" for name in ("data", "heads", "training", "inference")]
     curated = [RESOLVED, PROFILES, labels, PAT, PAT_SENTENCES, EVAL_FEELINGS, VOCAB_PATH]
-    teacher_in = [*curated, *common, source / "teacher.py", source / "features.py"]
+    teacher_in = [*curated, DISTILL, *common, source / "teacher.py", source / "features.py"]
     teacher_out = [MODELS / "teacher.pt", teacher.OUTPUTS]
     run.step("train-teacher", teacher.run, (teacher_in, TeacherConfig(), teacher_out))
     student_out = [
@@ -117,7 +120,15 @@ def run_train(run: Run) -> None:
         student.STUDENT_DIR / "encoder" / "tokenizer.json",
         student.STUDENT_DIR / "encoder" / "tokenizer_config.json",
     ]
-    student_in = [teacher.OUTPUTS, RESOLVED, PROFILES, VOCAB_PATH, *common, source / "student.py"]
+    student_in = [
+        teacher.OUTPUTS,
+        DISTILL,
+        RESOLVED,
+        PROFILES,
+        VOCAB_PATH,
+        *common,
+        source / "student.py",
+    ]
     run.step("train-student", student.run, (student_in, StudentConfig(), student_out))
     encoder_files = sorted(p for p in (student.STUDENT_DIR / "encoder").rglob("*") if p.is_file())
     export_in = [*student_out, *encoder_files, *curated, *common, source / "export.py"]

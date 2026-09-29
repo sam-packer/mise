@@ -75,7 +75,7 @@ class FeatureStore:
     """One array file plus a text list per template. Missing texts are encoded on demand.
 
     The file name holds the model id and revision, so features of another backbone are
-    never reused.
+    never reused. Labeled and distillation feelings share the queries store and template.
     """
 
     def __init__(self, name: str, template: str, cfg: TeacherConfig) -> None:

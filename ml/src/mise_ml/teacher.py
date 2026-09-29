@@ -61,9 +61,10 @@ class Trainer:
         self.cfg = cfg
         self.vocab = load_vocab()
         self.catalog = load_catalog()
-        self.qs = load_queries(self.catalog, self.vocab, cfg)
+        self.qs = load_queries(self.catalog, self.vocab, cfg, include_distill=True)
         splits = ", ".join(
-            f"{s} {num(len(self.qs.where(s)))}" for s in ("train", "val", "heldout", "eval")
+            f"{s} {num(len(self.qs.where(s)))}"
+            for s in ("train", "val", "heldout", "eval", "distill")
         )
         log.info(
             f"reading data/curated: {num(len(self.catalog.items))} items, "
@@ -203,7 +204,7 @@ class Trainer:
         """Teacher targets for distillation: every query outside the held-out and eval sets."""
         self.model.load_state_dict(torch.load(CHECKPOINT, weights_only=False)["state"])
         self.model.eval()
-        rows = torch.as_tensor(self.qs.where("train", "val"), device="cuda")
+        rows = torch.as_tensor(self.qs.where("train", "val", "distill"), device="cuda")
         x = self.fq[rows]
         palette, light, face, scent = (
             torch.cat(parts)

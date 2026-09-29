@@ -139,6 +139,30 @@ def encode_texts(
     return encode_batches(tokenizer, texts, max_length, encode, device)
 
 
+def item_candidates(
+    top: torch.Tensor, positives: torch.Tensor, n_items: int, cfg: StudentConfig
+) -> torch.Tensor:
+    """Keep teacher neighbors and positives within the existing item activation budget."""
+    required = torch.cat([top.flatten(), positives[positives >= 0]]).unique()
+    rand = torch.randint(0, n_items, (cfg.random_items,), device=top.device)
+    cand = torch.cat([required, rand]).unique()
+    # Full batches with similar feelings can share many neighbors. Fill with random items;
+    # trim only random extras if unusually distinct neighbors exceed the usual count.
+    upper = min(n_items, 1120)
+    lower = min(n_items, 1030) if len(top) == cfg.batch_size else 0
+    if len(required) > upper:
+        raise ValueError("teacher neighbors and positives exceed the 1120-item step budget")
+    if len(cand) > upper:
+        extras = rand[~torch.isin(rand, required)].unique()
+        extras = extras[torch.randperm(len(extras), device=top.device)]
+        cand = torch.cat([required, extras[: upper - len(required)]]).sort().values
+    elif len(cand) < lower:
+        extras = torch.randperm(n_items, device=top.device)
+        extras = extras[~torch.isin(extras, cand)]
+        cand = torch.cat([cand, extras[: lower - len(cand)]]).sort().values
+    return cand
+
+
 def run() -> None:
     cfg = StudentConfig()
     make_deterministic(SEED)
@@ -159,7 +183,7 @@ def run() -> None:
     model = Student(encoder, vocab.sizes(), cfg.head_hidden, cfg.dims).to(dev)
 
     split = np.array(t["split"])
-    train = np.flatnonzero(split == "train")
+    train = np.flatnonzero(np.isin(split, ("train", "distill")))
     val = np.flatnonzero(split == "val")
     texts: list[str] = t["texts"]
     pos = t["pos"].to(dev)
@@ -184,14 +208,18 @@ def run() -> None:
     query_tokens = Pretokenized(tokenizer, texts, cfg.max_length, dev)
     item_tokens = Pretokenized(tokenizer, catalog.texts, cfg.item_max_length, dev)
     log.info(
-        f"reading teacher outputs: {num(len(texts))} queries ({num(len(train))} train, "
+        f"reading teacher outputs: {num(len(texts))} queries "
+        f"({num(int((split == 'train').sum()))} train, "
+        f"{num(int((split == 'distill').sum()))} distill, "
         f"{num(len(val))} val), {num(n_items)} items; backbone {cfg.backbone}"
     )
     log.info(
         f"training: {cfg.epochs} epochs x {num(steps_per_epoch)} steps, batch {cfg.batch_size}, "
         f"encoder lr {cfg.encoder_lr}, head lr {cfg.head_lr}; items per step: teacher top "
-        f"{cfg.teacher_topk} per query + {cfg.random_items} random + positives"
+        f"{cfg.teacher_topk} per query + {cfg.random_items} random + positives; "
+        "full batches keep 1030-1120 unique items by adjusting random extras"
     )
+    log.info("one epoch = one pass over train + distill rows; validation uses val rows only")
     start_all = time.perf_counter()
 
     for epoch in range(cfg.epochs):
@@ -205,9 +233,8 @@ def run() -> None:
                 order[step * cfg.batch_size : (step + 1) * cfg.batch_size], device=dev
             )
             top = (tq[b] @ ti.T).topk(cfg.teacher_topk, dim=1).indices
-            rand = torch.randint(0, n_items, (cfg.random_items,), device=dev)
             p = pos[b]
-            cand = torch.cat([top.flatten(), rand, p[p >= 0]]).unique()
+            cand = item_candidates(top, p, n_items, cfg)
             queries = query_tokens.rows(b)
             items = item_tokens.rows(cand)
             with torch.autocast(dev, dtype=torch.bfloat16):
