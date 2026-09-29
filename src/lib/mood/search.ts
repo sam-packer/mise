@@ -7,7 +7,7 @@ import {
 	type OKLab,
 	type Palette,
 	type MatchResult
-} from '../mood/types';
+} from './types';
 export type CatalogInfo = {
 	version: string;
 	dims: number;
@@ -64,7 +64,8 @@ export function createSearch(
 	items: Item[],
 	vectors: Float32Array,
 	anchors: Anchor[] = [],
-	anchorVectors = new Float32Array(0)
+	anchorVectors = new Float32Array(0),
+	representatives: Record<string, number> = {}
 ) {
 	const dims = info.dims;
 	if (items.length !== info.counts.items || vectors.length !== items.length * dims)
@@ -74,8 +75,10 @@ export function createSearch(
 	const byCategory = new Map<Category, number[]>(CATEGORIES.map((c) => [c, []]));
 	items.forEach((item, i) => byCategory.get(item.category)!.push(i));
 
-	const findAnchor = createAnchorMatcher(items, info.words, (rows) =>
-		representative(vectors, dims, rows)
+	const findAnchor = createAnchorMatcher(
+		items,
+		info.words,
+		(rows) => representatives[rows.join(',')] ?? representative(vectors, dims, rows)
 	);
 
 	function pick(q: Float32Array, anchor: Item | null): Record<Category, Item> {

@@ -1,18 +1,16 @@
 // Main-thread wrapper around the mood worker.
 
-import type { LocalMood, Mood } from './types';
+import type { Mood } from './types';
 
 export type WorkerRequest =
 	{ type: 'init'; base: string } | { type: 'infer'; id: number; text: string };
 export type WorkerResponse =
 	| { type: 'ready' }
 	| { type: 'failed'; message: string }
-	| { type: 'local'; id: number; mood: LocalMood }
 	| { type: 'result'; id: number; mood: Mood }
 	| { type: 'error'; id: number; message: string };
 
 type Pending = {
-	onLocal?: (m: LocalMood) => void;
 	resolve: (m: Mood) => void;
 	reject: (e: Error) => void;
 };
@@ -41,7 +39,6 @@ export function start(base = '/bundle/') {
 		const msg = e.data;
 		if (msg.type === 'ready') resolveReady();
 		else if (msg.type === 'failed') rejectReady(new Error(msg.message));
-		else if (msg.type === 'local') pending.get(msg.id)?.onLocal?.(msg.mood);
 		else {
 			const p = pending.get(msg.id);
 			if (!p) return;
@@ -57,14 +54,13 @@ export function start(base = '/bundle/') {
 	};
 }
 
-/** Resolves with the full mood once the server sends the picks. When the model has the heads,
- * `onLocal` receives the palette, light, typeface, and scent before that. */
-export async function infer(text: string, onLocal?: (m: LocalMood) => void): Promise<Mood> {
+/** Run inference in the worker. */
+export async function infer(text: string): Promise<Mood> {
 	start();
 	await ready;
 	const id = nextId++;
 	return new Promise((resolve, reject) => {
-		pending.set(id, { onLocal, resolve, reject });
+		pending.set(id, { resolve, reject });
 		worker!.postMessage({ type: 'infer', id, text } satisfies WorkerRequest);
 	});
 }

@@ -3,8 +3,6 @@
 import * as ortNode from 'onnxruntime-node';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { getPlatformProxy } from 'wrangler';
-import { loadCatalog } from '../src/lib/server/load-catalog';
 import { createMoodEngine, type EngineIO } from '../src/lib/mood/engine';
 import { CATEGORIES, type OKLab } from '../src/lib/mood/types';
 
@@ -38,47 +36,33 @@ if (!queries.length) {
 	process.exit(1);
 }
 
-const platform = await getPlatformProxy<Env>({ environment: 'local' });
-try {
-	const catalog = await loadCatalog(
-		platform.env.CATALOG,
-		(platform.env as App.Platform['env']).CATALOG_PREFIX || undefined
-	);
-	const io: EngineIO = {
-		match: async (query, embedding, version) => {
-			if (version !== catalog.version)
-				throw new Error(
-					'The model and catalog versions do not match. Install a matching bundle and catalog.'
-				);
-			return catalog.match(query, Float32Array.from(embedding));
-		},
-		ort: ortNode as unknown as EngineIO['ort'],
-		async fetchBytes(p) {
-			const b = await readFile(path.join(BUNDLE, p));
-			return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
-		},
-		fetchJson: async (p) => JSON.parse(await readFile(path.join(BUNDLE, p), 'utf8'))
-	};
+const io: EngineIO = {
+	ort: ortNode as unknown as EngineIO['ort'],
+	async fetchBytes(p) {
+		const b = await readFile(path.join(BUNDLE, p));
+		return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
+	},
+	fetchJson: async (p) => JSON.parse(await readFile(path.join(BUNDLE, p), 'utf8'))
+};
 
-	const engine = await createMoodEngine(io);
-	await engine.infer('warm up');
-	for (const query of queries) {
-		const mood = await engine.infer(query);
-		console.log(`\n"${mood.query}"`);
-		const a = mood.anchor;
+const engine = await createMoodEngine(io);
+await engine.infer('warm up');
+for (const query of queries) {
+	const mood = await engine.infer(query);
+	console.log(`\n"${mood.query}"`);
+	const a = mood.anchor;
+	console.log(
+		`  anchor    ${a ? `${a.title}, ${a.creator}${a.album ? ` [${a.album}]` : ''} (${a.category})` : 'none'}`
+	);
+	console.log(`  palette   ${mood.palette.map(oklabToHex).join(' ')}`);
+	console.log(`  light     ${mood.light}`);
+	console.log(`  typeface  ${mood.typeface.family}`);
+	console.log(`  scent     ${mood.scent.text}`);
+	for (const c of CATEGORIES) {
+		const item = mood.picks[c];
 		console.log(
-			`  anchor    ${a ? `${a.title}, ${a.creator}${a.album ? ` [${a.album}]` : ''} (${a.category})` : 'none'}`
+			`  ${c.padEnd(9)} ${item ? `${item.title}, ${item.creator} (${item.year})` : 'none'}`
 		);
-		console.log(`  palette   ${mood.palette.map(oklabToHex).join(' ')}`);
-		console.log(`  light     ${mood.light}`);
-		console.log(`  typeface  ${mood.typeface.family}`);
-		console.log(`  scent     ${mood.scent.text}`);
-		for (const c of CATEGORIES) {
-			const item = mood.picks[c];
-			console.log(`  ${c.padEnd(9)} ${item.title}, ${item.creator} (${item.year})`);
-		}
-		console.log(`  ms        ${mood.ms.toFixed(1)}`);
 	}
-} finally {
-	await platform.dispose();
+	console.log(`  ms        ${mood.ms.toFixed(1)}`);
 }

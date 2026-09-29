@@ -5,7 +5,7 @@ import type { Category } from '$lib/mood/types';
 declare global {
 	namespace App {
 		interface Platform {
-			env: Env & { CATALOG_PREFIX?: string };
+			env: Env;
 			ctx: ExecutionContext;
 			caches: CacheStorage;
 			cf?: IncomingRequestCfProperties;

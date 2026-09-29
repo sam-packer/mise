@@ -38,6 +38,15 @@ export type Manifest = {
 			scent?: string;
 		};
 	};
+	files: {
+		items: { path: string; format: 'json' };
+		vectors: { path: string; format: 'fp16-le' };
+		names: { path: string; format: 'json' };
+		vocab: { path: string; format: 'json' };
+		anchors?: { path: string; format: 'json' };
+		anchorVectors?: { path: string; format: 'fp32-le' };
+	};
+	assets: Record<string, string>;
 	heads: { kind: 'anchors' | 'onnx' };
 	counts: { items: number };
 };
@@ -69,8 +78,7 @@ export type Anchor =
 
 export type Palette = [OKLab, OKLab, OKLab, OKLab, OKLab];
 
-/** The part of a mood the browser computes on its own, before the server answers with the picks. */
-export type LocalMood = {
+export type Mood = {
 	query: string;
 	/** Five colors in dominance order. */
 	palette: Palette;
@@ -79,9 +87,7 @@ export type LocalMood = {
 	scent: Scent;
 	/** Inference time in milliseconds. */
 	ms: number;
-};
 
-export type Mood = LocalMood & {
 	picks: Record<Category, Item>;
 	/**
 	 * The catalog item the feeling names ("blood orange essex honey"), or null. When set, the wall takes that

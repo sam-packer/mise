@@ -3,11 +3,11 @@
 	import { fade } from 'svelte/transition';
 	import { env } from '$env/dynamic/public';
 	import { page } from '$app/state';
-	import { goto, pushState } from '$app/navigation';
+	import { afterNavigate, goto, pushState } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { BUNDLE_URL } from '$lib/bundle';
 	import { feelingCode, feelings, normalize } from '$lib/code';
-	import type { Item, LocalMood, Mood, OKLab } from '$lib/mood/types';
+	import type { Item, Mood, OKLab } from '$lib/mood/types';
 	import { infer, ready, start } from '$lib/mood/client';
 	import { neutralTokens, paletteFavicon, paletteToTokens } from '$lib/color/oklab';
 	import { applyTokens, tweenTokens } from '$lib/color/tween';
@@ -31,11 +31,7 @@
 	let { data } = $props();
 
 	let text = $state(untrack(() => data.text));
-	let mood = $state<LocalMood | null>(null);
-	/** The picks and the anchor for the mood on the wall: null until the server answers. */
-	let match = $state<Pick<Mood, 'picks' | 'anchor'> | null>(null);
-	/** True while the server search for the mood on the wall runs. */
-	let matching = $state(false);
+	let mood = $state<Mood | null>(null);
 	let waiting = $state(false);
 	let leaving = $state(false);
 	let error = $state<string | null>(null);
@@ -51,7 +47,7 @@
 	const urlMood = $derived(data.text);
 	const open = $derived(mood && page.state.open ? page.state.open : null);
 	const openItem = $derived(
-		!match || !open ? null : open === 'anchor' ? match.anchor : match.picks[open]
+		!mood || !open ? null : open === 'anchor' ? mood.anchor : mood.picks[open]
 	);
 	const favicon = $derived(paletteFavicon(mood ? mood.palette : NEUTRAL));
 	const settled = $derived(mood !== null && text.trim() === mood.query);
@@ -83,15 +79,10 @@
 		lineRef?.focus({ preventScroll: true });
 	}
 
-	// The URL is the source of truth: Enter pushes it, back and forward move it, and this reacts.
-	// A code the store does not know shows the landing with a note.
-	$effect(() => {
-		const q = urlMood;
-		const note = data.note;
-		untrack(() => {
-			if (q !== (mood?.query ?? '')) void show(q);
-			if (note) error = note;
-		});
+	// Run inference after full navigation, including the initial page load.
+	afterNavigate(() => {
+		void show(data.text);
+		if (data.note) error = data.note;
 	});
 
 	async function show(q: string) {
@@ -104,8 +95,6 @@
 				if (my !== seq) return;
 			}
 			mood = null;
-			match = null;
-			matching = false;
 			leaving = false;
 			waiting = false;
 			face = null;
@@ -118,37 +107,15 @@
 
 		text = q;
 		if (!modelReady) waiting = true;
-		// The browser computes the palette, light, typeface, and scent before the server sends the picks.
-		const phase: { shown?: Promise<void> } = {};
 		let m: Mood;
 		try {
-			m = await infer(q, (local) => (phase.shown = reveal(my, local, '')));
+			m = await infer(q);
 		} catch (cause) {
-			await phase.shown;
 			if (my !== seq) return;
 			waiting = false;
-			matching = false;
 			error = cause instanceof Error ? cause.message : 'the moods are out — try again soon';
 			return;
 		}
-		const poem = m.picks.poem.text ?? '';
-		if (phase.shown) {
-			await phase.shown;
-			if (my !== seq) return;
-			// An anchor gives the wall that work's vibe, so the heads can change.
-			if (m.anchor) void tweenTokens(paletteToTokens(m.palette), 900);
-			mood = m;
-			loadFace(my, m, poem);
-		} else {
-			await reveal(my, m, poem);
-			if (my !== seq) return;
-		}
-		match = { picks: m.picks, anchor: m.anchor };
-		matching = false;
-	}
-
-	/** Swap the old mood out and show the new palette, light, typeface, and scent. The picks follow. */
-	async function reveal(my: number, m: LocalMood, poem: string) {
 		if (my !== seq) return;
 		waiting = false;
 		if (mood) {
@@ -156,17 +123,14 @@
 			await sleep(200);
 			if (my !== seq) return;
 		}
-
 		void tweenTokens(paletteToTokens(m.palette), 900);
 		lastOpened = null;
 		leaving = false;
 		mood = m;
-		match = null;
-		matching = true;
-		loadFace(my, m, poem);
+		loadFace(my, m, m.picks.poem?.text ?? '');
 	}
 
-	function loadFace(my: number, m: LocalMood, poem: string) {
+	function loadFace(my: number, m: Mood, poem: string) {
 		loadTypeface(m.typeface, poem).then(
 			(f) => {
 				if (my === seq) face = f;
@@ -180,7 +144,7 @@
 		const q = normalize(raw);
 		if (!q) return;
 		if (q === urlMood) {
-			if (!mood || mood.query !== q || (!match && !matching)) void show(q);
+			if (!mood || mood.query !== q) void show(q);
 			return;
 		}
 		// The code comes from the text, so the page moves at once and the store catches up on its own.
@@ -191,7 +155,7 @@
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify({ text: q })
 		}).catch(() => {});
-		// A real navigation, not pushState: shallow routing leaves page.url unchanged, so the effect would not run.
+		// Navigate to the feeling so afterNavigate starts inference.
 		void goto(resolve('/[[code=code]]', { code }), { keepFocus: true, noScroll: true });
 	}
 
@@ -224,11 +188,21 @@
 		);
 	}
 
-	// Focus returns to the tile that opened the view, on Esc, backdrop click, or the back button alike.
-	$effect(() => {
-		if (open || !opener) return;
-		opener.focus({ preventScroll: true });
-		opener = null;
+	// Restore focus after closing a full view through browser history.
+	onMount(() => {
+		const restoreFocus = async () => {
+			// Let the router's popstate listener update page.state before restoring focus.
+			await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+			await tick();
+			if (page.state.open || !opener) return;
+			opener.focus({ preventScroll: true });
+			opener = null;
+		};
+		addEventListener('popstate', restoreFocus);
+		return () => {
+			seq++;
+			removeEventListener('popstate', restoreFocus);
+		};
 	});
 </script>
 
@@ -254,9 +228,9 @@
 			onsubmit={submit}
 		/>
 
-		{#if mood && match?.anchor}
+		{#if mood?.anchor}
 			{#key mood.query}
-				{@const anchor = match.anchor}
+				{@const anchor = mood.anchor}
 				<p class="anchor" class:leaving class:editing={!settled}>
 					<span class="reveal">
 						in the key of
@@ -279,16 +253,13 @@
 
 	{#if mood}
 		{#key mood.query}
-			{#if match || matching}
-				<Wall
-					picks={match?.picks ?? null}
-					{leaving}
-					active={open || lastOpened === 'anchor' ? null : lastOpened}
-					onopen={(item, el) => openView(item.category, el)}
-				/>
-			{/if}
+			<Wall
+				picks={mood.picks}
+				{leaving}
+				active={open || lastOpened === 'anchor' ? null : lastOpened}
+				onopen={(item, el) => openView(item.category, el)}
+			/>
 		{/key}
-		<!-- An anchor can change the scent after the picks arrive; the new text writes itself in again. -->
 		{#key `${mood.query}\n${mood.scent.id}`}
 			<div class="scent" class:leaving style:--delay="{scentDelay}ms">
 				<p class="label">scent</p>

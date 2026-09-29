@@ -10,22 +10,6 @@
 	},
 	// Short links: code → feeling. Made with `bunx wrangler kv namespace create moods`.
 	"kv_namespaces": [{ "binding": "MOODS", "id": "73941fa8ddb9434f8ceddc6edbf3bc78" }],
-	// The private catalog: item records and the anchor index (R2), item vectors (Vectorize).
-	// `uv run publish` writes both. The public bundle (model, vocab, images) lives in the R2 bucket
-	// `mise`, served at cdn.mise.art: the browser fetches it and publish writes it, so the Worker has
-	// no binding to it.
-	"r2_buckets": [{ "binding": "CATALOG", "bucket_name": "mise-catalog" }],
-	"vectorize": [{ "binding": "CATALOG_SEARCH", "index_name": "mise-catalog" }],
-	// `bun run preview` and `vite dev` use this environment. Vectorize has no local simulation, so
-	// the binding is remote: `bun run preview` searches the real index. `vite dev` ignores it and
-	// searches in memory over the installed catalog files (see /api/match).
-	"env": {
-		"local": {
-			"kv_namespaces": [{ "binding": "MOODS", "id": "73941fa8ddb9434f8ceddc6edbf3bc78" }],
-			"r2_buckets": [{ "binding": "CATALOG", "bucket_name": "mise-catalog" }],
-			"vectorize": [{ "binding": "CATALOG_SEARCH", "index_name": "mise-catalog", "remote": true }]
-		}
-	},
 	"workers_dev": true,
 	"preview_urls": true
 }

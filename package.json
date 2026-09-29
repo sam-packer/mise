@@ -6,7 +6,7 @@
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build",
-		"preview": "wrangler dev .svelte-kit/cloudflare/_worker.js --env local --port 4173",
+		"preview": "wrangler dev .svelte-kit/cloudflare/_worker.js --port 4173",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "wrangler types && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
@@ -15,7 +15,7 @@
 		"gen": "wrangler types",
 		"stub": "bun scripts/build-stub-bundle.ts",
 		"query": "bun scripts/query-bundle.ts",
-		"deploy": "vite build && wrangler deploy --env=\"\""
+		"deploy": "vite build && wrangler deploy"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
