@@ -308,8 +308,7 @@ differ from an uninterrupted run.
   budget from free GPU memory and model size. Each memory failure halves the budget and
   retries the pending batch. It restores input order after encoding.
 - The retrieval heads project queries and items to 384 dims. The loss is InfoNCE with in-batch
-  negatives. After the first 3 epochs, each query also gets 8 hard negatives from the top 50
-  items of its own category. The step mines them again at the start of each epoch.
+  negatives. Training does not use hard-negative mining.
 - The palette head predicts 5 OKLab colors. Both models use the same loss:
   `(mean squared slot distance + 0.5 * sorted-lightness MSE) / 3`.
   OKLab uses L in [0, 1] and unscaled a and b. The data is the LLM and PAT palettes.
@@ -318,10 +317,17 @@ differ from an uninterrupted run.
   the saved student, the old MSE is 0.00112443 and the shared loss is 0.00149211.
   The weighted student term is 0.00447633, within 0.5% of its old value, 0.00449771.
 - The light, typeface, and scent heads use cross-entropy on the LLM labels.
-- The step keeps the checkpoint with the best validation recall@10. It stops after 3 epochs
-  without improvement, with a maximum of 10 epochs. The schedule uses linear warmup for
-  6% of the planned steps, then cosine decay. It writes distillation targets from the best
-  checkpoint. The training batch size stays 512.
+- Training runs all 6 epochs at a learning rate of `3e-4`, without early stopping. It keeps
+  the checkpoint with the best validation recall@10. The schedule uses linear warmup for
+  6% of the steps, then cosine decay. It writes distillation targets from the best checkpoint.
+  The training batch size stays 512.
+- A sweep on cached features used the full cosine schedule and selected checkpoints by
+  validation recall@10. At every epoch count, `3e-4` beat `1e-3`: validation recall was
+  0.29–0.31 versus 0.25–0.30. Runs without hard-negative mining matched or beat runs with it.
+  The best recipe by validation score was 6 epochs at `3e-4` without hard negatives:
+  validation recall@10 was 0.309 and held-out recall@10 was 0.329. The old teacher scored
+  0.283 and 0.321. An early-stopped 10-epoch run reached only 0.276 on validation because
+  it stopped before the learning rate decayed.
 
 ### train-student (§9.4)
 
@@ -529,7 +535,7 @@ JSON object per line with one field, `text`:
   To take newer data, remove `data/cache/http/` for that host.
 - Training uses fixed seeds (1337), `torch.use_deterministic_algorithms(True)`, deterministic
   cuDNN, and `CUBLAS_WORKSPACE_CONFIG=:4096:8`. A small check ran every training op (MiniLM
-  forward and backward with SDPA attention, the teacher heads, hard-negative mining, the losses)
+  forward and backward with SDPA attention, the teacher heads, the losses)
   twice in strict mode. No op raised an error, and the gradient sums matched exactly.
 - The teacher feature pass runs in strict mode too. Qwen3-Embedding-8B is a standard
   transformer with SDPA attention and no linear-attention layers, so the Triton kernel caveat

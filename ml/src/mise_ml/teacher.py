@@ -85,27 +85,7 @@ class Trainer:
         self.palette = t(self.qs.palette)
         self.has_palette = t(self.qs.has_palette)
         self.choices = [t(self.qs.light), t(self.qs.typeface), t(self.qs.scent)]
-        self.item_cat = t(self.catalog.categories)
-        self.hard = torch.full((len(self.qs.texts), cfg.hard_negatives), -1, device=dev)
         self.model = Teacher(self.fi.shape[1], cfg, self.vocab.sizes()).to(dev)
-
-    @torch.no_grad()
-    def mine(self, rows: torch.Tensor) -> None:
-        """Hard negatives: random picks from the top items of the positive's category."""
-        self.model.eval()
-        items = in_chunks(self.model.embed_items, self.fi)
-        for start in range(0, len(rows), 4096):
-            r = rows[start : start + 4096]
-            sims = in_chunks(self.model.embed_queries, self.fq[r]) @ items.T
-            p = self.pos[r]
-            sims[self.item_cat[None, :] != self.item_cat[p][:, None]] = -torch.inf
-            sims[torch.arange(len(r), device=sims.device), p] = -torch.inf
-            top = sims.topk(self.cfg.hard_negative_pool, dim=1).indices
-            pick = torch.randint(
-                0, top.shape[1], (len(r), self.cfg.hard_negatives), device=top.device
-            )
-            self.hard[r] = top.gather(1, pick)
-        self.model.train()
 
     def losses(self, b: torch.Tensor, full_softmax: bool = False) -> dict[str, torch.Tensor]:
         cfg = self.cfg
@@ -115,11 +95,7 @@ class Trainer:
         if len(with_pos):
             q = self.model.embed_queries(self.fq[with_pos])
             p = self.pos[with_pos]
-            if full_softmax:
-                cand = torch.arange(len(self.fi), device=b.device)
-            else:
-                negs = self.hard[with_pos]
-                cand = torch.cat([p, negs[negs >= 0]]).unique()
+            cand = torch.arange(len(self.fi), device=b.device) if full_softmax else p.unique()
             logits = q @ self.model.embed_items(self.fi[cand]).T / cfg.temperature
             out["retrieval"] = F.cross_entropy(logits, torch.searchsorted(cand, p))
         palette, *logits_by_head = self.model.heads(x)
@@ -170,14 +146,11 @@ class Trainer:
         best, best_epoch = -1.0, -1
         log.info(
             f"training heads: {cfg.epochs} epochs, batch {cfg.batch_size}, lr {cfg.lr}, "
-            f"{num(len(train))} train rows ({num(len(train_pos))} with an item), "
-            f"hard negatives from epoch {cfg.hard_negative_warmup}"
+            f"{num(len(train))} train rows ({num(len(train_pos))} with an item)"
         )
         start_all = time.perf_counter()
         for epoch in range(cfg.epochs):
             start = time.perf_counter()
-            if epoch >= cfg.hard_negative_warmup:
-                self.mine(train_pos)
             perm = train[torch.randperm(len(train), device="cuda", generator=gen)]
             bar = progress(
                 range(0, len(perm), cfg.batch_size), desc=f"epoch {epoch + 1}/{cfg.epochs}"
@@ -206,9 +179,6 @@ class Trainer:
                 f"best {best:.4f} (epoch {best_epoch}){', saved' if improved else ''}"
             )
             log.debug("epoch %d val parts: %s", epoch + 1, metrics)
-            if epoch + 1 - best_epoch >= cfg.patience:
-                log.info("early stop: no recall improvement for %d epochs", cfg.patience)
-                break
         log.info(
             f"training done in {elapsed(start_all)}: best val recall@10 {best:.4f} at epoch "
             f"{best_epoch} -> {CHECKPOINT.relative_to(ML_ROOT).as_posix()}"
