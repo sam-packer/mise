@@ -388,12 +388,6 @@ def write_bundle(
             "names": {"path": "search-index.json", "format": "json"},
             "vocab": {"path": "vocab.json", "format": "json"},
         },
-        "assets": {
-            p.relative_to(BUNDLE).as_posix(): p.suffix.lstrip(".")
-            for directory in (model_dir, img_dir)
-            for p in sorted(directory.rglob("*"))
-            if p.is_file()
-        },
         "heads": {"kind": "onnx"},
         "counts": {"items": len(items)},
     }

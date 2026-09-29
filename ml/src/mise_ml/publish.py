@@ -197,13 +197,6 @@ def run() -> None:
     files[manifest["files"]["items"]["path"]] = json.dumps(
         items, ensure_ascii=False, separators=(",", ":")
     ).encode()
-    manifest["assets"] = {
-        name: fmt for name, fmt in manifest["assets"].items() if not name.startswith("img/")
-    }
-    manifest["assets"].update({f"{cfg['public_url']}/{key}": "webp" for key in images})
-    files["manifest.json"] = json.dumps(
-        manifest, ensure_ascii=False, separators=(",", ":")
-    ).encode()
     hash8 = content_hash(files)
 
     s3 = client(cfg)

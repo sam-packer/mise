@@ -6,11 +6,12 @@ from pathlib import Path
 
 
 def public_files(root: Path) -> dict[str, Path]:
+    """Every file in the bundle folder; the folder holds only public files."""
     manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-    names = {"manifest.json", *manifest["assets"], *(f["path"] for f in manifest["files"].values())}
-    files = {name: root / name for name in sorted(names)}
-    for name, path in files.items():
-        if not path.is_file():
+    files = {p.relative_to(root).as_posix(): p for p in sorted(root.rglob("*")) if p.is_file()}
+    named = [manifest["encoder"]["model"], *(f["path"] for f in manifest["files"].values())]
+    for name in named:
+        if name not in files:
             raise SystemExit(f"missing bundle file: {name}")
     return files
 

@@ -46,7 +46,6 @@ export type Manifest = {
 		anchors?: { path: string; format: 'json' };
 		anchorVectors?: { path: string; format: 'fp32-le' };
 	};
-	assets: Record<string, string>;
 	heads: { kind: 'anchors' | 'onnx' };
 	counts: { items: number };
 };

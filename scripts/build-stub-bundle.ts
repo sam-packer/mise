@@ -497,7 +497,6 @@ async function main() {
 			anchors: { path: 'anchors.json', format: 'json' },
 			anchorVectors: { path: 'anchors.bin', format: 'fp32-le' }
 		},
-		assets: {},
 		heads: { kind: 'anchors' },
 		counts: { items: 0 }
 	};
@@ -569,11 +568,6 @@ async function main() {
 		path.join(OUT, 'search-index.json'),
 		JSON.stringify(buildNameData(items, flat, manifest.encoder.dims, words))
 	);
-	for (const dir of ['model', 'img']) {
-		for (const name of await readdir(path.join(OUT, dir))) {
-			manifest.assets[`${dir}/${name}`] = path.extname(name).slice(1);
-		}
-	}
 	await writeFile(path.join(OUT, 'vocab.json'), JSON.stringify(vocab));
 	await writeFile(path.join(OUT, 'manifest.json'), JSON.stringify(manifest, null, '\t'));
 
