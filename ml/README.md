@@ -2,15 +2,15 @@
 
 This package builds the real mood bundle for mise. It selects a current catalog from public APIs
 and museum data, finds images and links, labels everything with a local LLM, trains a teacher,
-distills it into a small student, and writes public files to `out/bundle/` and private files to `out/catalog/`.
+distills it into a small student, and writes the public bundle to `out/bundle/`.
 
 The pipeline uses three models. All three run on your GPU and are pinned to a revision:
 
-| Model | Role | Trained? |
-|---|---|---|
-| `Qwen/Qwen3.5-9B` | the labeler: writes item profiles, feelings, palettes, and labels | no |
-| `Qwen/Qwen3-Embedding-8B` | the teacher backbone: turns each text into a 4,096-value embedding | no, frozen |
-| `sentence-transformers/all-MiniLM-L6-v2` | the student: the only model that ships to the browser | yes, fully |
+| Model                                    | Role                                                               | Trained?   |
+| ---------------------------------------- | ------------------------------------------------------------------ | ---------- |
+| `Qwen/Qwen3.5-9B`                        | the labeler: writes item profiles, feelings, palettes, and labels  | no         |
+| `Qwen/Qwen3-Embedding-8B`                | the teacher backbone: turns each text into a 4,096-value embedding | no, frozen |
+| `sentence-transformers/all-MiniLM-L6-v2` | the student: the only model that ships to the browser              | yes, fully |
 
 The teacher is the embedding backbone plus small trained heads. Similarity ranking is the job
 the embedding model is built for. The student learns to copy the teacher and fits in 24 MiB.
@@ -23,12 +23,12 @@ disk (estimate), an internet connection, and four free API keys.
 Copy `.env.example` to `.env` and fill in the keys. `.env` is gitignored. A variable that is set
 in the shell wins over `.env`.
 
-| Variable | Get it at | Used for |
-|---|---|---|
-| `TMDB_TOKEN` or `TMDB_API_KEY` | themoviedb.org > Settings > API | films: selection and details |
-| `HARDCOVER_TOKEN` | hardcover.app/account/api | books: selection, tags, and covers |
-| `LISTENBRAINZ_TOKEN` | listenbrainz.org/settings | songs: the top recordings of each artist |
-| `LASTFM_API_KEY` | last.fm/api/account/create | songs: older artists and listener tags |
+| Variable                       | Get it at                       | Used for                                 |
+| ------------------------------ | ------------------------------- | ---------------------------------------- |
+| `TMDB_TOKEN` or `TMDB_API_KEY` | themoviedb.org > Settings > API | films: selection and details             |
+| `HARDCOVER_TOKEN`              | hardcover.app/account/api       | books: selection, tags, and covers       |
+| `LISTENBRAINZ_TOKEN`           | listenbrainz.org/settings       | songs: the top recordings of each artist |
+| `LASTFM_API_KEY`               | last.fm/api/account/create      | songs: older artists and listener tags   |
 
 Set one of the two TMDB variables. The bearer token wins when both are set. The pipeline logs
 only "set" or "missing" for a key, never its value. It sends the keys in headers or as secret
@@ -44,20 +44,19 @@ uv run publish
 
 Run these commands from `ml/`. Use `--help` with any command to see its purpose.
 
-| Command | Internal steps | Preflight |
-|---|---|---|
-| `download` | fetch, curate, resolve | catalog API keys |
-| `label` | profile | CUDA, vocab, eval feelings file |
-| `train` | train-teacher, train-student, export, eval-judge, eval, install | CUDA, vocab, eval feelings file |
-| `publish` | publish | R2 keys and Wrangler login for Vectorize |
+| Command    | Internal steps                                                  | Preflight                       |
+| ---------- | --------------------------------------------------------------- | ------------------------------- |
+| `download` | fetch, curate, resolve                                          | catalog API keys                |
+| `label`    | profile                                                         | CUDA, vocab, eval feelings file |
+| `train`    | train-teacher, train-student, export, eval-judge, eval, install | CUDA, vocab, eval feelings file |
+| `publish`  | publish                                                         | R2 keys                         |
 
 Each command skips completed work. Training and export use provenance stamps. Fetch,
 resolve, and labeling use their own resumable caches. A failed step stops its command.
 
-`train` installs the public bundle in `../static/bundle/` and the private catalog in local
-R2 only after the ship gate passes. If it fails, the command exits with an error and names
+`train` installs the public bundle in `../static/bundle/` only after the ship gate passes. If it fails, the command exits with an error and names
 `out/eval_report.json`. There is no override. `train` never publishes.
-Run `publish` separately to upload the installed bundle and catalog.
+Run `publish` separately to upload the installed public bundle.
 
 ## Logs
 
@@ -72,21 +71,22 @@ checksum, to `out/logs/<time>-<command>.log`. Each command writes one file and e
 table of its steps and their times, including a failed step.
 
 ## Steps
+
 The times are estimates for an RTX 5090, except where the text says "measured".
 
-| Step | Input | Output | Time |
-|---|---|---|---|
-| `fetch` | `sources.toml` | `data/raw/` | 5–10 min |
-| `curate` | APIs, `data/raw/` | `data/curated/catalog.jsonl`, `catalog.meta.json`, `pat.jsonl` | about 21 min the first time (song selection, measured); under 1 min from the cache |
-| `resolve` | `catalog.jsonl`, APIs | `data/curated/resolved.jsonl`, `data/img/` | about 15 min (songs are the slowest) |
-| `profile` | `resolved.jsonl`, `eval_feelings.jsonl`, vocab | `data/curated/profiles.jsonl`, `moods.jsonl`, `pat_sentences.jsonl`, `labels-<vocab>.jsonl`, `distill.jsonl` | 4–10 h plus distillation feelings |
-| `train-teacher` | the curated files | `data/models/teacher.pt`, `teacher_outputs.pt` | 30–60 min |
-| `train-student` | teacher outputs | `data/models/student/` | 20–40 min |
-| `export` | student, curated files, images | `out/bundle/`, `out/catalog/` | 5 min |
-| `eval-judge` | teacher, student, bundle | `data/curated/judgments.jsonl` | 1–2 h |
-| `eval` | all of the above | `out/eval_report.json`, `out/run.json` | 5 min |
-| `install` | `out/bundle/`, `out/catalog/` | `../static/bundle/`, local R2, `out/installed-catalog/`, `.dev.vars` | seconds |
-| `publish` | `../static/bundle/`, `out/installed-catalog/` | both R2 buckets, Vectorize, `bundle.ts`, `catalog.ts` | minutes the first time |
+| Step            | Input                                          | Output                                                                                                       | Time                                                                               |
+| --------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
+| `fetch`         | `sources.toml`                                 | `data/raw/`                                                                                                  | 5–10 min                                                                           |
+| `curate`        | APIs, `data/raw/`                              | `data/curated/catalog.jsonl`, `catalog.meta.json`, `pat.jsonl`                                               | about 21 min the first time (song selection, measured); under 1 min from the cache |
+| `resolve`       | `catalog.jsonl`, APIs                          | `data/curated/resolved.jsonl`, `data/img/`                                                                   | about 15 min (songs are the slowest)                                               |
+| `profile`       | `resolved.jsonl`, `eval_feelings.jsonl`, vocab | `data/curated/profiles.jsonl`, `moods.jsonl`, `pat_sentences.jsonl`, `labels-<vocab>.jsonl`, `distill.jsonl` | 4–10 h plus distillation feelings                                                  |
+| `train-teacher` | the curated files                              | `data/models/teacher.pt`, `teacher_outputs.pt`                                                               | 30–60 min                                                                          |
+| `train-student` | teacher outputs                                | `data/models/student/`                                                                                       | 20–40 min                                                                          |
+| `export`        | student, curated files, images                 | `out/bundle/`                                                                                                | 5 min                                                                              |
+| `eval-judge`    | teacher, student, bundle                       | `data/curated/judgments.jsonl`                                                                               | 1–2 h                                                                              |
+| `eval`          | all of the above                               | `out/eval_report.json`, `out/run.json`                                                                       | 5 min                                                                              |
+| `install`       | `out/bundle/`                                  | `../static/bundle/`                                                                                          | seconds                                                                            |
+| `publish`       | `../static/bundle/`                            | public R2 bucket, `bundle.ts`                                                                                | minutes the first time                                                             |
 
 ### fetch
 
@@ -94,11 +94,11 @@ The times are estimates for an RTX 5090, except where the text says "measured".
 match, `fetch` stops with a "CHECKSUM MISMATCH" message. That means the source changed upstream.
 Review the new file, then update `sources.toml`.
 
-| Source | Use | License |
-|---|---|---|
-| Met Open Access CSV | public-domain artworks and their subject tags | CC0 |
-| PoetryDB | public-domain poems | poems are public domain |
-| Text2Colors PAT (mirror) | 10,183 name-to-palette pairs | see below |
+| Source                   | Use                                           | License                 |
+| ------------------------ | --------------------------------------------- | ----------------------- |
+| Met Open Access CSV      | public-domain artworks and their subject tags | CC0                     |
+| PoetryDB                 | public-domain poems                           | poems are public domain |
+| Text2Colors PAT (mirror) | 10,183 name-to-palette pairs                  | see below               |
 
 - PoetryDB is an API, not a file. `fetch` reads every author in sorted order and writes
   `data/raw/poetrydb/poems.jsonl` sorted by author and title. PoetryDB answers HTTP 503 for a
@@ -115,22 +115,22 @@ Review the new file, then update `sources.toml`.
 APIs. `data/cache/http/` caches every API answer, so a second run needs almost no network. The
 four categories run in parallel, because each one uses its own hosts.
 
-| Source | What `curate` asks | Calls for a full run |
-|---|---|---|
-| TMDB | `/3/discover/movie` for each year, 20 films a page | about 300 |
-| Hardcover | one GraphQL query of 500 books for each page | about 10 |
-| ListenBrainz | sitewide recording and artist stats (1,000 a call), popularity in batches of 500, the top recordings of each artist | about 2,100 |
-| Last.fm | top artists of 14 older tags, 100 a call | 14 |
-| MusicBrainz | recording search `rid:(a OR b ...)`, 100 recordings a call | about 90 |
-| Art Institute of Chicago | artwork search, 100 a page | 7 |
-| Cleveland Museum of Art | artworks, 1,000 a page | 4 |
+| Source                   | What `curate` asks                                                                                                  | Calls for a full run |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------- | -------------------- |
+| TMDB                     | `/3/discover/movie` for each year, 20 films a page                                                                  | about 300            |
+| Hardcover                | one GraphQL query of 500 books for each page                                                                        | about 10             |
+| ListenBrainz             | sitewide recording and artist stats (1,000 a call), popularity in batches of 500, the top recordings of each artist | about 2,100          |
+| Last.fm                  | top artists of 14 older tags, 100 a call                                                                            | 14                   |
+| MusicBrainz              | recording search `rid:(a OR b ...)`, 100 recordings a call                                                          | about 90             |
+| Art Institute of Chicago | artwork search, 100 a page                                                                                          | 7                    |
+| Cleveland Museum of Art  | artworks, 1,000 a page                                                                                              | 4                    |
 
 **Eras.** Films, books, and songs are chosen by era. Each era keeps its quota:
 
-| Category | Eras and items |
-|---|---|
-| film (2,000) | 1920–1969: 300 · 1970–1999: 600 · 2000–2019: 700 · 2020–2026: 400 |
-| book (2,000) | before 1950: 300 · 1950–1999: 500 · 2000–2019: 700 · 2020–2026: 500 |
+| Category     | Eras and items                                                        |
+| ------------ | --------------------------------------------------------------------- |
+| film (2,000) | 1920–1969: 300 · 1970–1999: 600 · 2000–2019: 700 · 2020–2026: 400     |
+| book (2,000) | before 1950: 300 · 1950–1999: 500 · 2000–2019: 700 · 2020–2026: 500   |
 | song (3,000) | before 1980: 450 · 1980–1999: 750 · 2000–2019: 1,050 · 2020–2026: 750 |
 
 Within an era, a year first gets at most two times its even share. The free slots then go to
@@ -217,8 +217,7 @@ image, except poems.
   API. Chicago images come from Commons too: Wikidata maps the Chicago artwork ID (P4610) to
   the image, 200 ids for each query. Chicago's own IIIF image server answers this pipeline with
   a Cloudflare 403, so a Chicago object without a Commons image is dropped
-  (`no_commons_image`). Measured: 546 of the 625 Chicago candidates have one, for a target of
-  500. Cleveland images are the `web` images from its API.
+  (`no_commons_image`). Measured: 546 of the 625 Chicago candidates have one, for a target of 500. Cleveland images are the `web` images from its API.
 - **poem:** no media. The primary link is a Poetry Foundation search.
 
 **A blocked host.** After 10 failed requests in a row to one host, `resolve` makes no more
@@ -310,7 +309,7 @@ differ from an uninterrupted run.
   pinned revision. It loads with `AutoModel`. The encoding follows the model card:
   - A query (a feeling) gets a one-sentence instruction:
     `Instruct: Given a feeling someone describes as a scene or a moment, retrieve films, books,
-    songs, poems, and artworks that share its mood\nQuery:<feeling>`.
+songs, poems, and artworks that share its mood\nQuery:<feeling>`.
   - An item text gets no instruction.
   - The tokenizer adds `<|endoftext|>` at the end and pads on the left. The feature is the
     hidden state of that last token (4,096 values), L2-normalized.
@@ -351,10 +350,10 @@ differ from an uninterrupted run.
 The student previously trained on about 40,000 LLM-written queries. The measured baseline
 in `out/eval_report.json` uses 290 human-style eval feelings:
 
-| Model | Held-out recall@10 (LLM paraphrases) | Judged recall@10 (human-style feelings) |
-|---|---|---|
-| Qwen3-Embedding-8B teacher with heads | 0.329 | 0.718 |
-| MiniLM-L6 student, int8 | 0.312 | 0.644 |
+| Model                                 | Held-out recall@10 (LLM paraphrases) | Judged recall@10 (human-style feelings) |
+| ------------------------------------- | ------------------------------------ | --------------------------------------- |
+| Qwen3-Embedding-8B teacher with heads | 0.329                                | 0.718                                   |
+| MiniLM-L6 student, int8               | 0.312                                | 0.644                                   |
 
 The held-out gap is about 1.6 percentage points with unrounded scores. The human-style gap
 is 7.4 points, with a confidence interval of [5.8, 9.1]. The student is at the 24 MiB cap.
@@ -399,28 +398,30 @@ These are baseline measurements, not results from training with the new feelings
   It rejects candidates above 24 MiB before scoring them. It selects the highest validation
   recall, with smaller size as the tie-breaker. It logs each fp32 gap and writes measurements
   beside the selected graph in `out/onnx/`. Held-out scores do not select the recipe.
-- The bundle has `manifest.json` (`heads.kind = "onnx"`, `pooling = "none"`, `maxTokens = 96`),
-  `model/` (the model and the tokenizer files), `vocab.json`, and `img/` in `out/bundle/`.
-  The private `out/catalog/` has `items.json`, `vectors.bin`, and `catalog.json`.
-  The metadata has the dimensions, item count, heads kind, and common words for name matching.
-  The stub uses `out/stub/bundle/` and `out/stub/catalog/`. It adds private `anchors.json`
-  and `anchors.bin`. It does not change the trained export.
-  The int8 graph computes the item vectors, so items and queries use one code path.
-  Songs carry `album`. The manifest version is a hash of the model and the vectors.
+- The public bundle in `out/bundle/` has `manifest.json`, `model/`, `vocab.json`, `img/`,
+  `items.json`, `vectors.bin`, and `search-index.json`. The manifest lists each file and format.
+  Item vectors use IEEE fp16, little-endian, in catalog row order. The int8 graph computes
+  the vectors. The browser decodes them once to float32, without renormalizing them.
+  Name data contains common words that occur in names and representative rows for creators
+  and albums. Export selects representatives from the original float32 vectors with the
+  shared TypeScript search code. Export needs Bun.
+  The stub writes to `out/stub/bundle/` and adds `anchors.json` and fp32 `anchors.bin` for
+  its heads. It keeps the trained export. Songs carry `album`.
+  The manifest version is a hash of the model and the fp16 vectors.
 
 The saved MiniLM-L6 student measured as follows on 1,335 validation feelings and 3,111
 held-out feelings. Each query runs alone, as it does in the browser. Item vectors use the
 shared length-sorted token batches. Selection uses only the validation column.
 
-| Recipe | MiB | Val recall@10 | Held-out recall@10 |
-|---|---|---|---|
-| fp32 reference | 88.54 | 0.278652 | 0.298939 |
-| per-tensor int8 | 22.77 | 0.271910 | 0.287689 |
-| per-channel int8 | 22.88 | 0.274906 | 0.297011 |
-| per-channel, heads in fp32 | 22.88 | 0.274906 | same graph as per-channel |
-| per-channel, last attention output in fp32 | 23.30 | 0.273408 | not used for selection |
-| per-channel, last linear layer in fp32 | 24.56 | exceeds cap | exceeds cap |
-| per-channel, embeddings in fp32 | 56.97 | exceeds cap | exceeds cap |
+| Recipe                                     | MiB   | Val recall@10 | Held-out recall@10        |
+| ------------------------------------------ | ----- | ------------- | ------------------------- |
+| fp32 reference                             | 88.54 | 0.278652      | 0.298939                  |
+| per-tensor int8                            | 22.77 | 0.271910      | 0.287689                  |
+| per-channel int8                           | 22.88 | 0.274906      | 0.297011                  |
+| per-channel, heads in fp32                 | 22.88 | 0.274906      | same graph as per-channel |
+| per-channel, last attention output in fp32 | 23.30 | 0.273408      | not used for selection    |
+| per-channel, last linear layer in fp32     | 24.56 | exceeds cap   | exceeds cap               |
+| per-channel, embeddings in fp32            | 56.97 | exceeds cap   | exceeds cap               |
 
 Per-channel int8 loses 0.19 percentage points of held-out recall against fp32.
 Export measures the candidates again for each new checkpoint.
@@ -429,76 +430,36 @@ Export measures the candidates again for each new checkpoint.
 
 This internal step runs only after the ship gate in `uv run train`.
 
-`install` copies `out/bundle/` to `../static/bundle/`. It replaces the old public bundle
-and removes private files from older installs. It keeps a private copy in
-`out/installed-catalog/` for publish. It puts each catalog file in local R2 with
-`bunx wrangler r2 object put <bucket>/<key> --local --file <path>`. It writes
-`CATALOG_PREFIX` in the ignored `../.dev.vars` file and keeps the other lines.
-It does not change `src/lib/server/catalog.ts`. No catalog file goes into `static/`.
-
-Set `R2_CATALOG_BUCKET` to the bucket name (default `mise-catalog`). Set the same name
-for the `CATALOG` binding in `../wrangler.jsonc`. Install checks that they match.
-The adapter in `vite.config.ts` provides `platform.env.CATALOG` during development.
-It also loads `.dev.vars` into `platform.env`. Remove the `CATALOG_PREFIX` line to select
-the tracked published prefix again. That catalog must already be in local R2.
-Both Vite and `wrangler dev` use `.wrangler/state` from the repository root. Restart
-the dev server after install. Use `PUBLIC_BUNDLE_URL=/bundle/` for local model files.
+`install` copies `out/bundle/` to `../static/bundle/` through a staging directory.
+Use `PUBLIC_BUNDLE_URL=/bundle/` in the dev server environment to select these files.
+Install needs no Cloudflare credentials.
 
 ### publish
 
-The web app runs on Cloudflare Workers. The bundle does not go into the app's static assets. It
-goes into a public Cloudflare R2 bucket. `publish` uploads the installed public bundle from
-`../static/bundle/` and its private catalog from `out/installed-catalog/`.
-Run `uv run train` to export, check the gate, and install a trained model.
-The Bun stub installs its own public files and local catalog without Python.
-Run `uv run train` again before publishing a trained export after a stub build.
-The Worker reads the compact anchor index through R2 and searches item vectors through
-Vectorize. Complete [the one-time Vectorize setup](#vectorize-catalog-search) before publishing.
-The browser runs inference and sends the query and embedding to `POST /api/match`.
-Only selected items leave the server. Stub responses also include the computed heads.
+The app runs on Cloudflare Workers. The public bundle lives in the R2 bucket `mise`,
+served at `cdn.mise.art`. `publish` reads the installed bundle from `../static/bundle/`.
+Run `uv run train` to export, check the ship gate, and install a trained model.
+The Bun stub installs its own bundle without Python. After a stub build, install the
+trained bundle again before publishing a trained release.
 
-Set up the bucket one time:
+Use an R2 API token with Object Read & Write access to the public bucket.
+Set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`
+(default `mise`), and `R2_PUBLIC_URL` (such as `https://cdn.mise.art`) in `.env`.
+See `.env.example`. Inspect the bucket and its custom domain before the first publish.
 
-1. Create the bucket: `bunx wrangler r2 bucket create mise`.
-2. Connect a custom domain, such as `cdn.mise.art`: R2 > `mise` > Settings > Custom Domains.
-   Create the private bucket with `bunx wrangler r2 bucket create mise-catalog`.
-   Do not connect a public domain or enable public access for this bucket.
-3. Create an API token: R2 > Manage API tokens > Create API token. Choose "Object Read & Write"
-   and scope it to both buckets.
-4. Set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` (default
-   `mise`), `R2_CATALOG_BUCKET` (default `mise-catalog`), and `R2_PUBLIC_URL`
-   (such as `https://cdn.mise.art`) in `.env`. See `.env.example`.
-   Match `R2_CATALOG_BUCKET` to `CATALOG.bucket_name` in `../wrangler.jsonc`.
-   `publish` names each missing variable and stops.
+Run `uv run publish` from this directory.
 
-Then run:
+- Images go to `img/<first 20 hex of the SHA-256>.webp`. Publish uploads missing images,
+  16 at a time, and rewrites each record's image URL to the public CDN URL.
+- All other files go to `bundles/<date>-<hash8>/`, including records, fp16 vectors, and
+  name data. The manifest lists the published image URLs. Publish uploads the manifest last.
+- The prefix hash covers the file names and bytes, including rewritten records and manifest.
+  Publish reuses an existing prefix with the same content hash.
+- Objects use `Cache-Control: public, max-age=31536000, immutable`.
+  JSON uses `application/json`; ONNX and binary files use `application/octet-stream`.
 
-```
-uv run publish
-```
-
-- **Images** go to `img/<first 20 hex of the SHA-256 of the file>.webp`. `publish` lists the
-  keys under `img/` once and uploads only the images that are not there yet, 16 at a time.
-- **Public bundle files** go to `bundles/<date>-<hash8>/`: `manifest.json`, `model/`,
-  and `vocab.json`. The manifest goes last.
-- **Private catalog files** go to `catalog/<date>-<hash8>/` in the private bucket:
-  `items.json`, `vectors.bin`, `catalog.json`, `search-index.json`, `vectorize-v1.json`,
-  and `anchors.*` for the stub only.
-  Each `image.src` in `items.json` becomes the public URL
-  `<R2_PUBLIC_URL>/img/<hash>.webp`. The catalog metadata goes last.
-- **Version.** Each prefix uses the UTC date and the first eight hex digits of a SHA-256
-  over its files. The catalog hash includes the rewritten image URLs. Publish reuses an
-  existing prefix with the same content hash, including one from an earlier date.
-- **Headers.** Each object gets `Cache-Control: public, max-age=31536000, immutable`, because
-  no key ever gets new content. JSON is `application/json`, `.onnx` and `.bin` are
-  `application/octet-stream`, and images are `image/webp`.
-
-After both uploads finish, publish writes the public URL to `../src/lib/bundle.ts` and
-the private prefix to `../src/lib/server/catalog.ts`. Only publish writes this prefix.
-Publish puts the same catalog bytes under the same prefix in local R2 and selects that
-prefix in `.dev.vars`. The server checks the public model version on each search and
-returns HTTP 409 if it differs from the catalog version. Publish first. Commit both files.
-Then run `bun run deploy` from the repository root.
+After the upload completes, publish writes the bundle URL to `../src/lib/bundle.ts`.
+Commit that file, then run `bun run deploy` from the repository root.
 
 **CORS.** The app's web worker fetches the model and the JSON from another origin, so the bucket
 needs a CORS rule. `publish` adds the rule if no rule covers it yet, and keeps the other rules.
@@ -508,17 +469,17 @@ policy:
 
 ```json
 [
-  {
-    "AllowedOrigins": [
-      "https://mise.art",
-      "https://www.mise.art",
-      "http://localhost:5173",
-      "http://localhost:4173"
-    ],
-    "AllowedMethods": ["GET", "HEAD"],
-    "AllowedHeaders": ["*"],
-    "MaxAgeSeconds": 86400
-  }
+	{
+		"AllowedOrigins": [
+			"https://mise.art",
+			"https://www.mise.art",
+			"http://localhost:5173",
+			"http://localhost:4173"
+		],
+		"AllowedMethods": ["GET", "HEAD"],
+		"AllowedHeaders": ["*"],
+		"MaxAgeSeconds": 86400
+	}
 ]
 ```
 
@@ -554,83 +515,17 @@ feelings. The report and log include a paired bootstrap 95% interval for each ga
 bootstrap resamples feelings 10,000 times with seed 1337. The gate uses the point estimates;
 it reports intervals to show uncertainty. Missing scores fail the gate.
 
-## Vectorize catalog search
+## Browser catalog search
 
-The Worker reads item vectors and item records from the private `mise-catalog` Vectorize
-index. It reads `search-index.json` from the private `mise-catalog` R2 bucket. That file
-contains catalog metadata, the common-word list, title/album/creator fields in catalog
-order, and the precomputed representative row for each album and creator. The browser
-receives only the selected records from `/api/match`.
+The browser worker loads the model, records, vectors, and name data once. It runs the encoder,
+heads, anchor matcher, and exact scan locally. Each request returns one complete mood.
+Picks follow category order, with ties resolved by catalog row. A zero vector selects the
+first eligible row in each category. Named works use a normalized 70% item / 30% query blend.
+Picks exclude the anchor's exact creator and title. Creator and album queries use the
+representatives selected at export. The anchors-kind stub uses the same search path.
 
-Run these one-time commands from the repository root. Use the same Cloudflare account
-as the R2 configuration in `ml/.env`. Inspect an existing index before changing anything.
-
-```powershell
-bunx wrangler login
-bunx wrangler vectorize list
-bunx wrangler vectorize create mise-catalog --dimensions 384 --metric cosine --update-config=false
-bunx wrangler vectorize create-metadata-index mise-catalog --property-name category --type string
-bunx wrangler vectorize create-metadata-index mise-catalog --property-name creator --type number
-bunx wrangler vectorize create-metadata-index mise-catalog --property-name title --type number
-bunx wrangler vectorize list-metadata-index mise-catalog
-```
-
-Wait until all three metadata indexes appear before uploading vectors. These resources
-were created on 2026-09-29. Do not repeat their creation for a normal publish.
-
-`publish` uses the installed Wrangler through `bun x wrangler`. It uses your existing
-Wrangler login, with `R2_ACCOUNT_ID` as the account. No separate Vectorize token is needed
-with that login. In CI, provide `CLOUDFLARE_API_TOKEN` with Vectorize read/write access to
-that account. Keep the existing R2 credentials for R2 uploads.
-
-Each namespace equals the complete R2 catalog prefix, for example
-`catalog/2026-09-29-e6a24991/`. Each vector ID contains that prefix and its catalog row.
-Thus a new publish cannot replace the live version's vectors, even for the same item.
-The model's `catalog.json` version remains the value checked by the API's 409 response.
-The derived search files do not change the existing catalog content hash or prefix reuse.
-
-After rewriting image URLs to their CDN form, `publish` prepares NDJSON batches of at
-most 5,000 records and uploads them with `vectorize upsert`. It checks every uploaded
-Float32 vector and record, then checks category queries. It writes a private
-`vectorize-v1.json` completion record only after these checks pass. A rerun verifies and
-reuses that completed namespace. An interrupted upload can safely repeat the upserts.
-If a completed namespace differs, publishing stops. It does not recreate indexes or
-change permissions. Publishing writes `src/lib/server/catalog.ts` only after the
-Vectorize data and private R2 files are ready.
-
-Metadata contains the category, catalog row, exact creator/title group identifiers,
-and the complete item as a JSON string. The current largest metadata record is 1,775
-UTF-8 bytes, including poem text, below the 10 KiB limit. Preparation stops if a future
-record exceeds the limit. Creator and title group identifiers avoid the 64-byte indexed
-string limit and preserve exact string equality for anchor exclusions.
-
-The Worker requests 50 candidates per category with values and metadata, then reranks
-them by the original dot product with catalog order as the tie breaker. It applies
-creator/title exclusions before candidate selection. Anchor rules, the 0.7 item blend,
-and stub heads use shared code with local search. A zero embedding uses catalog order.
-Vectorize search is approximate; see [the measured agreement](vectorize-report.md).
-
-For `install` plus `vite dev`, and for `bun run stub`, keep the local R2 catalog and the
-in-memory search. The API selects that path in development. `bun run query` also uses
-the local catalog. The adapter, local installer, query script, and preview command select
-the `local` Wrangler environment, which has no Vectorize binding. Local development does
-not require a remote index or a Cloudflare login. Both implementations use `loadCatalog`
-and the same match interface. This fallback is needed for unpublished local models and
-the anchors-kind stub bundle. Production uses `CATALOG_SEARCH` from `wrangler.jsonc`.
-
-Inspect the `Server-Timing` response header on a successful `/api/match` request.
-`catalog` measures cached catalog/index loading. `search` measures anchor matching,
-Vectorize reads and queries, and reranking. CLI process timings are not Worker latency.
-
-Cloudflare references:
-
-- [Create an index](https://developers.cloudflare.com/vectorize/best-practices/create-indexes/)
-- [Insert/upsert NDJSON and namespaces](https://developers.cloudflare.com/vectorize/best-practices/insert-vectors/)
-- [Query options and getByIds](https://developers.cloudflare.com/vectorize/reference/client-api/)
-- [Metadata indexes and filters](https://developers.cloudflare.com/vectorize/reference/metadata-filtering/)
-- [Limits](https://developers.cloudflare.com/vectorize/platform/limits/)
-- [Wrangler commands](https://developers.cloudflare.com/vectorize/reference/wrangler-commands/)
-- [Worker binding configuration](https://developers.cloudflare.com/workers/wrangler/configuration/#vectorize-indexes)
+Run `bun run query "a quiet evening"` from the repository root to use the browser engine
+with the installed bundle and the native ONNX runtime.
 
 ## Eval feelings
 
@@ -638,7 +533,7 @@ Cloudflare references:
 JSON object per line with one field, `text`:
 
 ```json
-{"text": "a snowy december and i just made warm hot chocolate"}
+{ "text": "a snowy december and i just made warm hot chocolate" }
 ```
 
 - Write about 300 distinct feelings. The ship gate requires at least 100.
