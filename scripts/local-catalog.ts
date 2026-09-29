@@ -54,6 +54,8 @@ export async function installLocalCatalog(directory: string, prefix?: string, ro
 				'put',
 				`${bucket}/${prefix}${name}`,
 				'--local',
+				'--env',
+				'local',
 				'--config',
 				path.join(root, 'wrangler.jsonc'),
 				'--persist-to',

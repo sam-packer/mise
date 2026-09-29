@@ -11,6 +11,14 @@
 	// Short links: code → feeling. Made with `bunx wrangler kv namespace create moods`.
 	"kv_namespaces": [{ "binding": "MOODS", "id": "73941fa8ddb9434f8ceddc6edbf3bc78" }],
 	"r2_buckets": [{ "binding": "CATALOG", "bucket_name": "mise-catalog" }],
+	"vectorize": [{ "binding": "CATALOG_SEARCH", "index_name": "mise-catalog" }],
+	"env": {
+		"local": {
+			"kv_namespaces": [{ "binding": "MOODS", "id": "73941fa8ddb9434f8ceddc6edbf3bc78" }],
+			"r2_buckets": [{ "binding": "CATALOG", "bucket_name": "mise-catalog" }],
+			"vectorize": []
+		}
+	},
 	"workers_dev": true,
 	"preview_urls": true
 }

@@ -29,6 +29,7 @@ from mise_ml.delivery import (
 from mise_ml.install import TARGET
 from mise_ml.log import elapsed, get, num, progress
 from mise_ml.threads import run_all
+from mise_ml.vectorize import Vectorize, publish_search
 
 log = get(__name__)
 
@@ -145,7 +146,7 @@ def write_bundle_ts(url: str) -> bool:
     content = f"{BUNDLE_TS_COMMENT}\nexport const BUNDLE_URL = '{url}';\n"
     if BUNDLE_TS.exists() and BUNDLE_TS.read_text(encoding="utf-8") == content:
         return False
-    BUNDLE_TS.write_text(content, encoding="utf-8")
+    BUNDLE_TS.write_text(content, encoding="utf-8", newline="\n")
     return True
 
 
@@ -216,6 +217,8 @@ def run() -> None:
 
     s3 = client(cfg)
     require_buckets(s3, cfg)
+    vectorize = Vectorize(cfg["account_id"])
+    vectorize.check()
     apply_cors(s3, cfg["bucket"])
 
     reused = existing_prefix(s3, cfg["bucket"], "bundles/", hash8)
@@ -228,6 +231,10 @@ def run() -> None:
     catalog_prefix = existing_prefix(s3, cfg["catalog_bucket"], "catalog/", catalog_hash)
     if catalog_prefix is None:
         catalog_prefix = f"catalog/{datetime.now(UTC):%Y-%m-%d}-{catalog_hash}/"
+    # Derived search data does not change the existing catalog content hash or R2 prefix.
+    private["search-index.json"] = publish_search(
+        vectorize, s3, cfg["catalog_bucket"], private, catalog_prefix
+    )
     log.info(
         f"bundle {manifest['version']} -> {prefix.removeprefix('bundles/').rstrip('/')}: "
         f"{num(len(files))} files, {num(len(images))} images, bucket {cfg['bucket']}"
