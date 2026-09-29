@@ -88,6 +88,7 @@ class CachedClient:
         self.client = httpx.Client(
             timeout=cfg.timeout, follow_redirects=True, headers={"User-Agent": USER_AGENT}
         )
+        self.cache_locks: dict[str, threading.Lock] = {}
 
     def _check(self, url: str) -> str:
         """The host of url. A host that the breaker stopped raises FetchError at once."""
@@ -176,6 +177,21 @@ class CachedClient:
         return answer
 
     def _json(
+        self,
+        url: str,
+        key: str,
+        headers: dict[str, str] | None,
+        secret: dict[str, str] | None,
+        post: Any,
+    ) -> Any | None:
+        # Songs often share an album. Fetch it once, and do not replace a cache
+        # file while another worker has it open (Windows denies that replacement).
+        with self.guard:
+            lock = self.cache_locks.setdefault(key, threading.Lock())
+        with lock:
+            return self._json_cached(url, key, headers, secret, post)
+
+    def _json_cached(
         self,
         url: str,
         key: str,

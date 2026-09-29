@@ -102,6 +102,8 @@ class ResolveConfig:
             # ListenBrainz allows 30 requests in 10 s; MusicBrainz 1 request/s.
             "api.listenbrainz.org": 0.34,
             "musicbrainz.org": 1.05,
+            "coverartarchive.org": 1.05,
+            "archive.org": 1.05,
             # Last.fm asks for at most 5 requests/s.
             "ws.audioscrobbler.com": 0.2,
             "api.deezer.com": 0.12,

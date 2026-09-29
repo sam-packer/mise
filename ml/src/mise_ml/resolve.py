@@ -4,6 +4,7 @@ import json
 import re
 import threading
 import time
+import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from typing import Any
@@ -123,10 +124,11 @@ SONG_MIN_TAGS = 3
 TAG_JUNK = re.compile(r"seen live|favou?rites?|\bmy\b|\bbest\b|spotify|albums? i own|^\d{4}$")
 
 
-# Album titles that mark a compilation, live, or remix release rather than the original.
-NOT_ORIGINAL = re.compile(
-    r"\b(live|remix(es)?|greatest hits|best of|hits|collection|anthology|essentials?|"
-    r"karaoke|tribute|compilation|now that'?s|in the style of|instrumental|covers?)\b",
+# Title clues supplement Deezer's record_type and Various Artists album credit.
+COMPILATION_TITLE = re.compile(
+    r"\b(greatest hits|best of|hits|collection|anthology|essentials?|ultimate|solid gold|"
+    r"soundtrack|motion picture|compilation|coffret|awards|radio \d+|vol(?:ume)?\.?\s*\d+|"
+    r"now that'?s)\b",
     re.IGNORECASE,
 )
 
@@ -135,11 +137,35 @@ def song_key(artist: str, title: str) -> tuple[str, str]:
     return norm(artist), norm(base_title(title))
 
 
-def song_rank(track: dict, want_track: str) -> tuple[bool, bool]:
-    """Sort key: original album first, then an exact title before a longer one."""
-    album = track.get("album", {}).get("title", "")
-    exact = norm(base_title(track.get("title", ""))) == want_track
-    return (bool(NOT_ORIGINAL.search(album)), not exact)
+def album_key(title: str) -> str:
+    """Normalize edition suffixes, accents, and optional leading articles."""
+    title = re.sub(r"^the\s+", "", base_title(title), flags=re.I)
+    title = re.sub(
+        r"\s+-\s+(?:(?:the )?\d+(?:st|nd|rd|th) (?:mini )?album|.*remaster.*)$",
+        "",
+        title,
+        flags=re.I,
+    )
+    title = re.sub(
+        r"\s*[([][^)\]]*(?:edition|remaster|deluxe|anniversary|expanded|bonus)[^)\]]*[)\]]",
+        "",
+        title,
+        flags=re.I,
+    )
+    title = "".join(c for c in unicodedata.normalize("NFKD", title) if not unicodedata.combining(c))
+    return "".join(c for c in title.casefold().replace("&", "and") if c.isalnum())
+
+
+def release_keys(group: dict) -> set[str]:
+    return {album_key(title) for title in [group["title"], *group.get("release_titles", [])]}
+
+
+def compilation(album: dict) -> bool:
+    return (
+        album.get("record_type") == "compile"
+        or norm(album.get("artist", {}).get("name", "")) == "variousartists"
+        or bool(COMPILATION_TITLE.search(album.get("title", "")))
+    )
 
 
 # Joins in an artist credit: "A feat. B", "A ft. B", "A with B", "A x B", "A & B", "A, B".
@@ -174,13 +200,15 @@ class Resolver:
         self.aic_images: dict[str, str] = {}
         self.song_tags: dict[tuple[str, str], list[tuple[int, str]]] = {}
 
-    def image(self, url: str, item_id: str) -> dict | None:
+    def image(
+        self, url: str, item_id: str, *, min_edge: int = 64, refresh: bool = False
+    ) -> dict | None:
         if not url or placeholder_url(url):
             return None
         name = item_id.replace(":", "-") + ".webp"
         path = IMG / name
         img = None
-        if path.exists() and not placeholder_bytes(path.read_bytes()):
+        if not refresh and path.exists() and not placeholder_bytes(path.read_bytes()):
             try:
                 img = Image.open(path).convert("RGB")
             except OSError:
@@ -195,11 +223,13 @@ class Resolver:
                 img = Image.open(io.BytesIO(data)).convert("RGB")
             except OSError:
                 return None
-            if min(img.size) < 64:
+            if min(img.size) < min_edge:
                 return None
             img.thumbnail(
                 (self.cfg.image_long_edge, self.cfg.image_long_edge), Image.Resampling.LANCZOS
             )
+            if min(img.size) < min_edge:
+                return None
             out = io.BytesIO()
             img.save(out, "WEBP", quality=self.cfg.webp_quality, method=6)
             if placeholder_bytes(out.getvalue()):
@@ -308,12 +338,86 @@ class Resolver:
             "links": {"primary": primary},
         }, "ok"
 
-    def deezer_track(self, r: Record) -> tuple[dict | None, str]:
-        """The Deezer track: by ISRC when MusicBrainz has one, else by search."""
+    def deezer_album(self, track: dict) -> dict:
+        album = track.get("album") or {}
+        if album.get("id") and "record_type" not in album:
+            full = self.http.get_json(f"{DEEZER}/album/{album['id']}") or {}
+            # Deezer can redirect a deleted compilation to an unrelated album.
+            if full.get("id") == album["id"] or (
+                full and album_key(full.get("title", "")) == album_key(album.get("title", ""))
+            ):
+                album = {
+                    **album,
+                    **{k: full[k] for k in ("record_type", "release_date", "artist") if k in full},
+                }
+                track["album"] = album
+        return album
+
+    def current_track(self, r: Record) -> dict | None:
+        isrc = r["source"].get("isrc")
+        track = self.http.get_json(f"{DEEZER}/track/isrc:{isrc}") if isrc else None
+        if not track or track.get("id") != r["source"].get("deezer"):
+            track = self.http.get_json(f"{DEEZER}/track/{r['source']['deezer']}")
+        return track
+
+    def release_groups(self, r: Record) -> list[dict]:
+        """Browse every official release; recording lookups truncate their release list."""
+        mbid = r["source"].get("mbid")
+        if not mbid:
+            return []
+        groups = {}
+        offset = 0
+        while True:
+            params = urlencode(
+                {
+                    "recording": mbid,
+                    "inc": "release-groups",
+                    "fmt": "json",
+                    "limit": 100,
+                    "offset": offset,
+                }
+            )
+            body = self.http.get_json(f"https://musicbrainz.org/ws/2/release?{params}") or {}
+            releases = body.get("releases", [])
+            for release in releases:
+                group = release.get("release-group") or {}
+                if release.get("status") == "Official" and group.get("id"):
+                    entry = groups.setdefault(group["id"], {**group, "release_titles": []})
+                    if release.get("title") not in entry["release_titles"]:
+                        entry["release_titles"].append(release.get("title") or group["title"])
+            offset += len(releases)
+            if not releases or offset >= body.get("release-count", 0):
+                break
+        return sorted(
+            groups.values(), key=lambda g: (g.get("first-release-date") or "9999", g["id"])
+        )
+
+    def compilation_song(self, r: Record, album: dict) -> bool:
+        if compilation(album) or compilation({"title": r.get("album", "")}):
+            return True
+        if not album.get("record_type"):
+            matching = [
+                g
+                for g in self.release_groups(r)
+                if album_key(r.get("album", "")) in release_keys(g)
+            ]
+            if matching:
+                return any(
+                    set(g.get("secondary-types", [])) & {"Compilation", "Soundtrack"}
+                    for g in matching
+                )
+            # Deleted annual collections and mood playlists have no album type.
+            return bool(
+                re.search(
+                    r"\b(?:(?:19|20)\d{2}|chill|playlist|classics?)\b", r.get("album", ""), re.I
+                )
+            )
+        return False
+
+    def deezer_track(self, r: Record, current: dict | None = None) -> tuple[dict | None, str]:
+        """Prefer the original release without relaxing song or artist identity."""
         title = base_title(r["title"])
         lead = lead_artist(r["creator"])
-        # The full credit keeps band names such as "Simon & Garfunkel" whole; the lead
-        # artist matches a credit such as "Dave feat. Stormzy".
         want_artists = {norm(r["creator"]), norm(lead)}
         want_track = norm(title)
 
@@ -324,25 +428,139 @@ class Resolver:
                 base_title(t.get("title", ""))
             ).startswith(want_track)
 
+        def valid(t: dict) -> bool:
+            return fits(t) and (bool(VERSION.search(r["title"])) or not VERSION.search(t["title"]))
+
+        if current and not valid(current):
+            current = None
+        matches = []
+        if current:
+            matches.append(current)
         isrc = r["source"].get("isrc")
         if isrc:
             t = self.http.get_json(f"{DEEZER}/track/isrc:{isrc}")
             if t and fits(t) and not VERSION.search(t["title"]):
-                return t, "ok"
-        matches: list[dict] = []
+                matches.append(t)
         for artist in dict.fromkeys([r["creator"], lead]):
             query = urlencode({"q": f"{artist} {title}", "limit": 25})
             found = self.http.get_json(f"{DEEZER}/search?{query}")
-            matches = [t for t in (found or {}).get("data", []) if fits(t)]
-            if matches:
-                break
+            matches.extend(t for t in (found or {}).get("data", []) if valid(t))
+        matches = list({t["id"]: t for t in matches}.values())
+        for t in matches:
+            self.deezer_album(t)
+
+        # Deezer dates describe reissues. MusicBrainz ties the recording to its
+        # original release group, including albums absent from track search.
+        groups = self.release_groups(r)
+        originals = [
+            g
+            for g in groups
+            if g.get("primary-type") in ("Album", "Single", "EP")
+            and not set(g.get("secondary-types", []))
+            & {"Compilation", "Soundtrack", "Live", "Remix", "DJ-mix"}
+        ]
+        albums = [g for g in originals if g.get("primary-type") == "Album"]
+        if not albums:
+            # MusicBrainz can link a radio edit only to its single, while Deezer
+            # has a matching track on the studio album. Keep the identity checks.
+            studio = [
+                t
+                for t in matches
+                if t["album"].get("record_type") == "album"
+                and not compilation(t["album"])
+                and not VERSION.search(t["album"].get("title", ""))
+            ]
+            if studio:
+                return min(
+                    studio,
+                    key=lambda t: (
+                        t["album"].get("release_date") or "9999",
+                        norm(base_title(t["title"])) != want_track,
+                        t["id"],
+                    ),
+                ), "Deezer studio album (MusicBrainz has no studio album for this recording)"
+        # A recording can be a bonus track on an older album's reissue. If that
+        # album has no matching track in Deezer, try the next official release.
+        ordered = albums + [g for g in originals if g not in albums]
+        for original in ordered:
+            names = release_keys(original)
+            if (
+                current
+                and album_key(r.get("album", "")) in names
+                and album_key(current["album"]["title"]) in names
+            ):
+                return current, f"already on original release group {original['id']}"
+            preferred = [t for t in matches if album_key(t["album"]["title"]) in names]
+            if not preferred:
+                query = urlencode({"q": f"{lead} {original['title']}", "limit": 100})
+                found = self.http.get_json(f"{DEEZER}/search/album?{query}") or {}
+
+                def album_lists(found: dict):
+                    yield found.get("data", [])
+                    artist_id = next(
+                        (
+                            t.get("artist", {}).get("id")
+                            for t in matches
+                            if t.get("artist", {}).get("id")
+                        ),
+                        None,
+                    )
+                    if not artist_id and current and fits(current):
+                        artist_id = current.get("artist", {}).get("id")
+                    if artist_id:
+                        url = f"{DEEZER}/artist/{artist_id}/albums?limit=100"
+                        while url:
+                            page = self.http.get_json(url) or {}
+                            yield page.get("data", [])
+                            url = page.get("next")
+
+                for candidates in album_lists(found):
+                    for album in candidates:
+                        if album_key(album["title"]) not in names:
+                            continue
+                        full = self.http.get_json(f"{DEEZER}/album/{album['id']}")
+                        if not full or album_key(full["title"]) not in names:
+                            continue
+                        page = full.get("tracks") or {}
+                        while True:
+                            for t in page.get("data", []):
+                                if valid(t):
+                                    preferred.append({**t, "album": full})
+                            if not page.get("next"):
+                                break
+                            page = self.http.get_json(page["next"]) or {}
+                    if preferred:
+                        break
+            if preferred:
+                chosen = min(
+                    preferred,
+                    key=lambda t: (
+                        t["album"].get("record_type") == "compile",
+                        not t.get("readable", True),
+                        norm(base_title(t["title"])) != want_track,
+                        not bool(t.get("preview")),
+                        t["id"],
+                    ),
+                )
+                return chosen, f"original release group {original['id']}"
+        if current and groups:
+            titles = ", ".join(repr(g["title"]) for g in ordered)
+            return current, (
+                f"no matching Deezer track on official original releases: {titles}"
+                if ordered
+                else "no official studio album, single, or EP for this recording"
+            )
         if not matches:
             return None, "no_deezer_match"
-        if not VERSION.search(r["title"]):
-            matches = [t for t in matches if not VERSION.search(t["title"])]
-            if not matches:
-                return None, "only_other_versions_on_deezer"
-        return min(matches, key=lambda t: song_rank(t, want_track)), "ok"
+        return min(
+            matches,
+            key=lambda t: (
+                compilation(t["album"]) or bool(VERSION.search(t["album"].get("title", ""))),
+                norm(base_title(t["title"])) != want_track,
+                t["album"].get("release_date") or "9999",
+                t["id"],
+            ),
+        ), "Deezer album type and date (no original release group)"
 
     def lastfm_tags(self, r: Record) -> list[str]:
         """Tags from the bulk tag lists; a song with too few gets track.getTopTags."""
@@ -374,20 +592,65 @@ class Resolver:
         return unique(tags + own, self.curate.song_tags)
 
     def song_image(self, r: Record, track: dict) -> dict | None:
-        """Try Deezer, Last.fm album, Last.fm track album, then iTunes, in that order."""
+        """Accept only covers with at least 600 pixels on both edges, without upscaling."""
         album = track.get("album") or {}
-        url = album.get("cover_xl") or ""
+        album_title = album.get("title") or r.get("album") or ""
         errors = []
-        if track.get("md5_image") != "" and album.get("md5_image") != "":
+
+        def cover(url: str) -> dict | None:
+            if not url:
+                return None
+            host = urlsplit(url).hostname
+            if host and host.endswith("mzstatic.com"):
+                self.cfg.min_interval.setdefault(host, 0.2)
             try:
-                image = self.image(url, r["id"])
-                if image:
-                    return image
+                result = self.image(url, r["id"], min_edge=600, refresh=True)
+                if result:
+                    log.info("%s: artwork from %s", r["id"], url)
+                return result
             except FetchError as e:
                 errors.append(str(e))
-                log.warning("%s: Deezer art failed: %s", r["id"], e)
+                return None
+
+        if (
+            track.get("md5_image") != ""
+            and album.get("md5_image") != ""
+            and (image := cover(album.get("cover_xl") or ""))
+        ):
+            return image
+        params = {
+            "term": f"{r['creator']} {base_title(r['title'])}",
+            "entity": "song",
+            "limit": 100,
+        }
+        try:
+            body = self.http.get_json(f"https://itunes.apple.com/search?{urlencode(params)}") or {}
+            for t in body.get("results", []):
+                if song_key(t.get("artistName", ""), t.get("trackName", "")) == song_key(
+                    r["creator"], r["title"]
+                ) and album_key(t.get("collectionName", "")) == album_key(album_title):
+                    url = (t.get("artworkUrl100") or "").replace("100x100bb", "1000x1000bb")
+                    if image := cover(url):
+                        return image
+        except FetchError as e:
+            errors.append(str(e))
+        try:
+            for group in self.release_groups(r):
+                if album_key(album_title) not in release_keys(group):
+                    continue
+                body = (
+                    self.http.get_json(f"https://coverartarchive.org/release-group/{group['id']}")
+                    or {}
+                )
+                for art in body.get("images", []):
+                    if art.get("front"):
+                        for url in [(art.get("thumbnails") or {}).get("1200"), art.get("image")]:
+                            if image := cover(url or ""):
+                                return image
+        except FetchError as e:
+            errors.append(str(e))
         for method, field, value in (
-            ("album.getinfo", "album", r.get("album") or album.get("title")),
+            ("album.getinfo", "album", album_title),
             ("track.getinfo", "track", base_title(r["title"])),
         ):
             if not value:
@@ -408,41 +671,29 @@ class Resolver:
                     if field == "album"
                     else (body.get("track") or {}).get("album")
                 )
-                for cover in reversed((info or {}).get("image") or []):
-                    url = cover.get("#text") or ""
-                    image = self.image(url, r["id"])
-                    if image:
-                        log.info("%s: artwork from Last.fm %s", r["id"], method)
+                if field == "track" and album_key((info or {}).get("title", "")) != album_key(
+                    album_title
+                ):
+                    continue
+                urls = dict.fromkeys(
+                    re.sub(r"/i/u/[^/]+/", "/i/u/", c.get("#text") or "")
+                    for c in reversed((info or {}).get("image") or [])
+                )
+                for url in urls:
+                    if image := cover(url):
                         return image
             except FetchError as e:
                 errors.append(str(e))
-        params = {"term": f"{r['creator']} {base_title(r['title'])}", "entity": "song", "limit": 25}
-        try:
-            body = self.http.get_json(f"https://itunes.apple.com/search?{urlencode(params)}") or {}
-            matches = [
-                t
-                for t in body.get("results", [])
-                if song_key(t.get("artistName", ""), t.get("trackName", ""))
-                == song_key(r["creator"], r["title"])
-            ]
-            matches.sort(
-                key=lambda t: (
-                    norm(t.get("collectionName", ""))
-                    != norm(r.get("album") or album.get("title", "")),
-                    bool(NOT_ORIGINAL.search(t.get("collectionName", ""))),
-                )
-            )
-            for t in matches:
-                url = (t.get("artworkUrl100") or "").replace("100x100bb", "800x800bb")
-                host = urlsplit(url).hostname
-                if host:
-                    self.cfg.min_interval.setdefault(host, 0.2)
-                image = self.image(url, r["id"])
-                if image:
-                    log.info("%s: artwork from iTunes", r["id"])
-                    return image
-        except FetchError as e:
-            errors.append(str(e))
+        # Try the original-size URL of a saved Last.fm cover when its album
+        # no longer appears in the services' search results.
+        old_url = (r.get("image") or {}).get("url", "")
+        if (
+            album_key(album_title) == album_key(r.get("album", ""))
+            and urlsplit(old_url).hostname
+            in {"lastfm.freetls.fastly.net", "lastfm-img.freetls.fastly.net"}
+            and (image := cover(re.sub(r"/i/u/[^/]+/", "/i/u/", old_url)))
+        ):
+            return image
         if errors:
             raise FetchError("; ".join(errors))
         return None
@@ -587,35 +838,55 @@ def retry_fixable_drops() -> None:
     write_json(RESOLVE_META, {"version": RESOLVE_VERSION})
 
 
-def repair_song_art(resolver: Resolver, rows: list[Record]) -> None:
-    """Repair only placeholder artwork; preserve all other resolved fields."""
-    pending = []
-    for r in rows:
-        if r["category"] != "song":
+def repair_songs(resolver: Resolver, rows: list[Record]) -> None:
+    """Inspect cached album types; change only compilations and inadequate artwork."""
+    for r in progress(
+        [r for r in rows if r["category"] == "song"], desc="check song albums", unit="song"
+    ):
+        track = resolver.current_track(r)
+        album = resolver.deezer_album(track) if track else {"title": r.get("album", "")}
+        old_image = r.get("image")
+        bad_image = not old_image or min(old_image["w"], old_image["h"]) < 600
+        if old_image:
+            path = IMG / old_image["src"].rsplit("/", 1)[-1]
+            if path.exists():
+                try:
+                    with Image.open(path) as im:
+                        bad_image = (
+                            bad_image or min(im.size) < 600 or placeholder_bytes(path.read_bytes())
+                        )
+                except OSError:
+                    bad_image = True
+            else:
+                bad_image = True
+            bad_image = bad_image or placeholder_url(old_image.get("url", ""))
+        chosen = track
+        reason = "artwork repair"
+        suspect = resolver.compilation_song(r, album)
+        if suspect:
+            chosen, reason = resolver.deezer_track(r, track)
+        changed = suspect and chosen and chosen["album"]["title"] != r.get("album")
+        if not changed and not bad_image:
+            if suspect:
+                log.info("%s: kept %r: %s", r["id"], r.get("album"), reason)
             continue
-        image = r.get("image")
-        if not image:
-            pending.append(r)
-            continue
-        path = IMG / image["src"].rsplit("/", 1)[-1]
-        if placeholder_url(image.get("url", "")) or (
-            path.exists() and placeholder_bytes(path.read_bytes())
+        artwork_track = chosen or {"album": album}
+        if not changed and album_key(artwork_track["album"].get("title", "")) != album_key(
+            r.get("album", "")
         ):
-            pending.append(r)
-    for r in progress(pending, desc="repair song art", unit="song"):
-        old = r.get("image")
-        if old and placeholder_url(old.get("url", "")):
-            (IMG / old["src"].rsplit("/", 1)[-1]).unlink(missing_ok=True)
-        # Do not serve the placeholder if every source fails. A missing image retries.
-        r["image"] = None
-        try:
-            r["image"] = resolver.song_image(r, {"album": {"title": r.get("album")}})
-        except FetchError as e:
-            log.warning("%s: no artwork: %s", r["id"], e)
-        if not r["image"]:
-            log.warning("%s: no artwork from Last.fm or matching iTunes tracks", r["id"])
-            if old:
-                (IMG / old["src"].rsplit("/", 1)[-1]).unlink(missing_ok=True)
+            artwork_track = {"album": {"title": r.get("album", "")}}
+        image = resolver.song_image(r, artwork_track)
+        if image is None:
+            raise FetchError(f"{r['id']}: no matching cover at least 600 px")
+        if changed:
+            log.info(
+                "%s: album %r -> %r: %s", r["id"], r.get("album"), chosen["album"]["title"], reason
+            )
+            r["album"] = chosen["album"]["title"]
+            r["source"]["deezer"] = chosen["id"]
+            r["preview"] = f"/api/preview/deezer/{chosen['id']}"
+            r["links"].update(primary=chosen["link"], deezer=chosen["link"])
+        r["image"] = image
         write_jsonl(RESOLVED, rows)
 
 
@@ -645,7 +916,7 @@ def run() -> None:
     )
 
     resolver = Resolver(cfg)
-    repair_song_art(resolver, resolved)
+    repair_songs(resolver, resolved)
     lock = threading.Lock()
     stats: dict[str, Counter[str]] = {c: Counter() for c in wanted}
     group_targets = targets(CurateConfig())
