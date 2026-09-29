@@ -3,6 +3,7 @@ import type * as ORT from 'onnxruntime-web';
 import { Tokenizer } from '@huggingface/tokenizers';
 import {
 	type Light,
+	type LocalMood,
 	type Manifest,
 	type Mood,
 	type OKLab,
@@ -23,7 +24,9 @@ export type EngineIO = EncoderIO & {
 };
 
 export type MoodEngine = {
-	infer(query: string): Promise<Mood>;
+	/** Resolves with the full mood once the server answers. When the heads run in the browser, `onLocal`
+	 * receives the mood before that, as soon as the encoder finishes. */
+	infer(query: string, onLocal?: (mood: LocalMood) => void): Promise<Mood>;
 };
 
 export type Encoder = {
@@ -143,31 +146,45 @@ export async function createMoodEngine(io: EngineIO): Promise<MoodEngine> {
 		};
 	}
 
+	function toMood(
+		query: string,
+		heads: NonNullable<MatchResult['heads']>,
+		start: number
+	): LocalMood {
+		return {
+			query,
+			palette: heads.palette,
+			light: heads.light as Light,
+			typeface: typefaces.get(heads.typeface)!,
+			scent: scents.get(heads.scent)!,
+			ms: performance.now() - start
+		};
+	}
+
 	return {
-		async infer(query) {
+		async infer(query, onLocal) {
 			const start = performance.now();
 			const { embedding, outputs } = await encoder.run(query);
+			const local =
+				manifest.heads.kind === 'onnx' ? toMood(query, onnxHeads(outputs), start) : null;
+			if (local) onLocal?.(local);
+
 			const {
 				picks,
 				anchor,
 				heads: serverHeads
 			} = await io.match(query, Array.from(embedding), manifest.version);
-			const heads =
-				manifest.heads.kind === 'anchors'
-					? serverHeads
-					: onnxHeads(anchor ? (await encoder.run(anchor.vibe)).outputs : outputs);
-			if (!heads) throw new Error('missing anchor heads');
-
-			return {
-				query,
-				palette: heads.palette,
-				light: heads.light as Light,
-				typeface: typefaces.get(heads.typeface)!,
-				scent: scents.get(heads.scent)!,
-				picks,
-				anchor,
-				ms: performance.now() - start
-			};
+			let mood: LocalMood;
+			if (!local) {
+				// The anchors bundle has no heads in the model: the server sends them with the match.
+				if (!serverHeads) throw new Error('missing anchor heads');
+				mood = toMood(query, serverHeads, start);
+			} else if (anchor) {
+				mood = toMood(query, onnxHeads((await encoder.run(anchor.vibe)).outputs), start);
+			} else {
+				mood = { ...local, ms: performance.now() - start };
+			}
+			return { ...mood, picks, anchor };
 		}
 	};
 }
