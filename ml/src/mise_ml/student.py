@@ -157,7 +157,6 @@ def run() -> None:
         cfg.backbone, revision=cfg.revision, attn_implementation="sdpa"
     )
     model = Student(encoder, vocab.sizes(), cfg.head_hidden, cfg.dims).to(dev)
-    model.encoder.compile(dynamic=True)
 
     split = np.array(t["split"])
     train = np.flatnonzero(split == "train")

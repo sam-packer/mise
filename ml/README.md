@@ -335,9 +335,13 @@ differ from an uninterrupted run.
   `sentence-transformers/all-MiniLM-L6-v2`, fully fine-tuned, at a pinned revision.
   The model uses masked mean pooling. A learned projection maps other hidden sizes to
   384 dimensions. It passes token type IDs only when the encoder supports them.
-- Training uses SDPA attention, fused AdamW, TF32 matmul, and a compiled encoder.
-  The encoder passed a forward and backward check on Windows with triton-windows.
-  Compilation has a startup cost and can compile again for new input shapes.
+- Training uses SDPA attention, fused AdamW, and TF32 matmul. The encoder runs eager:
+  with `torch.compile` an epoch took 131 s, against 94 s eager, on an RTX 5090.
+- Each step encodes about 1,030-1,120 items with gradients, a different count each step. The
+  commands set `PYTORCH_ALLOC_CONF=roundup_power2_divisions:4`, so the CUDA allocator reuses
+  blocks across these sizes. Without it, reserved memory grew past the GPU and a kernel launch
+  failed in epoch 3. With it, peak reserved memory is about 15 GB. A value you set in the shell
+  wins.
 - The losses are: KL divergence between the teacher and student query-to-item similarity
   distributions (temperature 0.05), InfoNCE on (item feeling, item) pairs, the shared palette
   loss against teacher colors, and KL to the teacher choice logits.

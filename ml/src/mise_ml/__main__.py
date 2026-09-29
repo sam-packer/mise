@@ -1,4 +1,5 @@
 import argparse
+import os
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -159,6 +160,10 @@ def run_train(run: Run) -> None:
 def command(name: str) -> None:
     argparse.ArgumentParser(prog=name, description=COMMANDS[name]).parse_args()
     load_dotenv(ML_ROOT / ".env", override=False)
+    # The student encodes about 1,030-1,120 items per step. Without rounding, the allocator
+    # caches a block for each size, reserves more than the GPU has, and a kernel launch fails.
+    # Torch reads this before its first CUDA allocation, and no torch import happens above.
+    os.environ.setdefault("PYTORCH_ALLOC_CONF", "roundup_power2_divisions:4")
     run = Run({"download": 3, "label": 1, "train": 6, "publish": 1}[name])
     with logs.session(name):
         try:
