@@ -53,7 +53,7 @@ def load_catalog() -> Catalog:
         )
     items.sort(key=lambda it: (CATEGORIES.index(it["category"]), it["id"]))
     if not items:
-        raise SystemExit("no profiled items; run resolve and profile first")
+        raise SystemExit("no profiled items; run uv run download and uv run label first")
     return Catalog(
         items=items,
         texts=[item_text(it) for it in items],
@@ -169,6 +169,24 @@ def load_queries(catalog: Catalog, vocab: Vocab, cfg: TeacherConfig) -> QuerySet
     )
 
 
+def recall_scores(
+    query_emb: np.ndarray,
+    pos: np.ndarray,
+    item_emb: np.ndarray,
+    item_categories: np.ndarray,
+    k: int = 10,
+) -> np.ndarray:
+    """One hit value per query, ranked within the positive item's category."""
+    if len(pos) == 0:
+        return np.empty(0, dtype=np.float64)
+    sims = query_emb @ item_emb.T
+    same = item_categories[None, :] == item_categories[pos][:, None]
+    sims = np.where(same, sims, -np.inf)
+    pos_sim = sims[np.arange(len(pos)), pos]
+    rank = (sims > pos_sim[:, None]).sum(axis=1)
+    return (rank < k).astype(np.float64)
+
+
 def recall_at_k(
     query_emb: np.ndarray,
     pos: np.ndarray,
@@ -176,12 +194,5 @@ def recall_at_k(
     item_categories: np.ndarray,
     k: int = 10,
 ) -> float:
-    """Share of queries whose positive item ranks in the top k of its own category."""
-    if len(pos) == 0:
-        return float("nan")
-    sims = query_emb @ item_emb.T
-    same = item_categories[None, :] == item_categories[pos][:, None]
-    sims = np.where(same, sims, -np.inf)
-    pos_sim = sims[np.arange(len(pos)), pos]
-    rank = (sims > pos_sim[:, None]).sum(axis=1)
-    return float((rank < k).mean())
+    scores = recall_scores(query_emb, pos, item_emb, item_categories, k)
+    return float(scores.mean()) if len(scores) else float("nan")
