@@ -12,6 +12,7 @@ from mise_ml.data import load_catalog, load_queries, recall_at_k
 from mise_ml.features import ITEM_TEMPLATE, QUERY_TEMPLATE, FeatureStore, shared_encoder
 from mise_ml.heads import ChoiceHeads, Mlp, palette_loss
 from mise_ml.log import elapsed, get, num, progress
+from mise_ml.training import cosine_schedule, teacher_config
 from mise_ml.util import make_deterministic
 from mise_ml.vocab import load_vocab
 
@@ -44,7 +45,7 @@ def item_store(cfg: TeacherConfig) -> FeatureStore:
 
 def load_teacher() -> tuple[Teacher, dict]:
     ckpt = torch.load(CHECKPOINT, map_location="cuda", weights_only=False)
-    cfg = TeacherConfig(**ckpt["cfg"])
+    cfg = teacher_config(ckpt["cfg"])
     model = Teacher(ckpt["d_in"], cfg, tuple(ckpt["sizes"])).cuda().eval()
     model.load_state_dict(ckpt["state"])
     return model, ckpt
@@ -164,9 +165,9 @@ class Trainer:
         train_pos = train[self.pos[train] >= 0]
         opt = torch.optim.AdamW(self.model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
         steps = cfg.epochs * -(-len(train) // cfg.batch_size)
-        sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=cfg.lr, total_steps=steps)
+        sched = cosine_schedule(opt, steps, cfg.warmup_ratio)
         gen = torch.Generator(device="cuda").manual_seed(SEED)
-        best, best_epoch = float("inf"), -1
+        best, best_epoch = -1.0, -1
         log.info(
             f"training heads: {cfg.epochs} epochs, batch {cfg.batch_size}, lr {cfg.lr}, "
             f"{num(len(train))} train rows ({num(len(train_pos))} with an item), "
@@ -194,9 +195,9 @@ class Trainer:
                         loss=f"{total / i:.4f}", lr=f"{sched.get_last_lr()[0]:.2e}", refresh=False
                     )
             metrics = self.validate(val)
-            improved = metrics["loss"] < best
+            improved = metrics["recall@10"] > best
             if improved:
-                best, best_epoch = metrics["loss"], epoch + 1
+                best, best_epoch = metrics["recall@10"], epoch + 1
                 self.save()
             log.info(
                 f"epoch {epoch + 1}/{cfg.epochs} ({elapsed(start)}): train loss "
@@ -205,8 +206,11 @@ class Trainer:
                 f"best {best:.4f} (epoch {best_epoch}){', saved' if improved else ''}"
             )
             log.debug("epoch %d val parts: %s", epoch + 1, metrics)
+            if epoch + 1 - best_epoch >= cfg.patience:
+                log.info("early stop: no recall improvement for %d epochs", cfg.patience)
+                break
         log.info(
-            f"training done in {elapsed(start_all)}: best val loss {best:.4f} at epoch "
+            f"training done in {elapsed(start_all)}: best val recall@10 {best:.4f} at epoch "
             f"{best_epoch} -> {CHECKPOINT.relative_to(ML_ROOT).as_posix()}"
         )
 

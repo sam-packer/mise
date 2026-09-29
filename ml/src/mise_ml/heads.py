@@ -23,10 +23,10 @@ def decode_palette(raw: torch.Tensor) -> torch.Tensor:
 
 
 def palette_loss(pred: torch.Tensor, target: torch.Tensor, lightness_weight: float) -> torch.Tensor:
-    """Slot-wise squared OKLab distance plus a term on the sorted lightness values."""
+    """Mean squared OKLab error plus sorted lightness error, both per channel."""
     slot = (pred - target).pow(2).sum(-1).mean()
     sorted_l = F.mse_loss(pred[..., 0].sort(-1).values, target[..., 0].sort(-1).values)
-    return slot + lightness_weight * sorted_l
+    return (slot + lightness_weight * sorted_l) / 3
 
 
 def kl_logits(student: torch.Tensor, teacher: torch.Tensor, temperature: float) -> torch.Tensor:

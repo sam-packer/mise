@@ -17,7 +17,8 @@ import torch.nn.functional as F
 from transformers import AutoModel, AutoTokenizer
 
 from mise_ml.config import FEATURES, TeacherConfig
-from mise_ml.log import elapsed, get, num, progress
+from mise_ml.inference import encode_batches
+from mise_ml.log import elapsed, get, num
 from mise_ml.util import slugify
 
 log = get(__name__)
@@ -49,25 +50,21 @@ class QwenEncoder:
     @torch.inference_mode()
     def encode(self, texts: list[str], template: str) -> np.ndarray:
         """Last-token pooling with left padding, then L2 normalization."""
-        order = sorted(range(len(texts)), key=lambda i: (len(texts[i]), texts[i]))
-        out = np.zeros((len(texts), self.model.config.hidden_size), dtype=np.float16)
-        step = self.cfg.encode_batch
-        bar = progress(total=len(texts), desc="features", unit="text")
-        for start in range(0, len(order), step):
-            idx = order[start : start + step]
-            batch = self.tokenizer(
-                [template.format(text=texts[i]) for i in idx],
-                padding=True,
-                truncation=True,
-                max_length=self.cfg.max_length,
-                return_tensors="pt",
-            ).to("cuda")
+
+        def encode(batch):
+            batch = {k: v.to("cuda") for k, v in batch.items()}
             hidden = self.model(**batch, use_cache=False).last_hidden_state
             last = F.normalize(hidden[:, -1].float(), p=2, dim=-1)
-            out[idx] = last.cpu().numpy().astype(np.float16)
-            bar.update(len(idx))
-        bar.close()
-        return out
+            return last.cpu().numpy().astype(np.float16)
+
+        return encode_batches(
+            self.tokenizer,
+            [template.format(text=t) for t in texts],
+            self.cfg.max_length,
+            encode,
+            self.model,
+            "cuda",
+        )
 
 
 @functools.cache

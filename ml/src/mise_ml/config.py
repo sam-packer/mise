@@ -151,11 +151,12 @@ class TeacherConfig:
     backbone: str = "Qwen/Qwen3-Embedding-8B"
     revision: str = "1d8ad4ca9b3dd8059ad90a75d4983776a23d44af"
     max_length: int = 256
-    encode_batch: int = 64
     dims: int = 384
     hidden: int = 1024
     dropout: float = 0.1
-    epochs: int = 40
+    epochs: int = 10
+    patience: int = 3
+    warmup_ratio: float = 0.06
     batch_size: int = 512
     lr: float = 1e-3
     weight_decay: float = 0.01
@@ -163,7 +164,7 @@ class TeacherConfig:
     hard_negatives: int = 8
     hard_negative_pool: int = 50
     hard_negative_warmup: int = 3
-    palette_weight: float = 1.0
+    palette_weight: float = 3.0
     lightness_weight: float = 0.5
     choice_weight: float = 0.5
     label_smoothing: float = 0.1
@@ -179,7 +180,8 @@ class StudentConfig:
     item_max_length: int = 128
     dims: int = 384
     head_hidden: int = 256
-    epochs: int = 4
+    epochs: int = 12
+    patience: int = 3
     batch_size: int = 64
     encoder_lr: float = 3e-5
     head_lr: float = 1e-3
@@ -190,10 +192,10 @@ class StudentConfig:
     random_items: int = 128
     kl_weight: float = 1.0
     infonce_weight: float = 1.0
-    palette_weight: float = 4.0
+    palette_weight: float = 3.0
+    lightness_weight: float = 0.5
     choice_weight: float = 0.5
     choice_temperature: float = 2.0
-    item_encode_batch: int = 256
 
 
 @dataclass(frozen=True)

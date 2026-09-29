@@ -1,4 +1,5 @@
 import dataclasses
+import inspect
 import json
 import math
 import time
@@ -12,9 +13,11 @@ from transformers import AutoModel, AutoTokenizer, PreTrainedModel, PreTrainedTo
 
 from mise_ml.config import ML_ROOT, MODELS, SEED, StudentConfig
 from mise_ml.data import load_catalog, recall_at_k
-from mise_ml.heads import ChoiceHeads, kl_logits
+from mise_ml.heads import ChoiceHeads, kl_logits, palette_loss
+from mise_ml.inference import encode_batches
 from mise_ml.log import elapsed, get, num, progress
 from mise_ml.teacher import OUTPUTS as TEACHER_OUTPUTS
+from mise_ml.training import cosine_schedule
 from mise_ml.util import make_deterministic
 from mise_ml.vocab import load_vocab
 
@@ -24,33 +27,45 @@ OUTPUT_NAMES = ("embedding", "palette", "light", "typeface", "scent")
 
 
 class Student(nn.Module):
-    """MiniLM encoder with mean pooling plus the palette and choice heads."""
+    """Text encoder with masked mean pooling and retrieval, palette, and choice heads."""
 
     def __init__(
-        self, encoder: PreTrainedModel, sizes: tuple[int, int, int], head_hidden: int
+        self,
+        encoder: PreTrainedModel,
+        sizes: tuple[int, int, int],
+        head_hidden: int,
+        dims: int = 384,
     ) -> None:
         super().__init__()
         self.encoder = encoder
+        self.uses_token_types = "token_type_ids" in inspect.signature(encoder.forward).parameters
+        self.projection = (
+            nn.Identity()
+            if encoder.config.hidden_size == dims
+            else nn.Linear(encoder.config.hidden_size, dims, bias=False)
+        )
+        self.dims = dims
         self.heads = ChoiceHeads(encoder.config.hidden_size, head_hidden, sizes, dropout=0.1)
 
     def pool(
         self, input_ids: torch.Tensor, attention_mask: torch.Tensor, token_type_ids: torch.Tensor
     ) -> torch.Tensor:
-        hidden = self.encoder(
-            input_ids=input_ids, attention_mask=attention_mask, token_type_ids=token_type_ids
-        ).last_hidden_state
+        inputs = {"input_ids": input_ids, "attention_mask": attention_mask}
+        if self.uses_token_types:
+            inputs["token_type_ids"] = token_type_ids
+        hidden = self.encoder(**inputs).last_hidden_state
         mask = attention_mask.unsqueeze(-1).to(hidden.dtype)
         return (hidden * mask).sum(1) / mask.sum(1).clamp(min=1e-6)
 
     def embed(self, **batch: torch.Tensor) -> torch.Tensor:
-        return F.normalize(self.pool(**batch), dim=-1)
+        return F.normalize(self.projection(self.pool(**batch)), dim=-1)
 
     def forward(
         self, input_ids: torch.Tensor, attention_mask: torch.Tensor, token_type_ids: torch.Tensor
     ) -> tuple[torch.Tensor, ...]:
         pooled = self.pool(input_ids, attention_mask, token_type_ids)
         palette, light, typeface, scent = self.heads(pooled)
-        return F.normalize(pooled, dim=-1), palette, light, typeface, scent
+        return F.normalize(self.projection(pooled), dim=-1), palette, light, typeface, scent
 
 
 def save_student(model: Student, tokenizer: PreTrainedTokenizerBase, meta: dict) -> None:
@@ -58,36 +73,24 @@ def save_student(model: Student, tokenizer: PreTrainedTokenizerBase, meta: dict)
     model.encoder.save_pretrained(STUDENT_DIR / "encoder")
     tokenizer.save_pretrained(STUDENT_DIR / "encoder")
     torch.save(model.heads.state_dict(), STUDENT_DIR / "heads.pt")
+    torch.save(model.projection.state_dict(), STUDENT_DIR / "projection.pt")
     (STUDENT_DIR / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 
 def load_student(path: Path = STUDENT_DIR) -> tuple[Student, PreTrainedTokenizerBase, dict]:
     meta = json.loads((path / "meta.json").read_text(encoding="utf-8"))
-    encoder = AutoModel.from_pretrained(path / "encoder")
-    model = Student(encoder, tuple(meta["sizes"]), meta["head_hidden"])
+    encoder = AutoModel.from_pretrained(path / "encoder", attn_implementation="sdpa")
+    model = Student(encoder, tuple(meta["sizes"]), meta["head_hidden"], meta["cfg"]["dims"])
+    if not isinstance(model.projection, nn.Identity):
+        model.projection.load_state_dict(torch.load(path / "projection.pt", weights_only=True))
     model.heads.load_state_dict(torch.load(path / "heads.pt", weights_only=True))
     return model.eval(), AutoTokenizer.from_pretrained(path / "encoder"), meta
-
-
-def tokenize(
-    tokenizer: PreTrainedTokenizerBase, texts: list[str], max_length: int, device: str = "cuda"
-) -> dict[str, torch.Tensor]:
-    batch = tokenizer(
-        texts, padding=True, truncation=True, max_length=max_length, return_tensors="pt"
-    )
-    if "token_type_ids" not in batch:
-        batch["token_type_ids"] = torch.zeros_like(batch["input_ids"])
-    return {
-        k: v.to(device)
-        for k, v in batch.items()
-        if k in ("input_ids", "attention_mask", "token_type_ids")
-    }
 
 
 class Pretokenized:
     """Texts tokenized once, padded to max_length, on the GPU.
 
-    rows(idx) gives exactly what tokenize() gives for those texts: the same ids and masks,
+    rows(idx) returns the tokenizer IDs and masks for those texts,
     padded to the longest row in the batch. It works because the tokenizer pads on the
     right, so cutting the columns after that longest row changes nothing.
     """
@@ -119,34 +122,42 @@ def encode_texts(
     tokenizer: PreTrainedTokenizerBase,
     texts: list[str],
     max_length: int,
-    batch_size: int = 256,
     device: str = "cuda",
 ) -> np.ndarray:
     model.eval()
-    out = []
-    for start in range(0, len(texts), batch_size):
-        batch = tokenize(tokenizer, texts[start : start + batch_size], max_length, device)
-        with torch.autocast(device, dtype=torch.bfloat16, enabled=device == "cuda"):
-            emb = model.embed(**batch)
-        out.append(emb.float().cpu().numpy())
-    return np.concatenate(out)
+
+    def encode(batch):
+        batch = {k: v.to(device) for k, v in batch.items()}
+        batch.setdefault("token_type_ids", torch.zeros_like(batch["input_ids"]))
+        with torch.autocast(
+            torch.device(device).type,
+            dtype=torch.bfloat16,
+            enabled=torch.device(device).type == "cuda",
+        ):
+            return model.embed(**batch).float().cpu().numpy()
+
+    return encode_batches(tokenizer, texts, max_length, encode, model.encoder, device)
 
 
 def run() -> None:
     cfg = StudentConfig()
     make_deterministic(SEED)
+    torch.backends.cuda.matmul.fp32_precision = "tf32"
     vocab = load_vocab()
     catalog = load_catalog()
     t = torch.load(TEACHER_OUTPUTS, weights_only=False)
     if t["vocab"] != vocab.digest:
-        raise SystemExit("vocab changed since train-teacher; rerun train-teacher")
+        raise SystemExit("vocab changed since train-teacher; rerun uv run train")
     if t["item_ids"] != [it["id"] for it in catalog.items]:
-        raise SystemExit("catalog changed since train-teacher; rerun train-teacher")
+        raise SystemExit("catalog changed since train-teacher; rerun uv run train")
 
     dev = "cuda"
     tokenizer = AutoTokenizer.from_pretrained(cfg.backbone, revision=cfg.revision)
-    encoder = AutoModel.from_pretrained(cfg.backbone, revision=cfg.revision)
-    model = Student(encoder, vocab.sizes(), cfg.head_hidden).to(dev)
+    encoder = AutoModel.from_pretrained(
+        cfg.backbone, revision=cfg.revision, attn_implementation="sdpa"
+    )
+    model = Student(encoder, vocab.sizes(), cfg.head_hidden, cfg.dims).to(dev)
+    model.encoder.compile(dynamic=True)
 
     split = np.array(t["split"])
     train = np.flatnonzero(split == "train")
@@ -162,14 +173,12 @@ def run() -> None:
     groups = [
         {"params": model.encoder.parameters(), "lr": cfg.encoder_lr},
         {"params": model.heads.parameters(), "lr": cfg.head_lr},
+        {"params": model.projection.parameters(), "lr": cfg.head_lr},
     ]
-    opt = torch.optim.AdamW(groups, weight_decay=cfg.weight_decay)
+    opt = torch.optim.AdamW(groups, weight_decay=cfg.weight_decay, fused=True)
     steps_per_epoch = math.ceil(len(train) / cfg.batch_size)
     total = cfg.epochs * steps_per_epoch
-    warmup = int(cfg.warmup_ratio * total)
-    sched = torch.optim.lr_scheduler.LambdaLR(
-        opt, lambda s: min((s + 1) / max(warmup, 1), max(0.0, (total - s) / max(total - warmup, 1)))
-    )
+    sched = cosine_schedule(opt, total, cfg.warmup_ratio)
     rng = np.random.default_rng(SEED)
     best, best_epoch = -1.0, -1
     tau = cfg.temperature
@@ -214,7 +223,9 @@ def run() -> None:
                 if has.any()
                 else s.new_zeros(())
             )
-            loss_pal = cfg.palette_weight * F.mse_loss(palette.float(), t_palette[b])
+            loss_pal = cfg.palette_weight * palette_loss(
+                palette.float(), t_palette[b], cfg.lightness_weight
+            )
             loss_choice = cfg.choice_weight * sum(
                 kl_logits(out.float(), tc[b], cfg.choice_temperature)
                 for out, tc in zip((light, face, scent), t_choices, strict=True)
@@ -267,6 +278,9 @@ def run() -> None:
             f"{teacher_recall:.3f}); best {best:.3f} (epoch {best_epoch})"
             + (", saved" if improved else "")
         )
+        if epoch + 1 - best_epoch >= cfg.patience:
+            log.info("early stop: no recall improvement for %d epochs", cfg.patience)
+            break
     log.info(
         f"done in {elapsed(start_all)}: best val recall@10 {best:.3f} at epoch {best_epoch} -> "
         f"{STUDENT_DIR.relative_to(ML_ROOT).as_posix()}"
