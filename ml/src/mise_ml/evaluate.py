@@ -21,7 +21,14 @@ from mise_ml.config import (
     StudentConfig,
     TeacherConfig,
 )
-from mise_ml.data import Catalog, load_catalog, load_eval_texts, load_queries, recall_at_k
+from mise_ml.data import (
+    Catalog,
+    load_catalog,
+    load_eval_texts,
+    load_queries,
+    recall_at_k,
+    recall_scores,
+)
 from mise_ml.export import onnx_run, onnx_session
 from mise_ml.features import shared_encoder
 from mise_ml.llm import Job, Record, Request, Unit, sha
@@ -44,6 +51,7 @@ from mise_ml.vocab import load_vocab
 log = get(__name__)
 SHIP_MARGIN = 0.05
 SEP = "\x1f"
+JUDGED_K = 10
 
 JUDGE_SYSTEM = f"""You judge picks for mise, a mood app. A user typed a feeling, and the app \
 shows works that should feel like it.
@@ -69,7 +77,7 @@ class Outputs:
 def teacher_outputs(texts: list[str], catalog: Catalog) -> Outputs:
     model, ckpt = load_teacher()
     if ckpt["item_ids"] != [it["id"] for it in catalog.items]:
-        raise SystemExit("catalog changed since train-teacher; rerun train-teacher")
+        raise SystemExit("catalog changed since train-teacher; rerun uv run train")
     cfg = TeacherConfig(**ckpt["cfg"])
     fq = torch.tensor(query_store(cfg).get(texts), dtype=torch.float32, device="cuda")
     fi = torch.tensor(item_store(cfg).get(catalog.texts), dtype=torch.float32, device="cuda")
@@ -87,11 +95,11 @@ def student_outputs(texts: list[str], catalog: Catalog) -> tuple[Outputs, list[f
     """Read the public int8 ONNX graph and private catalog vectors."""
     model_path = BUNDLE / "model" / "model.onnx"
     if not model_path.exists():
-        raise SystemExit(f"no bundle at {BUNDLE}; run export first")
-    _, tokenizer, _ = load_student()
+        raise SystemExit(f"no bundle at {BUNDLE}; run uv run train first")
+    _, tokenizer, meta = load_student()
     items = np.fromfile(CATALOG_BUNDLE / "vectors.bin", dtype="<f4").reshape(len(catalog.items), -1)
     session = onnx_session(model_path, threads=1)
-    max_tokens = StudentConfig().max_length
+    max_tokens = meta["cfg"]["max_length"]
     rows, latency = [], []
     onnx_run(session, tokenizer, [texts[0]], max_tokens)
     for text in progress(texts, desc="student (1 thread)", unit="text"):
@@ -111,12 +119,20 @@ def student_outputs(texts: list[str], catalog: Catalog) -> tuple[Outputs, list[f
 
 
 def baseline_outputs(texts: list[str], catalog: Catalog) -> Outputs:
-    """Off-the-shelf MiniLM, used only to widen the judging pool."""
-    cfg = StudentConfig()
+    """Untrained student backbone for the retrieval floor and judging pool."""
+    import json
+
+    from mise_ml.student import STUDENT_DIR
+
+    saved = json.loads((STUDENT_DIR / "meta.json").read_text(encoding="utf-8"))["cfg"]
+    cfg = StudentConfig(**saved)
     tokenizer = AutoTokenizer.from_pretrained(cfg.backbone, revision=cfg.revision)
     model = Student(
-        AutoModel.from_pretrained(cfg.backbone, revision=cfg.revision), (1, 1, 1), 8
+        AutoModel.from_pretrained(cfg.backbone, revision=cfg.revision, attn_implementation="sdpa"),
+        (1, 1, 1),
+        8,
     ).cuda()
+    model.projection = torch.nn.Identity()
     return Outputs(
         query=encode_texts(model, tokenizer, texts, cfg.max_length),
         items=encode_texts(model, tokenizer, catalog.texts, cfg.item_max_length),
@@ -203,22 +219,93 @@ def judge() -> None:
     log.info(f"judge: {num(fits)} pairs judged a fit")
 
 
-def judged_recall(out: Outputs, texts: list[str], catalog: Catalog) -> float:
+def judged_fits(catalog: Catalog) -> dict[tuple[str, str], set[int]]:
     fits: dict[tuple[str, str], set[int]] = defaultdict(set)
     for r in iter_jsonl(JUDGMENTS):
         text, cat, item_id = r["key"].split(SEP)
         if r["fit"] and item_id in catalog.index:
             fits[(text, cat)].add(catalog.index[item_id])
-    if not fits:
-        return float("nan")
-    tops = top_by_category(out, catalog, 10)
+    return fits
+
+
+def judged_scores(
+    out: Outputs,
+    texts: list[str],
+    catalog: Catalog,
+    fits: dict[tuple[str, str], set[int]],
+) -> np.ndarray:
+    tops = top_by_category(out, catalog, JUDGED_K)
     scores = []
     for t, text in enumerate(texts):
+        per_feeling = []
         for cat in CATEGORIES:
             rel = fits.get((text, cat))
             if rel:
-                scores.append(len(rel & set(tops[t][cat])) / min(len(rel), 10))
-    return float(np.mean(scores)) if scores else float("nan")
+                per_feeling.append(len(rel & set(tops[t][cat])) / min(len(rel), 10))
+        scores.append(float(np.mean(per_feeling)) if per_feeling else float("nan"))
+    return np.asarray(scores)
+
+
+def paired_gap(a: np.ndarray, b: np.ndarray) -> dict[str, Any]:
+    """Resample paired feelings with a fixed seed for a percentile interval."""
+    if not len(a) or not np.isfinite(a).all() or not np.isfinite(b).all():
+        return {"gap": None, "ci95": None, "feelings": len(a)}
+    differences = a - b
+    rng = np.random.default_rng(SEED)
+    means = np.empty(10000)
+    for i in range(len(means)):
+        means[i] = differences[rng.integers(0, len(a), len(a))].mean()
+    return {
+        "gap": float(differences.mean()),
+        "ci95": np.quantile(means, [0.025, 0.975]).tolist(),
+        "feelings": len(a),
+    }
+
+
+def ship_gate(
+    held: dict[str, np.ndarray],
+    judged: dict[str, np.ndarray],
+    n_judged: int,
+    judgments_complete: bool,
+) -> dict[str, Any]:
+    gaps = {
+        "teacher_student_judged": paired_gap(judged["teacher"], judged["student"]),
+        "teacher_student_heldout": paired_gap(held["teacher"], held["student"]),
+        "student_baseline_heldout": paired_gap(held["student"], held["baseline"]),
+    }
+    reasons = []
+    if n_judged < 100:
+        reasons.append(
+            f"judged set is too small: {n_judged} feelings with fits; at least 100 required"
+        )
+    if not judgments_complete:
+        reasons.append("judgments are missing for the current retrieval pool; run uv run train")
+    for name, result in gaps.items():
+        gap, interval = result["gap"], result["ci95"]
+        if gap is None:
+            reasons.append(f"{name}: no complete paired recall scores")
+            log.warning("%s: confidence interval unavailable", name)
+            continue
+        log.info(
+            "%s: %.2f points, paired bootstrap 95%% CI [%.2f, %.2f]",
+            name,
+            gap * 100,
+            interval[0] * 100,
+            interval[1] * 100,
+        )
+        if name == "student_baseline_heldout":
+            if gap < 0.10:
+                reasons.append(f"student is only {gap * 100:.2f} points above baseline; need 10")
+        elif gap > SHIP_MARGIN:
+            reasons.append(f"{name}: student is {gap * 100:.2f} points behind; limit 5")
+    for reason in reasons:
+        log.warning(reason)
+    return {
+        "ok": not reasons,
+        "reasons": reasons,
+        "gaps": gaps,
+        "bootstrap": {"seed": SEED, "resamples": 10000, "unit": "feeling"},
+    }
 
 
 def label_metrics(out: Outputs, rows: np.ndarray, qs: Any, offset: int) -> dict[str, float]:
@@ -255,7 +342,7 @@ def run() -> dict[str, Any]:
     if not len(eval_rows):
         log.warning("no eval feelings found; the report covers the held-out feelings only")
     if not JUDGMENTS.exists():
-        log.info("no judgments yet; run `uv run mise-ml eval --judge` for the judged recall@10")
+        log.info("no judgments yet; run `uv run train` for the judged recall@10")
 
     teacher = teacher_outputs(texts, catalog)
     student, latency = student_outputs(texts, catalog)
@@ -269,25 +356,17 @@ def run() -> dict[str, Any]:
             "recall@10_heldout": recall_at_k(
                 out.query[n_eval:], held_pos, out.items, catalog.categories
             ),
-            "recall@10_judged": judged_recall(
-                Outputs(out.query[:n_eval], out.items, out.palette, out.choices),
-                eval_texts,
-                catalog,
-            ),
             "eval": label_metrics(out, eval_rows, qs, 0),
             "heldout": label_metrics(out, held_rows, qs, n_eval),
         }
-    # The floor: off-the-shelf MiniLM, what the stub bundle runs. It has no trained heads,
-    # so only its retrieval numbers mean anything.
+    # Compare retrieval with the same backbone before fine-tuning.
+    shared_encoder.cache_clear()
+    gc.collect()
+    torch.cuda.empty_cache()
     baseline = baseline_outputs(texts, catalog)
     report["baseline"] = {
         "recall@10_heldout": recall_at_k(
             baseline.query[n_eval:], held_pos, baseline.items, catalog.categories
-        ),
-        "recall@10_judged": judged_recall(
-            Outputs(baseline.query[:n_eval], baseline.items, baseline.palette, []),
-            eval_texts,
-            catalog,
         ),
         "eval": {},
         "heldout": {},
@@ -297,11 +376,49 @@ def run() -> dict[str, Any]:
         "p95": float(np.percentile(latency, 95)),
         "threads": 1,
     }
-    key = "recall@10_judged"
-    if np.isnan(report["teacher"][key]) or np.isnan(report["student"][key]):
-        key = "recall@10_heldout"
-    gap = report["teacher"][key] - report["student"][key]
-    report["ship"] = {"metric": key, "gap": gap, "ok": bool(gap <= SHIP_MARGIN)}
+    systems = {"teacher": teacher, "student": student, "baseline": baseline}
+    held_scores = {
+        name: recall_scores(out.query[n_eval:], held_pos, out.items, catalog.categories)
+        for name, out in systems.items()
+    }
+    fits = judged_fits(catalog)
+    judged_mask = np.asarray(
+        [any(fits.get((text, cat)) for cat in CATEGORIES) for text in eval_texts], dtype=bool
+    )
+    n_judged = int(judged_mask.sum())
+    dropped = n_eval - n_judged
+    log.info("judged recall: dropped %d feelings with no fits; %d remain", dropped, n_judged)
+    report["counts"].update(judged=n_judged, judged_dropped_no_fits=dropped)
+    judged = {
+        name: judged_scores(
+            Outputs(out.query[:n_eval], out.items, out.palette, out.choices),
+            eval_texts,
+            catalog,
+            fits,
+        )[judged_mask]
+        for name, out in systems.items()
+    }
+    for name, scores in judged.items():
+        report[name]["recall@10_judged"] = float(scores.mean()) if len(scores) else float("nan")
+    known = {r["key"] for r in iter_jsonl(JUDGMENTS)}
+    # Check the depth the metric reads. The judge pools a deeper top list, so float noise that
+    # swaps near-tied items at the pool edge does not leave the metric unjudged.
+    complete = all(
+        SEP.join((text, cat, catalog.items[i]["id"])) in known
+        for out in systems.values()
+        for text, tops in zip(
+            eval_texts,
+            top_by_category(
+                Outputs(out.query[:n_eval], out.items, out.palette, out.choices),
+                catalog,
+                JUDGED_K,
+            ),
+            strict=True,
+        )
+        for cat, indices in tops.items()
+        for i in indices
+    )
+    report["ship"] = ship_gate(held_scores, judged, n_judged, complete)
     write_json(EVAL_REPORT, report)
 
     def cell(value: float | None, width: int, digits: int = 3) -> str:
@@ -321,12 +438,11 @@ def run() -> dict[str, Any]:
             f"{cell(e.get('palette_dE'), 11, 4)} {cell(e.get('light_acc'), 6)} "
             f"{cell(e.get('typeface_acc'), 6)} {cell(e.get('scent_acc'), 6)}"
         )
-    log.info("baseline = off-the-shelf MiniLM (the stub); it has no palette or choice heads")
+    log.info("baseline = untrained student backbone; it has no palette or choice heads")
     lat = report["student"]["latency_ms"]
     log.info(f"student latency: median {lat['median']:.1f} ms, p95 {lat['p95']:.1f} ms (1 thread)")
     verdict = "ship" if report["ship"]["ok"] else "do not ship"
-    line = f"{verdict}: teacher - student on {key} = {gap * 100:.1f} points (limit 5)"
-    (log.info if report["ship"]["ok"] else log.warning)(line)
+    (log.info if report["ship"]["ok"] else log.warning)(verdict)
     write_run_json()
     log.info(f"done in {elapsed(start)}: report -> {EVAL_REPORT.relative_to(ML_ROOT).as_posix()}")
     return report

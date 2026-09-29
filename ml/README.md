@@ -1,4 +1,4 @@
-# mise-ml
+# ML pipeline
 
 This package builds the real mood bundle for mise. It selects a current catalog from public APIs
 and museum data, finds images and links, labels everything with a local LLM, trains a teacher,
@@ -36,32 +36,28 @@ query parameters, which never go into the HTTP cache.
 
 ```
 uv sync
-uv run mise-ml all
+uv run download
+uv run label
+uv run train
+uv run publish
 ```
 
-`all` runs every step in order. Each step skips work that is already done, so you can stop
-`all` at any time and start it again. No step needs an argument.
+Run these commands from `ml/`. Use `--help` with any command to see its purpose.
 
-Before `all` starts, it checks for the API keys, for a CUDA GPU, for
-`../scripts/stub/vocab.json`, and for `eval_feelings.jsonl`. It names each missing item and
-stops before any long work. `curate` and `resolve` also check the keys they need when you run
-them alone.
+| Command | Internal steps | Preflight |
+|---|---|---|
+| `download` | fetch, curate, resolve | catalog API keys |
+| `label` | profile | CUDA, vocab, eval feelings file |
+| `train` | train-teacher, train-student, export, eval-judge, eval, install | CUDA, vocab, eval feelings file |
+| `publish` | publish | R2 keys |
 
-At the end, `all` checks the ship rule (see "eval" below):
+Each command skips completed work. Training and export use provenance stamps. Fetch,
+resolve, and labeling use their own resumable caches. A failed step stops its command.
 
-- If the student passes, `all` runs `install`, which puts the new bundle into
-  `../static/bundle/` and puts the private catalog in local R2. The web app then uses both.
-- If the student fails, `all` stops. It prints why and the path of `out/eval_report.json`. To
-  use the student anyway, run `uv run mise-ml install`.
-
-After `install`, `all` checks for the R2 variables (see "Publish" below). If they are all set, it
-runs `publish`, which puts both outputs online and updates `../src/lib/bundle.ts` and
-`../src/lib/server/catalog.ts`. If any are
-missing, `all` names them and logs that `uv run mise-ml publish` puts the bundle online once they
-are set.
-
-To run one step, use `uv run mise-ml <step>`. To see the steps in run order, run
-`uv run mise-ml` with no step.
+`train` installs the public bundle in `../static/bundle/` and the private catalog in local
+R2 only after the ship gate passes. If it fails, the command exits with an error and names
+`out/eval_report.json`. There is no override. `train` never publishes.
+Run `publish` separately to upload the installed bundle and catalog.
 
 ## Logs
 
@@ -72,8 +68,8 @@ the long loops. WARN lines name what you should know: dropped items (counted by 
 retries, and failures. A step that fails ends with an ERROR line.
 
 Every command also writes a full log with DEBUG detail, such as each dropped item and each
-checksum, to `out/logs/<time>-<step>.log`. One `all` run writes one file. `all` ends with a
-table of the steps and their times.
+checksum, to `out/logs/<time>-<command>.log`. Each command writes one file and ends with a
+table of its steps and their times, including a failed step.
 
 ## Steps
 The times are estimates for an RTX 5090, except where the text says "measured".
@@ -83,14 +79,14 @@ The times are estimates for an RTX 5090, except where the text says "measured".
 | `fetch` | `sources.toml` | `data/raw/` | 5–10 min |
 | `curate` | APIs, `data/raw/` | `data/curated/catalog.jsonl`, `catalog.meta.json`, `pat.jsonl` | about 21 min the first time (song selection, measured); under 1 min from the cache |
 | `resolve` | `catalog.jsonl`, APIs | `data/curated/resolved.jsonl`, `data/img/` | about 15 min (songs are the slowest) |
-| `profile` | `resolved.jsonl`, `eval_feelings.jsonl`, vocab | `data/curated/profiles.jsonl`, `moods.jsonl`, `pat_sentences.jsonl`, `labels-<vocab>.jsonl` | 4–10 h |
+| `profile` | `resolved.jsonl`, `eval_feelings.jsonl`, vocab | `data/curated/profiles.jsonl`, `moods.jsonl`, `pat_sentences.jsonl`, `labels-<vocab>.jsonl`, `distill.jsonl` | 4–10 h plus distillation feelings |
 | `train-teacher` | the curated files | `data/models/teacher.pt`, `teacher_outputs.pt` | 30–60 min |
 | `train-student` | teacher outputs | `data/models/student/` | 20–40 min |
 | `export` | student, curated files, images | `out/bundle/`, `out/catalog/` | 5 min |
-| `eval --judge` | teacher, student, bundle | `data/curated/judgments.jsonl` | 1–2 h |
+| `eval-judge` | teacher, student, bundle | `data/curated/judgments.jsonl` | 1–2 h |
 | `eval` | all of the above | `out/eval_report.json`, `out/run.json` | 5 min |
 | `install` | `out/bundle/`, `out/catalog/` | `../static/bundle/`, local R2, `out/installed-catalog/`, `.dev.vars` | seconds |
-| `publish` (in `all` only if R2 is set) | `../static/bundle/`, `out/installed-catalog/` | both R2 buckets, `bundle.ts`, `catalog.ts` | minutes the first time |
+| `publish` | `../static/bundle/`, `out/installed-catalog/` | both R2 buckets, `bundle.ts`, `catalog.ts` | minutes the first time |
 
 ### fetch
 
@@ -240,12 +236,12 @@ newer than the file, `resolve` removes the drop records that the new code can fi
 format 2, these are songs without a Deezer match and Chicago art.
 
 Each image becomes a WebP file with 800 px on the long edge. `resolve` records `w`, `h`, and the
-average OKLab `tone`. To resolve some categories only, name them: `uv run mise-ml resolve song`.
+average OKLab `tone`. Run `uv run download` to resolve all categories.
 
 ### profile (§9.2)
 
 `profile` runs `Qwen/Qwen3.5-9B` (Apache-2.0, pinned revision) in-process with transformers, in
-bf16, with thinking mode off. It runs four jobs:
+bf16, with thinking mode off. It runs five jobs:
 
 1. **items:** a vibe line, a mood description, and three example feelings for each item. Art
    items also send the image.
@@ -256,8 +252,21 @@ bf16, with thinking mode off. It runs four jobs:
 4. **labels:** five colors, a light, a typeface, and a scent for about 30,000 feelings: your eval
    feelings, the synthetic moods, and item feelings to fill the rest.
 
-Every prompt asks for feelings as a sentence about a scene or a moment, 6 to 30 words. It never
-asks for a list of mood words.
+5. **distill:** 40,000 requested unlabeled feelings. A fixed grid crosses 100 situations with
+   20 writing styles. Each of the 2,000 seed keys requests 20 feelings. Set the total with
+   `ProfileConfig.distill_feelings` and the request size with `distill_per_request`.
+   The grid covers life events, places, seasons, weather, relationships, work, travel,
+   nature, city life, emotions, and aesthetics. Styles include one or two words, fragments,
+   questions, typos, sensory details, and sentences of up to about 25 words.
+
+The existing feeling jobs request scenes of 6 to 30 words. The separate `distill` prompt
+allows short and informal text. It never includes eval feelings, including in retries.
+After cache replay, it drops empty text, text over the app's 500 UTF-16-unit limit,
+duplicates across the job, and eval matches. Matching uses lower case, collapsed spaces,
+and punctuation removed from both ends. It logs generated, kept, and dropped counts by reason.
+`data/curated/distill.jsonl` holds one `text` and its seed `key` per row. The cache preserves
+completed seed requests even when some feelings are dropped. A rerun generates only missing
+keys. This job does not change the existing prompts, caches, or label pool.
 
 **Valid JSON.** `profile` uses constrained decoding with xgrammar. xgrammar compiles each JSON
 schema, including the enums of vocab ids and a `#rrggbb` pattern for colors, into a grammar.
@@ -307,33 +316,89 @@ differ from an uninterrupted run.
     hidden state of that last token (4,096 values), L2-normalized.
 - `data/features/` caches the features by text. The file names hold the model id and revision,
   so features from another backbone are never reused. A second run encodes only new texts.
-- The feature pass encodes about 60,000–75,000 texts, in batches of 64, at most 256 tokens
-  each. Estimate: 15–40 min on an RTX 5090. The head training after it takes 5–15 min.
+- The feature pass encodes about 60,000 to 75,000 existing texts plus the kept distillation
+  feelings, at most 256 tokens each. Distillation feelings use the same query template and
+  feature cache. They do not train the teacher heads. The best teacher checkpoint writes
+  their embeddings, palettes, and choice logits with split `distill` and positive item `-1`.
+  The loader excludes normalized matches to existing queries before adding these rows.
+  It sorts by token length and packs batches by padded token count. It derives the starting
+  budget from free GPU memory and model size. Each memory failure halves the budget and
+  retries the pending batch. It restores input order after encoding.
 - The retrieval heads project queries and items to 384 dims. The loss is InfoNCE with in-batch
-  negatives. After the first 3 epochs, each query also gets 8 hard negatives from the top 50
-  items of its own category. The step mines them again at the start of each epoch.
-- The palette head predicts 5 OKLab colors. The loss is the slot-wise squared OKLab distance plus
-  a term on the sorted lightness values. The data is the LLM palettes and the PAT palettes.
+  negatives. Training does not use hard-negative mining.
+- The palette head predicts 5 OKLab colors. Both models use the same loss:
+  `(mean squared slot distance + 0.5 * sorted-lightness MSE) / 3`.
+  OKLab uses L in [0, 1] and unscaled a and b. The data is the LLM and PAT palettes.
+  The teacher palette weight is 3.0. The student palette weight is also 3.0.
+  The teacher keeps its previous weighted loss exactly. On 2,101 validation targets from
+  the saved student, the old MSE is 0.00112443 and the shared loss is 0.00149211.
+  The weighted student term is 0.00447633, within 0.5% of its old value, 0.00449771.
 - The light, typeface, and scent heads use cross-entropy on the LLM labels.
-- The step keeps the checkpoint with the best validation loss. Then it writes the teacher outputs
-  for distillation.
+- Training runs all 6 epochs at a learning rate of `3e-4`, without early stopping. It keeps
+  the checkpoint with the best validation recall@10. The schedule uses linear warmup for
+  6% of the steps, then cosine decay. It writes distillation targets from the best checkpoint.
+  The training batch size stays 512.
+- A sweep on cached features used the full cosine schedule and selected checkpoints by
+  validation recall@10. At every epoch count, `3e-4` beat `1e-3`: validation recall was
+  0.29–0.31 versus 0.25–0.30. Runs without hard-negative mining matched or beat runs with it.
+  The best recipe by validation score was 6 epochs at `3e-4` without hard negatives:
+  validation recall@10 was 0.309 and held-out recall@10 was 0.329. The old teacher scored
+  0.283 and 0.321. An early-stopped 10-epoch run reached only 0.276 on validation because
+  it stopped before the learning rate decayed.
 
 ### train-student (§9.4)
 
-- The backbone is `sentence-transformers/all-MiniLM-L6-v2`, fully fine-tuned, with mean pooling,
-  at a pinned revision.
+The student previously trained on about 40,000 LLM-written queries. The measured baseline
+in `out/eval_report.json` uses 290 human-style eval feelings:
+
+| Model | Held-out recall@10 (LLM paraphrases) | Judged recall@10 (human-style feelings) |
+|---|---|---|
+| Qwen3-Embedding-8B teacher with heads | 0.329 | 0.718 |
+| MiniLM-L6 student, int8 | 0.312 | 0.644 |
+
+The held-out gap is about 1.6 percentage points with unrounded scores. The human-style gap
+is 7.4 points, with a confidence interval of [5.8, 9.1]. The student is at the 24 MiB cap.
+Unlabeled distillation adds varied text without a larger student or another labeling pass.
+These are baseline measurements, not results from training with the new feelings.
+
+- Set `StudentConfig.backbone` and `revision` to choose the encoder. The default is
+  `sentence-transformers/all-MiniLM-L6-v2`, fully fine-tuned, at a pinned revision.
+  The model uses masked mean pooling. A learned projection maps other hidden sizes to
+  384 dimensions. It passes token type IDs only when the encoder supports them.
+- Training uses SDPA attention, fused AdamW, and TF32 matmul. The encoder runs eager:
+  with `torch.compile` an epoch took 131 s, against 94 s eager, on an RTX 5090.
+- Each step encodes about 1,030-1,120 items with gradients, a different count each step. The
+  commands set `PYTORCH_ALLOC_CONF=roundup_power2_divisions:4`, so the CUDA allocator reuses
+  blocks across these sizes. Without it, reserved memory grew past the GPU and a kernel launch
+  failed in epoch 3. With it, peak reserved memory is about 15 GB. A value you set in the shell
+  wins.
 - The losses are: KL divergence between the teacher and student query-to-item similarity
-  distributions (temperature 0.05), InfoNCE on (item feeling, item) pairs, MSE to the teacher
-  palette, and KL to the teacher choice logits.
+  distributions (temperature 0.05), InfoNCE on (item feeling, item) pairs, the shared palette
+  loss against teacher colors, and KL to the teacher choice logits.
+  Distillation rows use only the three teacher-derived losses. They have no InfoNCE target.
 - Each step encodes, with gradients, the teacher's top 16 items for each query, 128 random
-  items, and the positives. The step keeps the checkpoint with the best validation recall@10.
+  draws, and the positives. After deduplication, full batches keep 1,030–1,120 items by adding
+  or trimming random extras. They always keep the teacher's neighbors and the positives.
+  A final partial batch can use fewer items. Training keeps the checkpoint with the best
+  validation recall@10.
+- The maximum is 12 epochs, with patience 3 and the same warmup/cosine schedule as the
+  teacher. The training batch size stays 64. Item and validation encoding use the shared
+  token-budget helper. The helper never changes the training batch size.
+- One epoch is one pass over `train` plus `distill` rows. Training logs both row counts.
+  Validation and checkpoint selection use only `val`. Held-out and val splits stay unchanged.
+  Both training stamps include `data/curated/distill.jsonl`. If that file is missing,
+  `uv run train` stops and asks you to run `uv run label`.
 
 ### export
 
 - One ONNX graph with the inputs `input_ids`, `attention_mask`, and `token_type_ids`, and the
   outputs `embedding` [N, 384], `palette` [N, 5, 3], `light`, `typeface`, and `scent`.
-- Dynamic int8 quantization. The step stops if the model is larger than 24 MiB. The int8 MiniLM
-  graph is about 23 MiB.
+- Export measures fp32 validation recall@10, then compares dynamic int8 recipes.
+  Candidates use per-tensor or per-channel weights, with optional exclusions for heads,
+  the retrieval projection, the last attention output, the last linear layer, or embeddings.
+  It rejects candidates above 24 MiB before scoring them. It selects the highest validation
+  recall, with smaller size as the tie-breaker. It logs each fp32 gap and writes measurements
+  beside the selected graph in `out/onnx/`. Held-out scores do not select the recipe.
 - The bundle has `manifest.json` (`heads.kind = "onnx"`, `pooling = "none"`, `maxTokens = 96`),
   `model/` (the model and the tokenizer files), `vocab.json`, and `img/` in `out/bundle/`.
   The private `out/catalog/` has `items.json`, `vectors.bin`, and `catalog.json`.
@@ -343,7 +408,26 @@ differ from an uninterrupted run.
   The int8 graph computes the item vectors, so items and queries use one code path.
   Songs carry `album`. The manifest version is a hash of the model and the vectors.
 
+The saved MiniLM-L6 student measured as follows on 1,335 validation feelings and 3,111
+held-out feelings. Each query runs alone, as it does in the browser. Item vectors use the
+shared length-sorted token batches. Selection uses only the validation column.
+
+| Recipe | MiB | Val recall@10 | Held-out recall@10 |
+|---|---|---|---|
+| fp32 reference | 88.54 | 0.278652 | 0.298939 |
+| per-tensor int8 | 22.77 | 0.271910 | 0.287689 |
+| per-channel int8 | 22.88 | 0.274906 | 0.297011 |
+| per-channel, heads in fp32 | 22.88 | 0.274906 | same graph as per-channel |
+| per-channel, last attention output in fp32 | 23.30 | 0.273408 | not used for selection |
+| per-channel, last linear layer in fp32 | 24.56 | exceeds cap | exceeds cap |
+| per-channel, embeddings in fp32 | 56.97 | exceeds cap | exceeds cap |
+
+Per-channel int8 loses 0.19 percentage points of held-out recall against fp32.
+Export measures the candidates again for each new checkpoint.
+
 ### install
+
+This internal step runs only after the ship gate in `uv run train`.
 
 `install` copies `out/bundle/` to `../static/bundle/`. It replaces the old public bundle
 and removes private files from older installs. It keeps a private copy in
@@ -364,9 +448,10 @@ the dev server after install. Use `PUBLIC_BUNDLE_URL=/bundle/` for local model f
 
 The web app runs on Cloudflare Workers. The bundle does not go into the app's static assets. It
 goes into a public Cloudflare R2 bucket. `publish` uploads the installed public bundle from
-`../static/bundle/` and its private catalog from `out/installed-catalog/`. Run `install`
-after export. The Bun stub installs its own public files and local catalog without Python.
-Run install again before publishing a trained export after a stub build.
+`../static/bundle/` and its private catalog from `out/installed-catalog/`.
+Run `uv run train` to export, check the gate, and install a trained model.
+The Bun stub installs its own public files and local catalog without Python.
+Run `uv run train` again before publishing a trained export after a stub build.
 The Worker reads the catalog through its R2 binding.
 The browser runs inference and sends the query and embedding to `POST /api/match`.
 Only selected items leave the server. Stub responses also include the computed heads.
@@ -388,7 +473,7 @@ Set up the bucket one time:
 Then run:
 
 ```
-uv run mise-ml publish
+uv run publish
 ```
 
 - **Images** go to `img/<first 20 hex of the SHA-256 of the file>.webp`. `publish` lists the
@@ -447,16 +532,25 @@ new host for each version, so they need their own origin line.
 
 - **recall@10 on held-out item feelings.** 10% of the item feelings never go into training. A
   hit is the source item in the top 10 of its category.
-- **recall@10 on your eval feelings.** `eval --judge` pools the top 20 items for each category
-  from the teacher, the student, and the untrained MiniLM. The local LLM marks each pooled item
+- **recall@10 on your eval feelings.** `eval-judge` pools the top 20 items for each category
+  from the teacher, the student, and the untrained student backbone. The local LLM marks each pooled item
   as a fit or not. The score is the fits in the top 10 divided by the smaller of the fit count
   and 10.
 - **palette ΔE:** the mean Euclidean OKLab distance for each color against the LLM palettes.
 - **choice accuracy:** top-1 accuracy of light, typeface, and scent against the LLM labels.
 - **student latency:** onnxruntime on the CPU with one thread, batch size 1.
 
-The ship rule uses the judged recall@10 when it exists, and the held-out recall@10 otherwise.
-The student ships only if it is within 5 points of the teacher.
+The ship gate requires all of these conditions:
+
+- At least 100 distinct human-reviewed eval feelings and complete judgments for the current pool.
+- Student judged recall@10 no more than 5 percentage points below the teacher.
+- Student held-out recall@10 no more than 5 percentage points below the teacher.
+- Student held-out recall@10 at least 10 percentage points above the untrained backbone.
+
+Judged recall averages the categories with relevant works within each feeling, then averages
+feelings. The report and log include a paired bootstrap 95% interval for each gap. The
+bootstrap resamples feelings 10,000 times with seed 1337. The gate uses the point estimates;
+it reports intervals to show uncertainty. Missing scores fail the gate.
 
 ## Eval feelings
 
@@ -467,37 +561,38 @@ JSON object per line with one field, `text`:
 {"text": "a snowy december and i just made warm hot chocolate"}
 ```
 
-- Write about 300 lines. The file has 10 examples to start from.
+- Write about 300 distinct feelings. The ship gate requires at least 100.
 - Write each feeling as a sentence about a scene or a moment, 6 to 30 words. Do not write lists
   of mood words.
-- Write the file before `profile`, because `profile` labels these texts. If you add lines
-  later, run `profile` again. It labels only the new lines.
+- Write the file before `uv run label`. If you add lines later, run `uv run label` again.
+  It labels only the new lines.
 - The eval feelings never go into training.
 
 ## Reproducibility
 
-- Nothing under `data/` or `out/` is committed. `all` rebuilds everything from `sources.toml`
-  and the APIs.
+- Nothing under `data/` or `out/` is committed. Run `download`, `label`, then `train`
+  to build from `sources.toml` and the APIs.
 - Every step writes sorted JSONL with sorted keys, so two runs give the same files.
 - `curate` reads the API answers from the cache, so a rerun gives the same `catalog.jsonl`.
   To take newer data, remove `data/cache/http/` for that host.
 - Training uses fixed seeds (1337), `torch.use_deterministic_algorithms(True)`, deterministic
   cuDNN, and `CUBLAS_WORKSPACE_CONFIG=:4096:8`. A small check ran every training op (MiniLM
-  forward and backward with SDPA attention, the teacher heads, hard-negative mining, the losses)
+  forward and backward with SDPA attention, the teacher heads, the losses)
   twice in strict mode. No op raised an error, and the gradient sums matched exactly.
 - The teacher feature pass runs in strict mode too. Qwen3-Embedding-8B is a standard
   transformer with SDPA attention and no linear-attention layers, so the Triton kernel caveat
   of Qwen3.5 does not apply. A strict-mode forward of a small random Qwen3 model, with left
   padding and last-token pooling, ran twice and gave identical results.
-- The Qwen3.5 generate path (`profile`, `eval --judge`) uses warn-only mode, because nobody has
+- The Qwen3.5 generate path (`profile`, `eval-judge`) uses warn-only mode, because nobody has
   run it in strict mode yet. Warn-only mode keeps the deterministic kernels and prints a warning
   for an op that has none.
 - The Hugging Face models are pinned to a revision in `src/mise_ml/config.py`.
 - `out/run.json` records the seed, the Python and package versions, the GPU, the model ids and
   revisions, all configs, the SHA-256 of each source and each curated file, the PoetryDB content
   hash, the bundle files, and the ship decision.
-- `all` writes a stamp in `data/models/` after each training step. The stamp holds a hash of the
-  step's inputs and config, so `all` skips the step when nothing changed.
+- Training writes a stamp in `data/models/` after each training and export step. The stamp
+  hashes the inputs, relevant source files, and config. Each command skips a step when its
+  stamp matches and its required outputs exist. Label caches keep their own prompt signatures.
 
 ## Configuration
 

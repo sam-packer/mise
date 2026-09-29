@@ -7,6 +7,7 @@ from typing import Any
 
 from mise_ml.color import parse_hex
 from mise_ml.config import (
+    DISTILL,
     IMG,
     ML_ROOT,
     MOODS,
@@ -17,10 +18,17 @@ from mise_ml.config import (
     SEED,
     ProfileConfig,
 )
-from mise_ml.data import load_eval_texts
+from mise_ml.data import MAX_FEELING, distill_rejection, load_eval_texts, normalize_feeling
 from mise_ml.llm import Job, LocalLLM, Record, Request, Unit, sha
 from mise_ml.log import elapsed, get, progress
-from mise_ml.util import hash_fraction, iter_jsonl, make_deterministic, sha256_file, word_count
+from mise_ml.util import (
+    hash_fraction,
+    iter_jsonl,
+    make_deterministic,
+    sha256_file,
+    word_count,
+    write_jsonl,
+)
 from mise_ml.vocab import Vocab, labels_path, load_vocab
 
 log = get(__name__)
@@ -380,6 +388,222 @@ def run_moods(cfg: ProfileConfig, llm: Any) -> None:
     Job("moods", MOODS, cfg).run(keys, build, parse, lambda k: sha(prompt(k)), llm)
 
 
+# Unlabeled student queries. These seeds are independent of all evaluation text.
+DISTILL_SITUATIONS = (
+    "moving into a first apartment",
+    "leaving home for the first time",
+    "starting over after a breakup",
+    "finishing a long project",
+    "a birthday alone",
+    "a reunion after years apart",
+    "waiting for important news",
+    "retiring from a familiar routine",
+    "learning a difficult new skill",
+    "packing up a childhood bedroom",
+    "a quiet library",
+    "a crowded laundromat",
+    "an empty swimming pool",
+    "a corner cafe",
+    "a dusty attic",
+    "a hospital waiting room",
+    "a small balcony",
+    "a secondhand shop",
+    "a kitchen after everyone leaves",
+    "an unfamiliar hotel room",
+    "the first frost",
+    "spring thaw",
+    "pollen in warm air",
+    "midsummer heat",
+    "the end of summer",
+    "falling autumn leaves",
+    "a dark winter afternoon",
+    "a thunderstorm approaching",
+    "fog over water",
+    "rain after a drought",
+    "awake before sunrise",
+    "a slow weekend morning",
+    "a rushed weekday breakfast",
+    "the midday lull",
+    "late afternoon sunlight",
+    "the blue hour",
+    "a long evening alone",
+    "midnight with friends",
+    "unable to sleep at three am",
+    "the morning after a celebration",
+    "missing an old friend",
+    "a comfortable silence with a partner",
+    "an argument with a sibling",
+    "a first date",
+    "feeling left out of a group",
+    "caring for an aging parent",
+    "a baby finally asleep",
+    "a pet curled up nearby",
+    "making a new friend",
+    "saying goodbye at a station",
+    "a first day at work",
+    "a deadline getting closer",
+    "burnout after too many meetings",
+    "a small success at work",
+    "waiting for exam results",
+    "studying in an empty classroom",
+    "the last day of school",
+    "a boring commute",
+    "working a night shift",
+    "lunch alone between classes",
+    "a delayed flight",
+    "a train through unfamiliar countryside",
+    "a long drive with no schedule",
+    "getting lost in a new city",
+    "returning home from a trip",
+    "a ferry crossing",
+    "a roadside diner",
+    "a tent in the rain",
+    "a suitcase waiting by the door",
+    "hearing an unfamiliar language",
+    "a mossy forest floor",
+    "a windswept beach",
+    "mountains in the distance",
+    "a river at dusk",
+    "a field full of insects",
+    "a garden after rain",
+    "stars far from city lights",
+    "a frozen lake",
+    "a desert road",
+    "birds outside a window",
+    "neon reflected in wet pavement",
+    "a crowded subway platform",
+    "an empty parking garage",
+    "a rooftop above traffic",
+    "a city waking up",
+    "grief arriving without warning",
+    "unexpected joy over something small",
+    "boredom on a day with no plans",
+    "anxiety with no clear cause",
+    "nostalgia for a place that changed",
+    "dark academia",
+    "cottagecore",
+    "an industrial concrete landscape",
+    "a pastel seaside town",
+    "a faded retro diner",
+    "a moonlit gothic garden",
+    "a minimalist sunlit room",
+    "a cluttered bohemian studio",
+    "a futuristic rainy city",
+    "a rustic cabin in winter",
+)
+DISTILL_STYLES = (
+    "a short fragment",
+    "just one or two words",
+    "one full sentence",
+    "a run-on thought",
+    "casual typing with a small typo",
+    "no capital letters and little punctuation",
+    "second person, addressing yourself as you",
+    "a question",
+    "starting with i feel",
+    "a place or aesthetic name",
+    "one sensory detail",
+    "a brief emotional confession",
+    "a wish starting with i want",
+    "two contrasting feelings together",
+    "a physical sensation",
+    "a fragment of a memory",
+    "a casual text message with an abbreviation",
+    "a thought interrupted by an ellipsis",
+    "a simple comparison using like",
+    "a blunt everyday statement",
+)
+DISTILL_SYSTEM = """Write what people type into a mood-board app about how they feel right now.
+Follow the requested situation and writing style. Vary the length from 1 to about 25 words
+where the style allows it. Lower case is allowed. Use ordinary human language, including
+fragments and imperfect typing. Do not name real people or titles of works. Make each
+feeling distinct. Return the numbered feelings as JSON."""
+
+
+def distill_seeds(cfg: ProfileConfig) -> dict[str, tuple[str, str, int]]:
+    if cfg.distill_feelings < 1 or cfg.distill_per_request < 1:
+        raise ValueError("distill counts must be positive")
+    grid = [(s, style) for s in DISTILL_SITUATIONS for style in DISTILL_STYLES]
+    count = -(-cfg.distill_feelings // cfg.distill_per_request)
+    if count > len(grid):
+        raise ValueError("distill_feelings exceeds the seed grid capacity")
+    return {
+        f"distill-{i:04d}": (
+            *grid[i],
+            min(cfg.distill_per_request, cfg.distill_feelings - i * cfg.distill_per_request),
+        )
+        for i in range(count)
+    }
+
+
+def run_distill(cfg: ProfileConfig, llm: Any) -> None:
+    seeds = distill_seeds(cfg)
+
+    def prompt(k: str) -> str:
+        situation, style, count = seeds[k]
+        return f"Write {count} distinct feelings.\nSituation: {situation}\nStyle: {style}"
+
+    def build(keys: list[str]) -> list[Unit]:
+        return [
+            Unit(
+                [k],
+                Request(
+                    DISTILL_SYSTEM,
+                    prompt(k),
+                    obj({"feelings": numbered_array({"text": {"type": "string"}}, seeds[k][2])}),
+                    60 * cfg.distill_per_request,
+                    generation_schema=obj(
+                        {
+                            "feelings": numbered_array(
+                                {
+                                    "text": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": MAX_FEELING,
+                                    }
+                                },
+                                seeds[k][2],
+                            )
+                        }
+                    ),
+                ),
+            )
+            for k in keys
+        ]
+
+    def parse(keys: list[str], data: dict[str, Any]) -> list[Record]:
+        # Keep parsing stateless: Job parses answers several times during generation and replay.
+        return [{"key": keys[0], "feelings": [r["text"] for r in data["feelings"]]}]
+
+    job = Job("distill", DISTILL, cfg)
+    job.output = job.cache.with_name("distill-seeds.jsonl")
+    job.run(list(seeds), build, parse, lambda k: sha(prompt(k)), llm)
+    evals = {normalize_feeling(t) for t in load_eval_texts()}
+    seen: set[str] = set()
+    rows = []
+    counts: Counter[str] = Counter()
+    for record in iter_jsonl(job.output):
+        for raw in record["feelings"]:
+            counts["generated"] += 1
+            text = raw.strip()
+            reason = distill_rejection(text, evals, seen)
+            if reason:
+                counts[reason] += 1
+                continue
+            seen.add(normalize_feeling(text))
+            rows.append({"key": record["key"], "text": text})
+    write_jsonl(DISTILL, rows)
+    log.info(
+        "distill: generated %d, kept %d; dropped empty %d, too_long %d, eval %d, duplicate %d",
+        counts["generated"],
+        len(rows),
+        counts["empty"],
+        counts["too_long"],
+        counts["eval"],
+        counts["duplicate"],
+    )
+
+
 # PAT palette names to feeling sentences
 
 
@@ -485,15 +709,17 @@ def run() -> None:
     make_deterministic(SEED, warn_only=True)
     cfg = ProfileConfig()
     if not RESOLVED.exists():
-        raise SystemExit(f"no resolved items at {RESOLVED}; run resolve first")
+        raise SystemExit(f"no resolved items at {RESOLVED}; run uv run download first")
     start = time.perf_counter()
     log.info(
         f"labeler {cfg.model} at {cfg.revision[:12]}, batch {cfg.batch_size} "
         f"({cfg.image_batch_size} with images), greedy with sampled retries; "
-        "jobs: items, moods, pat, labels"
+        "jobs: items, moods, pat, labels, distill"
     )
     llm = lazy_llm(cfg)
-    for job in progress((run_items, run_moods, run_pat, run_labels), desc="profile", unit="job"):
+    for job in progress(
+        (run_items, run_moods, run_pat, run_labels, run_distill), desc="profile", unit="job"
+    ):
         job(cfg, llm)
     log.info(
         f"done in {elapsed(start)}: outputs in {PROFILES.parent.relative_to(ML_ROOT).as_posix()}"

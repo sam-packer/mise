@@ -24,8 +24,10 @@ from mise_ml.config import (
     VOCAB_PATH,
     ExportConfig,
     StudentConfig,
+    TeacherConfig,
 )
-from mise_ml.data import Catalog, load_catalog
+from mise_ml.data import Catalog, load_catalog, load_queries, recall_at_k
+from mise_ml.inference import encode_batches
 from mise_ml.log import elapsed, get, num, progress
 from mise_ml.student import OUTPUT_NAMES, STUDENT_DIR, Student, load_student
 from mise_ml.util import make_deterministic, sha256_file, write_json
@@ -99,13 +101,21 @@ def rename_shadowed_values(path: Path) -> None:
     onnx.save(model, str(path))
 
 
-def quantize(fp32: Path, int8: Path) -> None:
+def quantize(
+    fp32: Path, int8: Path, *, per_channel: bool = True, exclude: list[str] | None = None
+) -> None:
     # onnxruntime logs a pre-processing hint on the root logger on every call; hide it.
     root = logging.getLogger()
     level = root.level
     root.setLevel(logging.ERROR)
     try:
-        quantize_dynamic(fp32, int8, weight_type=QuantType.QInt8)
+        quantize_dynamic(
+            fp32,
+            int8,
+            weight_type=QuantType.QInt8,
+            per_channel=per_channel,
+            nodes_to_exclude=exclude,
+        )
     finally:
         root.setLevel(level)
 
@@ -134,6 +144,7 @@ def onnx_run(
             np.int64
         ),
     }
+    feeds = {node.name: feeds[node.name] for node in session.get_inputs()}
     return dict(zip(OUTPUT_NAMES, session.run(list(OUTPUT_NAMES), feeds), strict=True))
 
 
@@ -142,16 +153,113 @@ def onnx_embed(
     tokenizer: PreTrainedTokenizerBase,
     texts: list[str],
     max_length: int,
-    batch_size: int = 64,
     desc: str | None = None,
 ) -> np.ndarray:
-    starts = range(0, len(texts), batch_size)
-    parts = [
-        onnx_run(session, tokenizer, texts[i : i + batch_size], max_length)["embedding"]
-        for i in (progress(starts, desc=desc, unit="batch") if desc else starts)
-    ]
-    emb = np.concatenate(parts).astype(np.float32)
+    def encode(batch):
+        batch.setdefault("token_type_ids", torch.zeros_like(batch["input_ids"]))
+        feeds = {node.name: batch[node.name].numpy() for node in session.get_inputs()}
+        return session.run(["embedding"], feeds)[0]
+
+    if desc:
+        log.info(desc)
+    emb = encode_batches(tokenizer, texts, max_length, encode).astype(np.float32)
     return emb / np.linalg.norm(emb, axis=1, keepdims=True)
+
+
+def quantization_recipes(fp32: Path) -> dict[str, tuple[bool, list[str]]]:
+    graph = onnx.load(fp32).graph
+    metadata = {n.name: " ".join(p.value for p in n.metadata_props) for n in graph.node}
+    heads = [
+        n.name
+        for n in graph.node
+        if any(tag in metadata[n.name] for tag in ("/heads", "/projection", "/pooler"))
+    ]
+    attention = [
+        n.name
+        for n in graph.node
+        if n.op_type in ("MatMul", "Gemm") and "attention.output.dense" in metadata[n.name]
+    ]
+    linear = [
+        n.name
+        for n in graph.node
+        if n.op_type in ("MatMul", "Gemm")
+        and "aten.linear" in metadata[n.name]
+        and n.name not in heads
+    ]
+    return {
+        "per_tensor": (False, []),
+        "per_channel": (True, []),
+        "heads_fp32": (True, heads),
+        "last_attention_fp32": (True, heads + attention[-1:]),
+        "last_linear_fp32": (True, heads + linear[-1:]),
+        "embeddings_fp32": (True, heads + [n.name for n in graph.node if n.op_type == "Gather"]),
+    }
+
+
+def retrieval_measurement(
+    path: Path, tokenizer, catalog: Catalog, qs, cfg: StudentConfig, split: str = "val"
+) -> float:
+    rows = qs.where(split)
+    rows = rows[qs.pos[rows] >= 0]
+    if not len(rows):
+        raise ValueError(f"no retrieval feelings in {split}")
+    session = onnx_session(path, threads=4)
+    items = onnx_embed(session, tokenizer, catalog.texts, cfg.item_max_length)
+    # Browser queries run alone; dynamic int8 ranges depend on the other rows in a batch.
+    queries = np.concatenate(
+        [onnx_run(session, tokenizer, [qs.texts[i]], cfg.max_length)["embedding"] for i in rows]
+    )
+    return recall_at_k(queries, qs.pos[rows], items, catalog.categories)
+
+
+def select_quantization(
+    fp32: Path,
+    target: Path,
+    tokenizer,
+    catalog: Catalog,
+    cfg: StudentConfig,
+    export_cfg: ExportConfig,
+) -> dict:
+    qs = load_queries(catalog, load_vocab(), TeacherConfig())
+    reference = retrieval_measurement(fp32, tokenizer, catalog, qs, cfg)
+    log.info("fp32 val recall@10 %.6f", reference)
+    measurements = {"fp32": {"val_recall@10": reference, "bytes": fp32.stat().st_size}}
+    best = None
+    scores: dict[str, float] = {}
+    for name, (per_channel, exclude) in quantization_recipes(fp32).items():
+        path = target.with_name(f"{name}.onnx")
+        quantize(fp32, path, per_channel=per_channel, exclude=exclude)
+        size = path.stat().st_size
+        row = {"bytes": size, "per_channel": per_channel, "excluded": exclude}
+        measurements[name] = row
+        if size > export_cfg.max_model_bytes:
+            row["rejected"] = "over size cap"
+            log.info("%s: %.2f MiB exceeds the size cap", name, size / 2**20)
+            continue
+        digest = sha256_file(path)
+        if digest not in scores:
+            scores[digest] = retrieval_measurement(path, tokenizer, catalog, qs, cfg)
+        else:
+            log.info("%s produces an identical graph; reuse its measured recall", name)
+        recall = scores[digest]
+        row["val_recall@10"] = recall
+        log.info(
+            "%s: %.2f MiB, val recall@10 %.6f, fp32 gap %.2f points",
+            name,
+            size / 2**20,
+            recall,
+            (reference - recall) * 100,
+        )
+        rank = (recall, -size)
+        if best is None or rank > best[0]:
+            best = (rank, name, path)
+    if best is None:
+        raise RuntimeError("no quantization recipe fits the model size cap")
+    shutil.copyfile(best[2], target)
+    measurements["selected"] = best[1]
+    write_json(target.with_suffix(".json"), measurements)
+    log.info("selected %s by validation recall@10", best[1])
+    return measurements
 
 
 def bundle_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -191,7 +299,11 @@ def common_words(tokenizer: PreTrainedTokenizerBase, items: list[dict[str, Any]]
 
 
 def write_bundle(
-    model_path: Path, tokenizer: PreTrainedTokenizerBase, encoder_dir: Path, catalog: Catalog
+    model_path: Path,
+    tokenizer: PreTrainedTokenizerBase,
+    encoder_dir: Path,
+    catalog: Catalog,
+    student_cfg: StudentConfig,
 ) -> None:
     if BUNDLE.exists():
         shutil.rmtree(BUNDLE)
@@ -208,9 +320,7 @@ def write_bundle(
     names = [it["image"]["src"].rsplit("/", 1)[-1] for it in items if it["image"]]
     absent = [n for n in names if not (IMG / n).exists()]
     if absent:
-        raise SystemExit(
-            f"{len(absent)} images are missing from {IMG}; run `uv run mise-ml resolve`"
-        )
+        raise SystemExit(f"{len(absent)} images are missing from {IMG}; run `uv run download`")
     problems = validate_items(items)
     if problems:
         for p in problems:
@@ -221,7 +331,7 @@ def write_bundle(
     session = onnx_session(model_path)
     log.info(f"item vectors: encoding {num(len(catalog.texts))} items with the int8 graph")
     vectors = onnx_embed(
-        session, tokenizer, catalog.texts, StudentConfig().item_max_length, desc="item vectors"
+        session, tokenizer, catalog.texts, student_cfg.item_max_length, desc="item vectors"
     )
     (CATALOG_BUNDLE / "vectors.bin").write_bytes(vectors.astype("<f4").tobytes())
     write_json(CATALOG_BUNDLE / "items.json", items)
@@ -232,7 +342,6 @@ def write_bundle(
     for name in progress(names, desc="images", unit="file"):
         shutil.copy2(IMG / name, img_dir / name)
 
-    cfg = ExportConfig()
     manifest = {
         "version": "ml-"
         + sha256_file(model_dir / "model.onnx")[:8]
@@ -241,7 +350,7 @@ def write_bundle(
             "model": "model/model.onnx",
             "tokenizer": "model/",
             "dims": int(vectors.shape[1]),
-            "maxTokens": cfg.max_tokens,
+            "maxTokens": student_cfg.max_length,
             "pooling": "none",
             "normalize": True,
             "outputs": {name: name for name in OUTPUT_NAMES},
@@ -270,11 +379,13 @@ def write_bundle(
     )
 
 
-def check_outputs(model_path: Path, tokenizer: PreTrainedTokenizerBase, sizes: tuple) -> None:
+def check_outputs(
+    model_path: Path, tokenizer: PreTrainedTokenizerBase, sizes: tuple, dims: int
+) -> None:
     session = onnx_session(model_path)
     out = onnx_run(session, tokenizer, ["a snowy december and i just made warm hot chocolate"], 96)
     expected = {
-        "embedding": (1, 384),
+        "embedding": (1, dims),
         "palette": (1, 5, 3),
         "light": (1, sizes[0]),
         "typeface": (1, sizes[1]),
@@ -310,7 +421,8 @@ def run() -> None:
     log.info("exporting the ONNX graph (fp32)")
     export_onnx(model, fp32, cfg.opset)
     log.info("dynamic int8 quantization")
-    quantize(fp32, int8)
+    student_cfg = StudentConfig(**meta["cfg"])
+    select_quantization(fp32, int8, tokenizer, catalog, student_cfg, cfg)
     size = int8.stat().st_size
     log.info(f"int8 model: {size / 2**20:.2f} MiB (fp32 {fp32.stat().st_size / 2**20:.1f} MiB)")
     if size > cfg.max_model_bytes:
@@ -319,7 +431,7 @@ def run() -> None:
             f"over the {cfg.max_model_bytes / 2**20:.0f} MiB limit"
         )
         raise SystemExit(1)
-    check_outputs(int8, tokenizer, vocab.sizes())
+    check_outputs(int8, tokenizer, vocab.sizes(), student_cfg.dims)
 
     sample = [it["queries"][0] for it in catalog.items[:: max(1, len(catalog.items) // 200)]]
     a = onnx_embed(onnx_session(fp32), tokenizer, sample, cfg.max_tokens)
@@ -332,5 +444,5 @@ def run() -> None:
     if cosine.min() < 0.9:
         log.warning("some int8 embeddings differ a lot from fp32 (cosine below 0.9)")
 
-    write_bundle(int8, tokenizer, STUDENT_DIR / "encoder", catalog)
+    write_bundle(int8, tokenizer, STUDENT_DIR / "encoder", catalog, student_cfg)
     log.info(f"done in {elapsed(start)}")

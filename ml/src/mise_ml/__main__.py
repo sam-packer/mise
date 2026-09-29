@@ -1,4 +1,5 @@
 import argparse
+import os
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -7,56 +8,49 @@ from typing import Any
 from dotenv import load_dotenv
 
 from mise_ml import log as logs
-from mise_ml.config import CATEGORIES, ML_ROOT
+from mise_ml.config import ML_ROOT
 
-STEPS = {
-    "fetch": "download the raw sources and verify their checksums",
-    "curate": "select films, books, songs, art, poems (cached API calls); write catalog.jsonl",
-    "resolve": "resolve media and links, download images (cached, resumable)",
-    "profile": "local LLM pass: item profiles, moods, PAT sentences, labels (resumable)",
-    "train-teacher": "cache Qwen3-Embedding-8B features and train the teacher heads",
-    "train-student": "distill the teacher into MiniLM",
-    "export": "export ONNX, quantize, and write out/bundle and out/catalog",
-    "eval": "report recall@10, palette delta E, choice accuracy, latency; write out/run.json",
-    "install": "install the public bundle and private catalog for local development",
-    "all": (
-        "run every step above in order, skip finished work; install and publish if the student "
-        "ships and R2 is set"
-    ),
-    "publish": (
-        "upload the installed bundle and catalog to R2; also runs at the end of `all` if R2 is set"
-    ),
+COMMANDS = {
+    "download": "Fetch sources, curate the catalog, and resolve media and links.",
+    "label": "Write profiles and labels with the local LLM.",
+    "train": "Train, export, evaluate, and install only when the ship gate passes.",
+    "publish": "Upload the installed public bundle and private catalog to R2.",
 }
 
-log = logs.get("all")
+log = logs.get("cli")
 
 
-def preflight() -> None:
-    """Name everything that is missing before hours of work start."""
-    import torch
-
+def preflight(command: str) -> None:
     from mise_ml import keys
-    from mise_ml.config import EVAL_FEELINGS, VOCAB_PATH
+    from mise_ml.config import DISTILL, EVAL_FEELINGS, VOCAB_PATH
 
-    problems = keys.missing(list(keys.KEYS))
-    if not torch.cuda.is_available():
-        problems.append("no CUDA GPU is visible to PyTorch")
-    if not VOCAB_PATH.exists():
-        problems.append(f"missing {VOCAB_PATH} (the vocab source of truth)")
-    if not EVAL_FEELINGS.exists():
-        problems.append(f"missing {EVAL_FEELINGS}; eval needs your human-written feelings")
+    problems = []
+    if command == "train" and not DISTILL.is_file():
+        problems.append(f"missing {DISTILL}; run uv run label")
+    if command == "download":
+        problems.extend(keys.missing(list(keys.KEYS)))
+    if command == "publish":
+        problems.extend(f"missing {key}; set it in ml/.env" for key in keys.missing_r2())
+    if command in ("label", "train"):
+        import torch
+
+        if not torch.cuda.is_available():
+            problems.append("no CUDA GPU is visible to PyTorch")
+        for path in (VOCAB_PATH, EVAL_FEELINGS):
+            if not path.is_file():
+                problems.append(f"missing {path}")
     for problem in problems:
-        log.error("cannot start: %s", problem)
+        log.error("cannot start %s: %s", command, problem)
     if problems:
         raise SystemExit(1)
 
 
 class Run:
-    """Runs the steps of `all`, with a header line each and a summary at the end."""
+    """Run a command with step headers and a summary."""
 
-    def __init__(self, extra: int = 0) -> None:
+    def __init__(self, total: int) -> None:
         self.rows: list[tuple[str, str, str]] = []
-        self.total = len(STEPS) - 2 + 1 + extra  # not all or publish; eval --judge is its own
+        self.total = total
 
     def step(
         self,
@@ -77,7 +71,6 @@ class Run:
             result = fn()
         except BaseException:
             self.rows.append((name, "failed", logs.elapsed(start)))
-            self.summary()
             raise
         if stamp:
             pv.write_stamp(name, stamp[0], stamp[1])
@@ -90,25 +83,12 @@ class Run:
             log.info("  %-14s %-8s %s", name, status, took)
 
 
-def run_all() -> None:
-    from mise_ml import (
-        curate,
-        evaluate,
-        export,
-        fetch,
-        install,
-        keys,
-        profile,
-        publish,
-        resolve,
-        student,
-        teacher,
-    )
+def run_train(run: Run) -> None:
+    from mise_ml import evaluate, export, install, student, teacher
     from mise_ml.config import (
         BUNDLE,
-        CATALOG,
         CATALOG_BUNDLE,
-        CATALOG_META,
+        DISTILL,
         EVAL_FEELINGS,
         EVAL_REPORT,
         MODELS,
@@ -116,118 +96,126 @@ def run_all() -> None:
         PAT_SENTENCES,
         PROFILES,
         RESOLVED,
-        SOURCES,
         VOCAB_PATH,
-        CurateConfig,
         ExportConfig,
         StudentConfig,
         TeacherConfig,
     )
+    from mise_ml.data import load_catalog
     from mise_ml.vocab import labels_path, load_vocab
 
-    preflight()
-    missing_r2 = keys.missing_r2()
-    run = Run(extra=0 if missing_r2 else 1)
-    run.step("fetch", fetch.run)
-    raw = [src.dest for src in fetch.load_sources() if src.dest.exists()]
-    run.step("curate", curate.run, ([*raw, SOURCES], CurateConfig(), [CATALOG, CATALOG_META, PAT]))
-    run.step("resolve", resolve.run)
-    run.step("profile", profile.run)
     labels = labels_path(load_vocab())
+    source = Path(__file__).parent
+    common = [source / f"{name}.py" for name in ("data", "heads", "training", "inference")]
     curated = [RESOLVED, PROFILES, labels, PAT, PAT_SENTENCES, EVAL_FEELINGS, VOCAB_PATH]
+    teacher_in = [*curated, DISTILL, *common, source / "teacher.py", source / "features.py"]
     teacher_out = [MODELS / "teacher.pt", teacher.OUTPUTS]
-    run.step("train-teacher", teacher.run, (curated, TeacherConfig(), teacher_out))
-    student_out = [student.STUDENT_DIR / "meta.json", student.STUDENT_DIR / "heads.pt"]
-    student_in = [teacher.OUTPUTS, RESOLVED, PROFILES, VOCAB_PATH]
+    run.step("train-teacher", teacher.run, (teacher_in, TeacherConfig(), teacher_out))
+    student_out = [
+        student.STUDENT_DIR / "meta.json",
+        student.STUDENT_DIR / "heads.pt",
+        student.STUDENT_DIR / "projection.pt",
+        student.STUDENT_DIR / "encoder" / "model.safetensors",
+        student.STUDENT_DIR / "encoder" / "config.json",
+        student.STUDENT_DIR / "encoder" / "tokenizer.json",
+        student.STUDENT_DIR / "encoder" / "tokenizer_config.json",
+    ]
+    student_in = [
+        teacher.OUTPUTS,
+        DISTILL,
+        RESOLVED,
+        PROFILES,
+        VOCAB_PATH,
+        *common,
+        source / "student.py",
+    ]
     run.step("train-student", student.run, (student_in, StudentConfig(), student_out))
-    export_in = [*student_out, student.STUDENT_DIR / "encoder" / "model.safetensors", *curated]
+    encoder_files = sorted(p for p in (student.STUDENT_DIR / "encoder").rglob("*") if p.is_file())
+    export_in = [*student_out, *encoder_files, *curated, *common, source / "export.py"]
+    images = [
+        BUNDLE / "img" / item["image"]["src"].rsplit("/", 1)[-1]
+        for item in load_catalog().items
+        if item.get("image")
+    ]
     run.step(
         "export",
         export.run,
         (
             export_in,
             ExportConfig(),
-            [BUNDLE / "manifest.json", CATALOG_BUNDLE / "catalog.json"],
+            [
+                BUNDLE / "manifest.json",
+                BUNDLE / "vocab.json",
+                BUNDLE / "model" / "model.onnx",
+                BUNDLE / "model" / "tokenizer.json",
+                BUNDLE / "model" / "tokenizer_config.json",
+                BUNDLE / "model" / "config.json",
+                CATALOG_BUNDLE / "catalog.json",
+                CATALOG_BUNDLE / "items.json",
+                CATALOG_BUNDLE / "vectors.bin",
+                *images,
+            ],
         ),
     )
     run.step("eval-judge", evaluate.judge)
     report = run.step("eval", evaluate.run)
     if not report["ship"]["ok"]:
         run.rows.append(("install", "not run", "-"))
-        run.summary()
-        log.warning(
-            "the student is %.1f points below the teacher on %s (limit 5), so `all` does not "
-            "install it; report: %s",
-            report["ship"]["gap"] * 100,
-            report["ship"]["metric"],
-            EVAL_REPORT,
+        log.error(
+            "ship gate failed: %s; report: %s", "; ".join(report["ship"]["reasons"]), EVAL_REPORT
         )
-        log.warning("to use the student anyway, run: uv run mise-ml install")
         raise SystemExit(1)
     run.step("install", install.run)
-    if not missing_r2:
-        run.step("publish", publish.run)
-    else:
-        log.info(
-            "R2 is not configured (%s); run `uv run mise-ml publish` to put the bundle online",
-            ", ".join(missing_r2),
-        )
-    run.summary()
 
 
-def print_steps() -> None:
-    print("usage: uv run mise-ml <step>   (no step needs an argument)\n")
-    print("Steps, in run order:")
-    for name, text in STEPS.items():
-        print(f"  {name:<14} {text}")
-    print("\nFrom zero: uv sync, then uv run mise-ml all")
-    print("To put the installed bundle online: uv run mise-ml publish")
-
-
-def main() -> None:
-    # API keys live in ml/.env (see ml/.env.example). A variable set in the shell wins.
+def command(name: str) -> None:
+    argparse.ArgumentParser(prog=name, description=COMMANDS[name]).parse_args()
     load_dotenv(ML_ROOT / ".env", override=False)
-    parser = argparse.ArgumentParser(prog="mise-ml", description="mise ML pipeline")
-    sub = parser.add_subparsers(dest="step", metavar="step")
-    for name, text in STEPS.items():
-        p = sub.add_parser(name, help=text, description=text)
-        if name == "resolve":
-            p.add_argument("categories", nargs="*", help=f"any of {', '.join(CATEGORIES)}")
-        if name == "eval":
-            p.add_argument(
-                "--judge", action="store_true", help="local LLM relevance judgments first"
-            )
-    args = parser.parse_args()
-    if args.step is None:
-        print_steps()
-        return
-    if args.step == "resolve":
-        unknown = set(args.categories) - set(CATEGORIES)
-        if unknown:
-            parser.error(f"unknown categories: {', '.join(sorted(unknown))}")
+    # The student encodes about 1,030-1,120 items per step. Without rounding, the allocator
+    # caches a block for each size, reserves more than the GPU has, and a kernel launch fails.
+    # Torch reads this before its first CUDA allocation, and no torch import happens above.
+    os.environ.setdefault("PYTORCH_ALLOC_CONF", "roundup_power2_divisions:4")
+    run = Run({"download": 3, "label": 1, "train": 6, "publish": 1}[name])
+    with logs.session(name):
+        try:
+            preflight(name)
+            if name == "download":
+                from mise_ml import curate, fetch, resolve
+                from mise_ml.config import CATALOG, CATALOG_META, PAT, SOURCES, CurateConfig
 
-    with logs.session(args.step):
-        match args.step:
-            case "all":
-                run_all()
-            case "resolve":
-                from mise_ml import resolve
-
-                resolve.run(args.categories or None)
-            case "eval":
-                from mise_ml import evaluate
-
-                if args.judge:
-                    evaluate.judge()
-                evaluate.run()
-            case _:
-                import importlib
-
-                module = {"train-teacher": "teacher", "train-student": "student"}.get(
-                    args.step, args.step
+                run.step("fetch", fetch.run)
+                raw = [src.dest for src in fetch.load_sources() if src.dest.exists()]
+                run.step(
+                    "curate",
+                    curate.run,
+                    ([*raw, SOURCES], CurateConfig(), [CATALOG, CATALOG_META, PAT]),
                 )
-                importlib.import_module(f"mise_ml.{module}").run()
+                run.step("resolve", resolve.run)
+            elif name == "label":
+                from mise_ml import profile
+
+                run.step("profile", profile.run)
+            elif name == "train":
+                run_train(run)
+            else:
+                from mise_ml import publish as delivery
+
+                run.step("publish", delivery.run)
+        finally:
+            run.summary()
 
 
-if __name__ == "__main__":
-    main()
+def download() -> None:
+    command("download")
+
+
+def label() -> None:
+    command("label")
+
+
+def train() -> None:
+    command("train")
+
+
+def publish() -> None:
+    command("publish")

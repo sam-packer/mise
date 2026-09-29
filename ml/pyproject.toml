@@ -28,7 +28,10 @@ dependencies = [
 ]
 
 [project.scripts]
-mise-ml = "mise_ml.__main__:main"
+download = "mise_ml.__main__:download"
+label = "mise_ml.__main__:label"
+train = "mise_ml.__main__:train"
+publish = "mise_ml.__main__:publish"
 
 [build-system]
 requires = ["uv_build>=0.12.1,<0.13.0"]

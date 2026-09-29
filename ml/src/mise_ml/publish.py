@@ -33,9 +33,7 @@ from mise_ml.threads import run_all
 log = get(__name__)
 
 BUNDLE_TS = REPO_ROOT / "src" / "lib" / "bundle.ts"
-BUNDLE_TS_COMMENT = (
-    "// `uv run mise-ml publish` rewrites this line after it uploads the bundle to R2."
-)
+BUNDLE_TS_COMMENT = "// Run `uv run publish` to set the public bundle URL."
 WORKERS = 16
 IMMUTABLE = "public, max-age=31536000, immutable"
 TYPES = {
@@ -161,7 +159,7 @@ def run() -> None:
         raise SystemExit("the public bundle and private catalog need separate R2 buckets")
     manifest_path = TARGET / "manifest.json"
     if not manifest_path.exists():
-        raise SystemExit(f"no bundle at {TARGET}; run `uv run mise-ml install` first")
+        raise SystemExit(f"no bundle at {TARGET}; run `uv run train` first")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     private = catalog_files(INSTALLED_CATALOG, manifest)
     public = public_files(TARGET)
@@ -176,7 +174,7 @@ def run() -> None:
         path = TARGET / "img" / item["image"]["src"].rsplit("/", 1)[-1]
         if path not in by_file:
             if not path.exists():
-                raise SystemExit(f"{item['id']}: image {path} is missing; run install again")
+                raise SystemExit(f"{item['id']}: image {path} is missing; run uv run train again")
             by_file[path] = f"img/{hashlib.sha256(path.read_bytes()).hexdigest()[:20]}.webp"
         key = by_file[path]
         images[key] = path

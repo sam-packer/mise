@@ -82,7 +82,7 @@ def content_hash(files: dict[str, Path | bytes]) -> str:
 
 def write_catalog_ts(prefix: str) -> bool:
     content = (
-        "// Run `mise-ml publish` to set the published catalog prefix.\n"
+        "// Run `uv run publish` to set the published catalog prefix.\n"
         f"export const CATALOG_PREFIX = '{prefix}';\n"
     )
     if CATALOG_TS.exists() and CATALOG_TS.read_text(encoding="utf-8") == content:

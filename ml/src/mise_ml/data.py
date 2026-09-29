@@ -1,3 +1,4 @@
+import unicodedata
 from dataclasses import dataclass
 from typing import Any
 
@@ -6,6 +7,7 @@ import numpy as np
 from mise_ml.color import hex_palette_to_oklab, rgb255_palette_to_oklab
 from mise_ml.config import (
     CATEGORIES,
+    DISTILL,
     EVAL_FEELINGS,
     PAT,
     PAT_SENTENCES,
@@ -19,6 +21,48 @@ from mise_ml.vocab import Vocab, labels_path
 
 SPLITS = ("train", "val", "heldout", "eval")
 log = get_logger(__name__)
+
+# Mirror src/lib/code.ts. JavaScript counts UTF-16 code units.
+MAX_FEELING = 500
+
+
+def normalize_feeling(text: str) -> str:
+    text = " ".join(text.lower().split())
+    start, end = 0, len(text)
+    while start < end and (text[start].isspace() or unicodedata.category(text[start])[0] == "P"):
+        start += 1
+    while end > start and (
+        text[end - 1].isspace() or unicodedata.category(text[end - 1])[0] == "P"
+    ):
+        end -= 1
+    return text[start:end]
+
+
+def distill_rejection(text: str, evals: set[str], seen: set[str]) -> str | None:
+    normalized = normalize_feeling(text)
+    if not normalized:
+        return "empty"
+    if len(text.encode("utf-16-le")) // 2 > MAX_FEELING:
+        return "too_long"
+    if normalized in evals:
+        return "eval"
+    if normalized in seen:
+        return "duplicate"
+    return None
+
+
+def load_distill_texts(exclude: list[str]) -> list[str]:
+    if not DISTILL.is_file():
+        raise SystemExit(f"missing {DISTILL}; run uv run label")
+    evals = {normalize_feeling(t) for t in load_eval_texts()}
+    seen = {normalize_feeling(t) for t in exclude}
+    texts = []
+    for row in iter_jsonl(DISTILL):
+        text = row["text"].strip()
+        if distill_rejection(text, evals, seen) is None:
+            texts.append(text)
+            seen.add(normalize_feeling(text))
+    return texts
 
 
 def load_eval_texts() -> list[str]:
@@ -53,7 +97,7 @@ def load_catalog() -> Catalog:
         )
     items.sort(key=lambda it: (CATEGORIES.index(it["category"]), it["id"]))
     if not items:
-        raise SystemExit("no profiled items; run resolve and profile first")
+        raise SystemExit("no profiled items; run uv run download and uv run label first")
     return Catalog(
         items=items,
         texts=[item_text(it) for it in items],
@@ -88,7 +132,9 @@ class QuerySet:
         return np.flatnonzero(np.isin(self.split, splits))
 
 
-def load_queries(catalog: Catalog, vocab: Vocab, cfg: TeacherConfig) -> QuerySet:
+def load_queries(
+    catalog: Catalog, vocab: Vocab, cfg: TeacherConfig, *, include_distill: bool = False
+) -> QuerySet:
     evals = set(load_eval_texts())
     queries: dict[str, Query] = {}
 
@@ -154,6 +200,10 @@ def load_queries(catalog: Catalog, vocab: Vocab, cfg: TeacherConfig) -> QuerySet
             ambiguous,
             len(queries) - len(rows),
         )
+    if include_distill:
+        # Append only after assigning the existing splits. Exclude even punctuation variants
+        # of existing queries, so held-out and validation text cannot enter training here.
+        rows.extend(Query(text, split="distill") for text in load_distill_texts(list(queries)))
     zero = np.zeros((5, 3))
     return QuerySet(
         texts=[q.text for q in rows],
@@ -169,6 +219,24 @@ def load_queries(catalog: Catalog, vocab: Vocab, cfg: TeacherConfig) -> QuerySet
     )
 
 
+def recall_scores(
+    query_emb: np.ndarray,
+    pos: np.ndarray,
+    item_emb: np.ndarray,
+    item_categories: np.ndarray,
+    k: int = 10,
+) -> np.ndarray:
+    """One hit value per query, ranked within the positive item's category."""
+    if len(pos) == 0:
+        return np.empty(0, dtype=np.float64)
+    sims = query_emb @ item_emb.T
+    same = item_categories[None, :] == item_categories[pos][:, None]
+    sims = np.where(same, sims, -np.inf)
+    pos_sim = sims[np.arange(len(pos)), pos]
+    rank = (sims > pos_sim[:, None]).sum(axis=1)
+    return (rank < k).astype(np.float64)
+
+
 def recall_at_k(
     query_emb: np.ndarray,
     pos: np.ndarray,
@@ -176,12 +244,5 @@ def recall_at_k(
     item_categories: np.ndarray,
     k: int = 10,
 ) -> float:
-    """Share of queries whose positive item ranks in the top k of its own category."""
-    if len(pos) == 0:
-        return float("nan")
-    sims = query_emb @ item_emb.T
-    same = item_categories[None, :] == item_categories[pos][:, None]
-    sims = np.where(same, sims, -np.inf)
-    pos_sim = sims[np.arange(len(pos)), pos]
-    rank = (sims > pos_sim[:, None]).sum(axis=1)
-    return float((rank < k).mean())
+    scores = recall_scores(query_emb, pos, item_emb, item_categories, k)
+    return float(scores.mean()) if len(scores) else float("nan")

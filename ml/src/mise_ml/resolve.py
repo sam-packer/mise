@@ -486,13 +486,13 @@ def retry_fixable_drops() -> None:
     write_json(RESOLVE_META, {"version": RESOLVE_VERSION})
 
 
-def run(categories: list[str] | None = None) -> None:
+def run() -> None:
     start = time.perf_counter()
     cfg = ResolveConfig()
     if catalog_version() != CATALOG_VERSION:
-        raise SystemExit(f"{CATALOG} is missing or in an old format; run curate first")
+        raise SystemExit(f"{CATALOG} is missing or in an old format; run uv run download first")
     catalog = list(iter_jsonl(CATALOG))
-    wanted = [c for c in CATEGORIES if not categories or c in categories]
+    wanted = CATEGORIES
     keys.require([s for c, s in (("film", "tmdb"), ("song", "lastfm")) if c in wanted])
     retry_fixable_drops()
     resolved = list(iter_jsonl(RESOLVED))
