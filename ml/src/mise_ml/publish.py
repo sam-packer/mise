@@ -134,8 +134,9 @@ def apply_cors(s3: Any, bucket: str) -> None:
         log.info(f"CORS: added a rule for {', '.join(CORS_RULE['AllowedOrigins'])}")
     except ClientError as e:
         log.warning(
-            f"CORS: cannot read or set the bucket CORS policy ({e.response['Error']['Code']}). "
-            f"Paste this into R2 > {bucket} > Settings > CORS policy:\n{paste}"
+            f"CORS: the R2 token cannot read the bucket CORS policy "
+            f"({e.response['Error']['Code']}), so publish cannot check it. If R2 > {bucket} > "
+            f"Settings > CORS policy does not already allow the app origins, paste:\n{paste}"
         )
 
 
