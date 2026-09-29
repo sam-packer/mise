@@ -51,6 +51,7 @@ from mise_ml.vocab import load_vocab
 log = get(__name__)
 SHIP_MARGIN = 0.05
 SEP = "\x1f"
+JUDGED_K = 10
 
 JUDGE_SYSTEM = f"""You judge picks for mise, a mood app. A user typed a feeling, and the app \
 shows works that should feel like it.
@@ -233,7 +234,7 @@ def judged_scores(
     catalog: Catalog,
     fits: dict[tuple[str, str], set[int]],
 ) -> np.ndarray:
-    tops = top_by_category(out, catalog, 10)
+    tops = top_by_category(out, catalog, JUDGED_K)
     scores = []
     for t, text in enumerate(texts):
         per_feeling = []
@@ -400,6 +401,8 @@ def run() -> dict[str, Any]:
     for name, scores in judged.items():
         report[name]["recall@10_judged"] = float(scores.mean()) if len(scores) else float("nan")
     known = {r["key"] for r in iter_jsonl(JUDGMENTS)}
+    # Check the depth the metric reads. The judge pools a deeper top list, so float noise that
+    # swaps near-tied items at the pool edge does not leave the metric unjudged.
     complete = all(
         SEP.join((text, cat, catalog.items[i]["id"])) in known
         for out in systems.values()
@@ -408,7 +411,7 @@ def run() -> dict[str, Any]:
             top_by_category(
                 Outputs(out.query[:n_eval], out.items, out.palette, out.choices),
                 catalog,
-                ProfileConfig().judge_pool_per_system,
+                JUDGED_K,
             ),
             strict=True,
         )
