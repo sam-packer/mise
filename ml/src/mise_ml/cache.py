@@ -29,18 +29,23 @@ class CachePlan:
     membership_verified: bool = True
 
     def lines(self) -> list[str]:
-        lines = [
-            f"{self.keys} keys; {self.used} records used; "
+        requests = (
             f"{self.requests} requests would run (before retries)"
-        ]
+            if self.membership_verified
+            else f"{self.requests} known requests; total unknown until dependencies are current"
+        )
+        lines = [f"{self.keys} keys; {self.used} records used; {requests}"]
         for reason, keys in sorted(self.reasons.items()):
             lines.append(
                 f"{reason}: {len(keys)}; examples: {json.dumps(keys[:5], ensure_ascii=True)}"
             )
-        lines.append(
-            f"records no longer used: {len(self.unused)}; {self.unused_bytes} bytes; "
-            f"examples: {json.dumps(self.unused_examples[:5], ensure_ascii=True)}"
-        )
+        if self.membership_verified:
+            lines.append(
+                f"records no longer used: {len(self.unused)}; {self.unused_bytes} bytes; "
+                f"examples: {json.dumps(self.unused_examples[:5], ensure_ascii=True)}"
+            )
+        else:
+            lines.append("records no longer used: unknown; bytes unknown; retained")
         if self.output_changed:
             lines.append("materialized output differs from current accepted cache records")
         return lines + self.notes

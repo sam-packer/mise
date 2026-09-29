@@ -118,6 +118,7 @@ def show(command: str, *, prune: bool = False) -> None:
                     result, notes = inspect_job(step.call()), []
                 upstream = [name for name in step.needs if name in dirty]
                 if upstream:
+                    result.membership_verified = False
                     result.unused.clear()
                     result.unused_bytes = 0
                     result.unused_examples.clear()
@@ -166,7 +167,13 @@ def show(command: str, *, prune: bool = False) -> None:
         for path in sorted((c.DATA / "llm").glob("*.jsonl")):
             if path in known:
                 continue
-            old = unused_job(path)
+            try:
+                old = unused_job(path)
+            except (OSError, ValueError, KeyError) as exc:
+                print(f"{path.stem:14} | will run   | cannot inspect inactive cache: {exc}")
+                if prune:
+                    raise RuntimeError("prune stopped: incomplete cache inspection") from exc
+                continue
             if old.unused:
                 caches.append(old)
                 print(f"{old.name:14} | up to date | inactive job; no requests")

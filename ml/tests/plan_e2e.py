@@ -249,6 +249,18 @@ def check() -> None:
         assert tree(root) == before, "plan changed an interrupted append"
         run(root, "label", "--prune")
         assert tree(root) == before, "prune removed bytes outside unused request records"
+        orphan = root / "ml" / "data" / "llm" / "labels-unreadable.jsonl"
+        orphan.write_bytes(b'{"sig":\n{}\n')
+        before = tree(root)
+        assert "cannot inspect inactive cache" in run(root, "label")
+        try:
+            run(root, "label", "--prune")
+        except subprocess.CalledProcessError as exc:
+            assert "prune stopped: incomplete cache inspection" in exc.stderr, exc.stderr
+        else:
+            raise AssertionError("prune must refuse unreadable inactive cache records")
+        assert tree(root) == before
+        orphan.unlink()
         # A download can write provenance before profiles or model artifacts exist.
         (root / "ml" / "sources.toml").write_text("source = []\n", encoding="utf-8")
         (root / "ml" / "data" / "curated" / "profiles.jsonl").unlink()

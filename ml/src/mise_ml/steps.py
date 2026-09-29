@@ -33,6 +33,17 @@ def settings(*classes: type, **values: Any) -> Settings:
     return Settings({**{cls.__name__: dataclasses.asdict(cls()) for cls in classes}, **values})
 
 
+def publish_settings() -> Settings:
+    from mise_ml import keys
+
+    # Credentials permit access; only these public settings select the upload content.
+    return settings(
+        account_id=keys.env("R2_ACCOUNT_ID"),
+        bucket=keys.env("R2_BUCKET") or keys.R2_BUCKET_DEFAULT,
+        public_url=keys.env("R2_PUBLIC_URL").rstrip("/"),
+    )
+
+
 def content(path: Path, value: Any, label: str = "") -> ContentInput:
     return ContentInput(
         path, hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest(), label
@@ -412,7 +423,7 @@ STEPS = {
             "publish",
             "publish",
             lambda: bundle_files(TARGET),
-            Settings,
+            publish_settings,
             ("publish", "delivery", "keys", "threads"),
             lambda: [c.REPO_ROOT / "src" / "lib" / "bundle.ts"],
             "publish:run",
