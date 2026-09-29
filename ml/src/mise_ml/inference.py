@@ -10,6 +10,8 @@ from transformers import PreTrainedTokenizerBase
 from mise_ml.log import get, progress
 
 log = get(__name__)
+# Smallest tested cap within 5% of peak MiniLM throughput on an RTX 5090 (10,993 items).
+MAX_INFERENCE_TOKENS = 16_384
 
 
 def encode_batches(
@@ -57,6 +59,11 @@ def encode_batches(
         free, _ = torch.cuda.mem_get_info(device)
         budget = max(longest, int(free * 0.5 / per_token))
         log.info("inference probe: %.2f bytes per padded token", per_token)
+        if budget > MAX_INFERENCE_TOKENS:
+            log.info(
+                "inference token budget capped at %d (probe: %d)", MAX_INFERENCE_TOKENS, budget
+            )
+            budget = MAX_INFERENCE_TOKENS
     log.info("inference token budget %d on %s for %d texts", budget, device, len(texts))
     result = None
     start = 0
@@ -89,4 +96,9 @@ def encode_batches(
             torch.cuda.empty_cache()
             budget = max(1, budget // 2)
             log.warning("out of memory; retry at token budget %d", budget)
+    del batch, values
+    if torch.device(device).type == "cuda":
+        # Compiled encoders can leave tensor reference cycles after a new batch shape.
+        gc.collect()
+        torch.cuda.empty_cache()
     return result
