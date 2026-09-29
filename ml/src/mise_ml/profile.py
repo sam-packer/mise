@@ -97,7 +97,7 @@ FACETS = {
         "a school",
         "a kitchen",
         "a bed",
-        "a cafÃ©",
+        "a café",
         "a party",
         "a hospital",
         "an airport",

@@ -452,7 +452,7 @@ def run() -> dict[str, Any]:
 
     def cell(value: float | None, width: int, digits: int = 3) -> str:
         if value is None or np.isnan(value):
-            return f"{'â€”':>{width}}"
+            return f"{'—':>{width}}"
         return f"{value:>{width}.{digits}f}"
 
     log.info(

@@ -194,6 +194,14 @@ def check() -> None:
         assert "upstream train-student will run" in changed, changed
         config.write_text(source)
 
+        config.write_text(
+            source.replace('model: str = "Qwen/Qwen3.5-9B"', 'model: str = "fixture/new-model"')
+        )
+        changed = run(root, "label")
+        assert "signature changed: model: 2;" in changed, changed
+        assert "pool needs model ranking" not in changed, changed
+        config.write_text(source)
+
         feelings = root / "ml" / "eval_feelings.jsonl"
         original = feelings.read_bytes()
         with feelings.open("ab") as stream:
@@ -241,6 +249,17 @@ def check() -> None:
         assert tree(root) == before, "plan changed an interrupted append"
         run(root, "label", "--prune")
         assert tree(root) == before, "prune removed bytes outside unused request records"
+        # A download can write provenance before profiles or model artifacts exist.
+        (root / "ml" / "sources.toml").write_text("source = []\n", encoding="utf-8")
+        (root / "ml" / "data" / "curated" / "profiles.jsonl").unlink()
+        code = (
+            "import sys; sys.path.insert(0, sys.argv[1]); "
+            "from mise_ml.provenance import write_run_json; write_run_json()"
+        )
+        subprocess.run([sys.executable, "-B", "-c", code, str(root / "ml" / "src")], check=True)
+        provenance = json.loads((root / "ml" / "out" / "run.json").read_text(encoding="utf-8"))
+        assert provenance["llm"]["judge"]["records_used"] == 0
+        assert not provenance["llm"]["judge"]["membership_verified"]
         print(
             "PASS: read-only plans; config and input changes; field reasons; exact prune and replay"
         )
