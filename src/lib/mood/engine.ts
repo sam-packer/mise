@@ -1,14 +1,18 @@
 // Environment-agnostic inference core. The browser worker and the Bun scripts both use it.
 import type * as ORT from 'onnxruntime-web';
 import { Tokenizer } from '@huggingface/tokenizers';
+import { createSearch } from './search';
+import { decodeFp16 } from './fp16';
+import type { NameData } from './name-data';
 import {
 	type Light,
-	type LocalMood,
 	type Manifest,
 	type Mood,
 	type OKLab,
 	type Palette,
 	type Vocab,
+	type Anchor,
+	type Item,
 	type MatchResult
 } from './types';
 
@@ -19,14 +23,10 @@ export type EncoderIO = {
 	sessionOptions?: ORT.InferenceSession.SessionOptions;
 };
 
-export type EngineIO = EncoderIO & {
-	match(query: string, embedding: number[], version: string): Promise<MatchResult>;
-};
+export type EngineIO = EncoderIO;
 
 export type MoodEngine = {
-	/** Resolves with the full mood once the server answers. When the heads run in the browser, `onLocal`
-	 * receives the mood before that, as soon as the encoder finishes. */
-	infer(query: string, onLocal?: (mood: LocalMood) => void): Promise<Mood>;
+	infer(query: string): Promise<Mood>;
 };
 
 export type Encoder = {
@@ -120,10 +120,24 @@ export async function createEncoder(io: EncoderIO, manifest: Manifest): Promise<
 
 export async function createMoodEngine(io: EngineIO): Promise<MoodEngine> {
 	const manifest = await io.fetchJson<Manifest>('manifest.json');
-	const [encoder, vocab] = await Promise.all([
+	const { files } = manifest;
+	const [encoder, vocab, items, bytes, names, anchors, anchorBytes] = await Promise.all([
 		createEncoder(io, manifest),
-		io.fetchJson<Vocab>('vocab.json')
+		io.fetchJson<Vocab>(files.vocab.path),
+		io.fetchJson<Item[]>(files.items.path),
+		io.fetchBytes(files.vectors.path),
+		io.fetchJson<NameData>(files.names.path),
+		files.anchors ? io.fetchJson<Anchor[]>(files.anchors.path) : [],
+		files.anchorVectors ? io.fetchBytes(files.anchorVectors.path) : new ArrayBuffer(0)
 	]);
+	const search = createSearch(
+		{ ...manifest, dims: manifest.encoder.dims, words: names.words },
+		items,
+		decodeFp16(bytes),
+		anchors,
+		new Float32Array(anchorBytes),
+		names.representatives
+	);
 	const typefaces = new Map(vocab.typefaces.map((t) => [t.id, t]));
 	const scents = new Map(vocab.scents.map((s) => [s.id, s]));
 
@@ -150,7 +164,7 @@ export async function createMoodEngine(io: EngineIO): Promise<MoodEngine> {
 		query: string,
 		heads: NonNullable<MatchResult['heads']>,
 		start: number
-	): LocalMood {
+	): Omit<Mood, 'picks' | 'anchor'> {
 		return {
 			query,
 			palette: heads.palette,
@@ -162,29 +176,15 @@ export async function createMoodEngine(io: EngineIO): Promise<MoodEngine> {
 	}
 
 	return {
-		async infer(query, onLocal) {
+		async infer(query) {
 			const start = performance.now();
 			const { embedding, outputs } = await encoder.run(query);
-			const local =
-				manifest.heads.kind === 'onnx' ? toMood(query, onnxHeads(outputs), start) : null;
-			if (local) onLocal?.(local);
-
-			const {
-				picks,
-				anchor,
-				heads: serverHeads
-			} = await io.match(query, Array.from(embedding), manifest.version);
-			let mood: LocalMood;
-			if (!local) {
-				// The anchors bundle has no heads in the model: the server sends them with the match.
-				if (!serverHeads) throw new Error('missing anchor heads');
-				mood = toMood(query, serverHeads, start);
-			} else if (anchor) {
-				mood = toMood(query, onnxHeads((await encoder.run(anchor.vibe)).outputs), start);
-			} else {
-				mood = { ...local, ms: performance.now() - start };
-			}
-			return { ...mood, picks, anchor };
+			const { picks, anchor, heads } = search.match(query, embedding);
+			const selectedHeads =
+				manifest.heads.kind === 'anchors'
+					? heads!
+					: onnxHeads(anchor ? (await encoder.run(anchor.vibe)).outputs : outputs);
+			return { ...toMood(query, selectedHeads, start), picks, anchor };
 		}
 	};
 }

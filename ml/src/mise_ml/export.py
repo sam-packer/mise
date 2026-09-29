@@ -1,10 +1,13 @@
+import json
 import logging
 import re
 import shutil
+import subprocess
 import time
 import unicodedata
 from collections import Counter
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 import numpy as np
@@ -16,10 +19,10 @@ from transformers import PreTrainedTokenizerBase
 
 from mise_ml.config import (
     BUNDLE,
-    CATALOG_BUNDLE,
     IMG,
     ML_ROOT,
     OUT,
+    REPO_ROOT,
     SEED,
     VOCAB_PATH,
     ExportConfig,
@@ -298,6 +301,30 @@ def common_words(tokenizer: PreTrainedTokenizerBase, items: list[dict[str, Any]]
     )
 
 
+def write_name_data(bundle: Path, vectors: np.ndarray, words: list[str]) -> None:
+    """Choose representatives with the shared search code before fp16 conversion."""
+    bun = shutil.which("bun")
+    if not bun:
+        raise SystemExit("install Bun before exporting the browser bundle")
+    with TemporaryDirectory(prefix="mise-names-") as directory:
+        tmp = Path(directory)
+        (tmp / "vectors.bin").write_bytes(vectors.astype("<f4").tobytes())
+        write_json(tmp / "words.json", words)
+        subprocess.run(
+            [
+                bun,
+                "--no-env-file",
+                str(REPO_ROOT / "scripts" / "build-name-data.ts"),
+                str(bundle / "items.json"),
+                str(tmp / "vectors.bin"),
+                str(tmp / "words.json"),
+                str(bundle / "search-index.json"),
+            ],
+            cwd=REPO_ROOT,
+            check=True,
+        )
+
+
 def write_bundle(
     model_path: Path,
     tokenizer: PreTrainedTokenizerBase,
@@ -307,9 +334,6 @@ def write_bundle(
 ) -> None:
     if BUNDLE.exists():
         shutil.rmtree(BUNDLE)
-    if CATALOG_BUNDLE.exists():
-        shutil.rmtree(CATALOG_BUNDLE)
-    CATALOG_BUNDLE.mkdir(parents=True)
     model_dir = BUNDLE / "model"
     model_dir.mkdir(parents=True)
     shutil.copy2(model_path, model_dir / "model.onnx")
@@ -333,8 +357,11 @@ def write_bundle(
     vectors = onnx_embed(
         session, tokenizer, catalog.texts, student_cfg.item_max_length, desc="item vectors"
     )
-    (CATALOG_BUNDLE / "vectors.bin").write_bytes(vectors.astype("<f4").tobytes())
-    write_json(CATALOG_BUNDLE / "items.json", items)
+    (BUNDLE / "vectors.bin").write_bytes(vectors.astype("<f2").tobytes())
+    (BUNDLE / "items.json").write_text(
+        json.dumps(items, ensure_ascii=False, separators=(",", ":")), encoding="utf-8", newline="\n"
+    )
+    write_name_data(BUNDLE, vectors, common_words(tokenizer, items))
     shutil.copy2(VOCAB_PATH, BUNDLE / "vocab.json")
 
     img_dir = BUNDLE / "img"
@@ -345,7 +372,7 @@ def write_bundle(
     manifest = {
         "version": "ml-"
         + sha256_file(model_dir / "model.onnx")[:8]
-        + sha256_file(CATALOG_BUNDLE / "vectors.bin")[:8],
+        + sha256_file(BUNDLE / "vectors.bin")[:8],
         "encoder": {
             "model": "model/model.onnx",
             "tokenizer": "model/",
@@ -355,20 +382,16 @@ def write_bundle(
             "normalize": True,
             "outputs": {name: name for name in OUTPUT_NAMES},
         },
+        "files": {
+            "items": {"path": "items.json", "format": "json"},
+            "vectors": {"path": "vectors.bin", "format": "fp16-le"},
+            "names": {"path": "search-index.json", "format": "json"},
+            "vocab": {"path": "vocab.json", "format": "json"},
+        },
         "heads": {"kind": "onnx"},
         "counts": {"items": len(items)},
     }
     write_json(BUNDLE / "manifest.json", manifest)
-    write_json(
-        CATALOG_BUNDLE / "catalog.json",
-        {
-            "version": manifest["version"],
-            "dims": manifest["encoder"]["dims"],
-            "counts": manifest["counts"],
-            "heads": manifest["heads"],
-            "words": common_words(tokenizer, items),
-        },
-    )
     counts = Counter(it["category"] for it in items)
     size = sum(p.stat().st_size for p in BUNDLE.rglob("*") if p.is_file())
     log.info(

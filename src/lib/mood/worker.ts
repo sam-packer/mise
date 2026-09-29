@@ -24,19 +24,7 @@ function load(base: string): Promise<MoodEngine> {
 	const loading = createMoodEngine({
 		ort,
 		fetchBytes: (path) => fetchOk(path).then((r) => r.arrayBuffer()),
-		fetchJson: (path) => fetchOk(path).then((r) => r.json()),
-		async match(query, embedding, version) {
-			const res = await fetch(new URL('/api/match', self.location.origin), {
-				method: 'POST',
-				headers: { 'content-type': 'application/json', accept: 'application/json' },
-				body: JSON.stringify({ query, embedding, version })
-			});
-			if (!res.ok) {
-				const body = (await res.json().catch(() => null)) as { message?: unknown } | null;
-				throw new Error(typeof body?.message === 'string' ? body.message : `match: ${res.status}`);
-			}
-			return res.json();
-		}
+		fetchJson: (path) => fetchOk(path).then((r) => r.json())
 	});
 	loading.then(
 		() => post({ type: 'ready' }),
@@ -55,7 +43,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
 	try {
 		if (!engine) throw new Error('worker was not initialized');
 		const ready = await engine;
-		const mood = await ready.infer(text, (local) => post({ type: 'local', id, mood: local }));
+		const mood = await ready.infer(text);
 		post({ type: 'result', id, mood });
 	} catch (err) {
 		post({ type: 'error', id, message: err instanceof Error ? err.message : String(err) });

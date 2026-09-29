@@ -8,7 +8,7 @@ import { existsSync } from 'node:fs';
 import { copyFile, cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createEncoder, type EncoderIO } from '../src/lib/mood/engine';
-import { installLocalCatalog } from './local-catalog';
+import { buildNameData } from '../src/lib/mood/name-data';
 import {
 	CATEGORIES,
 	LIGHTS,
@@ -25,7 +25,6 @@ const ROOT = path.resolve(import.meta.dirname, '..');
 const STUB = path.join(ROOT, 'scripts', 'stub');
 const CACHE = path.join(STUB, '.cache');
 const OUT = path.join(ROOT, 'ml', 'out', 'stub', 'bundle');
-const CATALOG = path.join(ROOT, 'ml', 'out', 'stub', 'catalog');
 const MODEL_REPO = 'https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main';
 const MODEL_FILES = {
 	'model.onnx': 'onnx/model_quantized.onnx',
@@ -465,8 +464,6 @@ async function main() {
 		await mkdir(path.join(CACHE, d), { recursive: true });
 	}
 	await rm(OUT, { recursive: true, force: true });
-	await rm(CATALOG, { recursive: true, force: true });
-	await mkdir(CATALOG, { recursive: true });
 	await mkdir(path.join(OUT, 'img'), { recursive: true });
 
 	const vocab = await readJson<Vocab>(path.join(STUB, 'vocab.json'));
@@ -491,6 +488,14 @@ async function main() {
 			pooling: 'mean',
 			normalize: true,
 			outputs: { hidden: 'last_hidden_state' }
+		},
+		files: {
+			items: { path: 'items.json', format: 'json' },
+			vectors: { path: 'vectors.bin', format: 'fp16-le' },
+			names: { path: 'search-index.json', format: 'json' },
+			vocab: { path: 'vocab.json', format: 'json' },
+			anchors: { path: 'anchors.json', format: 'json' },
+			anchorVectors: { path: 'anchors.bin', format: 'fp32-le' }
 		},
 		heads: { kind: 'anchors' },
 		counts: { items: 0 }
@@ -524,10 +529,16 @@ async function main() {
 	const itemVectors = await encoder.embed(resolved.map((r) => embeddingText(r.item, r.source)));
 	const anchorVectors = await encoder.embed(anchors.map((a) => a.phrase));
 
-	await writeFile(path.join(CATALOG, 'vectors.bin'), toBin(itemVectors));
-	await writeFile(path.join(CATALOG, 'anchors.bin'), toBin(anchorVectors));
-	await writeFile(path.join(CATALOG, 'items.json'), JSON.stringify(items));
-	await writeFile(path.join(CATALOG, 'anchors.json'), JSON.stringify(anchors));
+	const flat = new Float32Array(items.length * manifest.encoder.dims);
+	itemVectors.forEach((vector, row) => flat.set(vector, row * manifest.encoder.dims));
+	const half = new DataView(new ArrayBuffer(flat.length * 2)) as DataView & {
+		setFloat16(offset: number, value: number, littleEndian: boolean): void;
+	};
+	flat.forEach((value, i) => half.setFloat16(i * 2, value, true));
+	await writeFile(path.join(OUT, 'vectors.bin'), Buffer.from(half.buffer));
+	await writeFile(path.join(OUT, 'anchors.bin'), toBin(anchorVectors));
+	await writeFile(path.join(OUT, 'items.json'), JSON.stringify(items));
+	await writeFile(path.join(OUT, 'anchors.json'), JSON.stringify(anchors));
 	const tokenizerJson = await readJson<{ model: { vocab: Record<string, number> } }>(
 		path.join(OUT, 'model', 'tokenizer.json')
 	);
@@ -554,14 +565,8 @@ async function main() {
 		.filter((word) => tokenizer.encode(word, { add_special_tokens: false }).ids.length === 1)
 		.sort();
 	await writeFile(
-		path.join(CATALOG, 'catalog.json'),
-		JSON.stringify({
-			version: manifest.version,
-			dims: manifest.encoder.dims,
-			counts: manifest.counts,
-			heads: manifest.heads,
-			words
-		})
+		path.join(OUT, 'search-index.json'),
+		JSON.stringify(buildNameData(items, flat, manifest.encoder.dims, words))
 	);
 	await writeFile(path.join(OUT, 'vocab.json'), JSON.stringify(vocab));
 	await writeFile(path.join(OUT, 'manifest.json'), JSON.stringify(manifest, null, '\t'));
@@ -578,9 +583,9 @@ async function main() {
 	}
 	if (new Set(items.map((i) => i.id)).size !== items.length) errors.push('duplicate item ids');
 	const dims = manifest.encoder.dims;
-	const vecBytes = (await stat(path.join(CATALOG, 'vectors.bin'))).size;
-	const ancBytes = (await stat(path.join(CATALOG, 'anchors.bin'))).size;
-	if (vecBytes !== items.length * dims * 4) errors.push('vectors.bin row count mismatch');
+	const vecBytes = (await stat(path.join(OUT, 'vectors.bin'))).size;
+	const ancBytes = (await stat(path.join(OUT, 'anchors.bin'))).size;
+	if (vecBytes !== items.length * dims * 2) errors.push('vectors.bin row count mismatch');
 	if (ancBytes !== anchors.length * dims * 4) errors.push('anchors.bin row count mismatch');
 	for (const v of [...itemVectors, ...anchorVectors]) {
 		const n = Math.sqrt(v.reduce((a, x) => a + x * x, 0));
@@ -642,7 +647,6 @@ async function main() {
 	const target = path.join(ROOT, 'static', 'bundle');
 	await rm(target, { recursive: true, force: true });
 	await cp(OUT, target, { recursive: true });
-	await installLocalCatalog(CATALOG);
 }
 
 await main();

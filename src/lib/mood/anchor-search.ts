@@ -1,4 +1,4 @@
-import type { Category, Item } from '../mood/types';
+import type { Category, Item } from './types';
 
 export type AnchorItem = Pick<Item, 'category' | 'title' | 'creator' | 'album'>;
 
@@ -19,7 +19,7 @@ const FILLER_WORDS = new Set(
 );
 const ANCHOR_CATEGORY_ORDER: Category[] = ['film', 'song', 'book', 'art', 'poem'];
 
-function allWords(text: string): string[] {
+export function allWords(text: string): string[] {
 	return text
 		.normalize('NFD')
 		.replace(/[\u0300-\u036f]/g, '')

@@ -11,7 +11,6 @@ from transformers import AutoModel, AutoTokenizer
 
 from mise_ml.config import (
     BUNDLE,
-    CATALOG_BUNDLE,
     CATEGORIES,
     EVAL_REPORT,
     JUDGMENTS,
@@ -97,7 +96,11 @@ def student_outputs(texts: list[str], catalog: Catalog) -> tuple[Outputs, list[f
     if not model_path.exists():
         raise SystemExit(f"no bundle at {BUNDLE}; run uv run train first")
     _, tokenizer, meta = load_student()
-    items = np.fromfile(CATALOG_BUNDLE / "vectors.bin", dtype="<f4").reshape(len(catalog.items), -1)
+    items = (
+        np.fromfile(BUNDLE / "vectors.bin", dtype="<f2")
+        .astype(np.float32)
+        .reshape(len(catalog.items), -1)
+    )
     session = onnx_session(model_path, threads=1)
     max_tokens = meta["cfg"]["max_length"]
     rows, latency = [], []

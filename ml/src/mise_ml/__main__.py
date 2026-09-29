@@ -162,12 +162,12 @@ def run_train(run: Run) -> None:
     from mise_ml import evaluate, export, install, student, teacher
     from mise_ml.config import (
         BUNDLE,
-        CATALOG_BUNDLE,
         EVAL_FEELINGS,
         EVAL_REPORT,
         PAT,
         PAT_SENTENCES,
         PROFILES,
+        REPO_ROOT,
         RESOLVED,
         VOCAB_PATH,
         ExportConfig,
@@ -193,7 +193,15 @@ def run_train(run: Run) -> None:
     ]
 
     encoder_files = sorted(p for p in (student.STUDENT_DIR / "encoder").rglob("*") if p.is_file())
-    export_in = [*student_out, *encoder_files, *curated, *common, source / "export.py"]
+    export_in = [
+        *student_out,
+        *encoder_files,
+        *curated,
+        *common,
+        source / "export.py",
+        REPO_ROOT / "scripts" / "build-name-data.ts",
+        *sorted((REPO_ROOT / "src" / "lib" / "mood").glob("*.ts")),
+    ]
     images = [
         BUNDLE / "img" / item["image"]["src"].rsplit("/", 1)[-1]
         for item in load_catalog().items
@@ -212,9 +220,9 @@ def run_train(run: Run) -> None:
                 BUNDLE / "model" / "tokenizer.json",
                 BUNDLE / "model" / "tokenizer_config.json",
                 BUNDLE / "model" / "config.json",
-                CATALOG_BUNDLE / "catalog.json",
-                CATALOG_BUNDLE / "items.json",
-                CATALOG_BUNDLE / "vectors.bin",
+                BUNDLE / "search-index.json",
+                BUNDLE / "items.json",
+                BUNDLE / "vectors.bin",
                 *images,
             ],
         ),
