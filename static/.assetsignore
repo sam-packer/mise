@@ -1,2 +1,3 @@
-# The local bundle (the stub, or a trained one from `uv run mise-ml install`) never ships.
-bundle
+# Deploys load the bundle from the CDN (src/lib/bundle.ts, written by `uv run publish`).
+# static/bundle is the local install for `vite dev`; keep it out of Worker assets.
+bundle/
