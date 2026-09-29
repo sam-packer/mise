@@ -569,6 +569,50 @@ JSON object per line with one field, `text`:
   hashes the inputs, relevant source files, and config. Each command skips a step when its
   stamp matches and its required outputs exist. Label caches keep their own prompt signatures.
 
+## What reruns, and why
+
+Use `uv run download --plan`, `uv run label --plan`, `uv run train --plan`, or
+`uv run publish --plan` to inspect a command. A plan does not load a model, use the GPU,
+generate labels, upload files, or write pipeline files. It exits with status 0.
+Publish compares the exact upload bytes with a read-only R2 object listing. It reports
+unknown upload counts if it cannot read the bucket.
+
+`src/mise_ml/steps.py` declares each step's files, content fields, config, source modules,
+outputs, and dependencies. Training hashes the catalog fields it consumes. A change to a
+song's album cover does not change its training text. Stamps record each digest and config
+value. Plans name changed inputs, config fields, source files, and outputs. A missing or
+unverified stamp requires a run. Downstream steps are marked for recheck when an upstream
+step will run; execution checks the new output bytes before deciding to run them.
+
+LLM plans count new keys, changed prompt fields, changed signatures, and rejected answers.
+They show up to five example keys for each reason and the initial request count, before
+retries. New cache records include field digests. For an older record with a changed prompt,
+the reason is `prompt changed (fields not recorded)`. Older records are not rewritten.
+Labels use the current profile and mood files; their key count can change after those jobs.
+
+The judge saves the actual retrieval pool with its ranking inputs. A plan can inspect that
+pool without inference. New feelings or changed ranking inputs require model ranking first.
+The plan then reports a lower bound for new keys and an unknown final request count.
+It does not invent exact counts from older judgments.
+
+`uv run label --plan` also reports unused request records and their bytes per job.
+Use `uv run label --prune` to print the same report and remove those records without
+generating answers. A request that still supplies one current accepted key stays intact.
+Prune keeps records whose use depends on unfinished upstream work or an unverified judge
+pool. It stops if required inputs are missing. Cache writers and prune use file locks;
+prune also checks that each cache still matches the inspected digest.
+
+For example, change `StudentConfig.epochs` from `12` to `13`. The train plan names
+`config.epochs`, keeps the teacher current, and marks the student, export, judge, eval,
+and install for work or recheck. Restore `12` to reuse the student stamp. Adding an eval
+feeling adds a label key and requires new judge rankings. It also invalidates the teacher:
+`load_queries` uses eval membership to assign splits and exclude distillation text.
+
+`out/run.json` includes the step stamps, LLM cache digests, accepted record counts, and
+whether each cache key set was verified. Jobs without their required inputs have zero
+records used and an explanation. HTTP read receipts track the cached API files used by
+download steps. Failed resolve requests prevent a completed stamp, so a rerun retries them.
+
 ## Configuration
 
 The defaults are dataclasses in `src/mise_ml/config.py`: `CurateConfig`, `ResolveConfig`,
