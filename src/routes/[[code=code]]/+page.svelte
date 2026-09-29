@@ -446,7 +446,15 @@
 		margin: 0.9rem 0 0;
 		font-size: 0.95rem;
 		text-align: center;
-		transition: opacity 200ms ease-out;
+		transition:
+			opacity 200ms ease-out,
+			transform 300ms var(--ease);
+	}
+
+	/* The line's hint sits out of the flow in the same place. While it shows, the anchor steps down
+	   below it; a transform, so the wall under the header never moves. */
+	.line:has(:global(.hint)) .anchor {
+		transform: translateY(1.4rem);
 	}
 
 	.anchor .reveal {
