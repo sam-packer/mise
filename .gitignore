@@ -24,6 +24,8 @@ __pycache__/
 .ruff_cache/
 
 # Env
+.dev.vars
+.dev.vars.*
 .env
 .env.*
 !.env.example
