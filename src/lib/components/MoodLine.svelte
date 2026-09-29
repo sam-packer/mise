@@ -83,10 +83,17 @@
 	}
 
 	function onkeydown(e: KeyboardEvent) {
-		if (e.key === 'Tab' && !e.shiftKey && empty && example) {
-			e.preventDefault();
-			use();
-			return;
+		// Tab stays in the field only while it has something to do. Shift+Tab always leaves.
+		if (e.key === 'Tab' && !e.shiftKey) {
+			if (empty && example) {
+				e.preventDefault();
+				use();
+				return;
+			}
+			if (!empty && !settled) {
+				e.preventDefault();
+				return;
+			}
 		}
 		if (e.key === 'Escape' && settled) {
 			e.preventDefault();
