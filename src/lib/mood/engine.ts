@@ -155,7 +155,7 @@ export async function createMoodEngine(io: EngineIO): Promise<MoodEngine> {
 			const heads =
 				manifest.heads.kind === 'anchors'
 					? serverHeads
-					: onnxHeads(anchor ? (await encoder.run(`${anchor.vibe}. ${query}`)).outputs : outputs);
+					: onnxHeads(anchor ? (await encoder.run(anchor.vibe)).outputs : outputs);
 			if (!heads) throw new Error('missing anchor heads');
 
 			return {
