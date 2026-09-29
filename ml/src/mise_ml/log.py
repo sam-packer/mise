@@ -106,7 +106,7 @@ def route_libraries(console: logging.Handler, file: logging.Handler) -> None:
 
 @contextlib.contextmanager
 def session(step: str) -> Iterator[logging.Logger]:
-    """Set up logging for one command. All steps of one `all` run share one file."""
+    """Set up logging for one command. All steps of one command share one file."""
     root = logging.getLogger(ROOT)
     root.setLevel(logging.DEBUG)
     root.propagate = False

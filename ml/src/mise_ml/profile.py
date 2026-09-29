@@ -485,7 +485,7 @@ def run() -> None:
     make_deterministic(SEED, warn_only=True)
     cfg = ProfileConfig()
     if not RESOLVED.exists():
-        raise SystemExit(f"no resolved items at {RESOLVED}; run resolve first")
+        raise SystemExit(f"no resolved items at {RESOLVED}; run uv run download first")
     start = time.perf_counter()
     log.info(
         f"labeler {cfg.model} at {cfg.revision[:12]}, batch {cfg.batch_size} "

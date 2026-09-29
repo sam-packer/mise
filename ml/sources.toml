@@ -1,4 +1,4 @@
-# Raw files for `uv run mise-ml fetch`. Paths are relative to data/raw/.
+# Raw files for `uv run download`. Paths are relative to data/raw/.
 # Films, books, songs, and the Chicago and Cleveland art come from APIs in `curate` (README).
 # fetch downloads each missing file and checks its size and SHA-256.
 # A mismatch stops fetch: the source changed upstream.

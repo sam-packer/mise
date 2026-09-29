@@ -1,4 +1,4 @@
-"""Stamps that let `all` skip finished steps, and the run.json provenance record."""
+"""Stamps that let commands skip finished steps, and the run.json provenance record."""
 
 import dataclasses
 import hashlib

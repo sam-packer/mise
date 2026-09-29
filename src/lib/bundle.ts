@@ -1,2 +1,2 @@
-// `uv run mise-ml publish` rewrites this line after it uploads the bundle to R2.
+// Run `uv run publish` to set the public bundle URL.
 export const BUNDLE_URL = '/bundle/';

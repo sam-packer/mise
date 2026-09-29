@@ -24,7 +24,7 @@ TARGET = REPO_ROOT / "static" / "bundle"
 def run() -> None:
     manifest_path = BUNDLE / "manifest.json"
     if not manifest_path.exists():
-        raise SystemExit(f"no bundle at {BUNDLE}; run `uv run mise-ml export` first")
+        raise SystemExit(f"no bundle at {BUNDLE}; run `uv run train` first")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     catalog = catalog_files(CATALOG_BUNDLE, manifest)
     files = list(public_files(BUNDLE).values())
