@@ -17,7 +17,6 @@ def encode_batches(
     texts: list[str],
     max_length: int,
     encode: Callable[[dict[str, torch.Tensor]], np.ndarray],
-    model: torch.nn.Module | None = None,
     device: str = "cpu",
 ) -> np.ndarray:
     if not texts:
@@ -27,19 +26,37 @@ def encode_batches(
     order = sorted(range(len(texts)), key=lambda i: (lengths[i], i))
     budget = 8192
     if torch.device(device).type == "cuda":
-        if model is None:
-            raise ValueError("GPU batching needs the model to estimate activation memory")
+        longest = max(lengths)
+        probe_count = min(len(order), max(1, 1024 // longest))
+        while True:
+            batch = tokenizer.pad(
+                [{key: values[i] for key, values in tokens.items()} for i in order[-probe_count:]],
+                padding=True,
+                return_tensors="pt",
+            )
+            torch.cuda.synchronize(device)
+            resting = torch.cuda.memory_allocated(device)
+            torch.cuda.reset_peak_memory_stats(device)
+            try:
+                encode(batch)
+                torch.cuda.synchronize(device)
+            except torch.OutOfMemoryError:
+                if probe_count == 1:
+                    raise
+            else:
+                peak = torch.cuda.max_memory_allocated(device) - resting
+                per_token = max(1.0, peak / batch["input_ids"].numel())
+                break
+            del batch
+            gc.collect()
+            torch.cuda.empty_cache()
+            probe_count = max(1, probe_count // 2)
+            log.warning("out of memory; retry probe with %d texts", probe_count)
+        del batch
+        torch.cuda.empty_cache()
         free, _ = torch.cuda.mem_get_info(device)
-        weights = sum(p.numel() * p.element_size() for p in model.parameters())
-        cfg = model.config
-        # Reserve workspace and estimate attention and hidden activations per padded token.
-        per_token = (
-            4
-            * cfg.num_hidden_layers
-            * (16 * cfg.hidden_size + cfg.num_attention_heads * max_length)
-        )
-        available = max(0, free - max(512 * 2**20, weights // 10))
-        budget = max(max(lengths), int(available * 0.5) // per_token)
+        budget = max(longest, int(free * 0.5 / per_token))
+        log.info("inference probe: %.2f bytes per padded token", per_token)
     log.info("inference token budget %d on %s for %d texts", budget, device, len(texts))
     result = None
     start = 0

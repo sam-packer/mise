@@ -62,7 +62,6 @@ class QwenEncoder:
             [template.format(text=t) for t in texts],
             self.cfg.max_length,
             encode,
-            self.model,
             "cuda",
         )
 

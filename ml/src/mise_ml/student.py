@@ -136,7 +136,7 @@ def encode_texts(
         ):
             return model.embed(**batch).float().cpu().numpy()
 
-    return encode_batches(tokenizer, texts, max_length, encode, model.encoder, device)
+    return encode_batches(tokenizer, texts, max_length, encode, device)
 
 
 def run() -> None:
