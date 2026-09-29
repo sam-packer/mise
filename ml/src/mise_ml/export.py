@@ -421,9 +421,7 @@ def run() -> None:
     log.info("exporting the ONNX graph (fp32)")
     export_onnx(model, fp32, cfg.opset)
     log.info("dynamic int8 quantization")
-    student_cfg = StudentConfig(
-        **{k: v for k, v in meta["cfg"].items() if k != "item_encode_batch"}
-    )
+    student_cfg = StudentConfig(**meta["cfg"])
     select_quantization(fp32, int8, tokenizer, catalog, student_cfg, cfg)
     size = int8.stat().st_size
     log.info(f"int8 model: {size / 2**20:.2f} MiB (fp32 {fp32.stat().st_size / 2**20:.1f} MiB)")

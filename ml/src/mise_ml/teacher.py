@@ -12,7 +12,7 @@ from mise_ml.data import load_catalog, load_queries, recall_at_k
 from mise_ml.features import ITEM_TEMPLATE, QUERY_TEMPLATE, FeatureStore, shared_encoder
 from mise_ml.heads import ChoiceHeads, Mlp, palette_loss
 from mise_ml.log import elapsed, get, num, progress
-from mise_ml.training import cosine_schedule, teacher_config
+from mise_ml.training import cosine_schedule
 from mise_ml.util import make_deterministic
 from mise_ml.vocab import load_vocab
 
@@ -45,7 +45,7 @@ def item_store(cfg: TeacherConfig) -> FeatureStore:
 
 def load_teacher() -> tuple[Teacher, dict]:
     ckpt = torch.load(CHECKPOINT, map_location="cuda", weights_only=False)
-    cfg = teacher_config(ckpt["cfg"])
+    cfg = TeacherConfig(**ckpt["cfg"])
     model = Teacher(ckpt["d_in"], cfg, tuple(ckpt["sizes"])).cuda().eval()
     model.load_state_dict(ckpt["state"])
     return model, ckpt

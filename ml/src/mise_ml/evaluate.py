@@ -45,7 +45,6 @@ from mise_ml.profile import (
 from mise_ml.provenance import write_run_json
 from mise_ml.student import Student, encode_texts, load_student
 from mise_ml.teacher import item_store, load_teacher, query_store
-from mise_ml.training import teacher_config
 from mise_ml.util import iter_jsonl, make_deterministic, write_json
 from mise_ml.vocab import load_vocab
 
@@ -78,7 +77,7 @@ def teacher_outputs(texts: list[str], catalog: Catalog) -> Outputs:
     model, ckpt = load_teacher()
     if ckpt["item_ids"] != [it["id"] for it in catalog.items]:
         raise SystemExit("catalog changed since train-teacher; rerun uv run train")
-    cfg = teacher_config(ckpt["cfg"])
+    cfg = TeacherConfig(**ckpt["cfg"])
     fq = torch.tensor(query_store(cfg).get(texts), dtype=torch.float32, device="cuda")
     fi = torch.tensor(item_store(cfg).get(catalog.texts), dtype=torch.float32, device="cuda")
     with torch.no_grad():
@@ -125,7 +124,7 @@ def baseline_outputs(texts: list[str], catalog: Catalog) -> Outputs:
     from mise_ml.student import STUDENT_DIR
 
     saved = json.loads((STUDENT_DIR / "meta.json").read_text(encoding="utf-8"))["cfg"]
-    cfg = StudentConfig(**{k: v for k, v in saved.items() if k != "item_encode_batch"})
+    cfg = StudentConfig(**saved)
     tokenizer = AutoTokenizer.from_pretrained(cfg.backbone, revision=cfg.revision)
     model = Student(
         AutoModel.from_pretrained(cfg.backbone, revision=cfg.revision, attn_implementation="sdpa"),
