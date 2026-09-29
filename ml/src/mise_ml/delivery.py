@@ -11,11 +11,18 @@ from tempfile import TemporaryDirectory
 from mise_ml.config import REPO_ROOT
 
 CATALOG_TS = REPO_ROOT / "src" / "lib" / "server" / "catalog.ts"
-PRIVATE_FILES = {"items.json", "vectors.bin", "anchors.json", "anchors.bin", "catalog.json"}
+PRIVATE_FILES = {
+    "items.json",
+    "vectors.bin",
+    "anchors.json",
+    "anchors.bin",
+    "catalog.json",
+    "search-index.json",
+    "vectorize-v1.json",
+}
 
 
-def check_binding(bucket: str) -> None:
-    """Require the configured bucket to match the Worker binding."""
+def wrangler_config() -> dict:
     text = (REPO_ROOT / "wrangler.jsonc").read_text(encoding="utf-8")
     text = re.sub(
         r'"(?:\\.|[^"\\])*"|//[^\n]*|/\*[\s\S]*?\*/',
@@ -23,7 +30,12 @@ def check_binding(bucket: str) -> None:
         text,
     )
     text = re.sub(r",\s*([}\]])", r"\1", text)
-    bindings = json.loads(text).get("r2_buckets", [])
+    return json.loads(text)
+
+
+def check_binding(bucket: str) -> None:
+    """Require the configured bucket to match the Worker binding."""
+    bindings = wrangler_config().get("r2_buckets", [])
     binding = next((entry for entry in bindings if entry["binding"] == "CATALOG"), None)
     if not binding or binding.get("bucket_name") != bucket:
         raise SystemExit(
@@ -88,7 +100,7 @@ def write_catalog_ts(prefix: str) -> bool:
     if CATALOG_TS.exists() and CATALOG_TS.read_text(encoding="utf-8") == content:
         return False
     CATALOG_TS.parent.mkdir(parents=True, exist_ok=True)
-    CATALOG_TS.write_text(content, encoding="utf-8")
+    CATALOG_TS.write_text(content, encoding="utf-8", newline="\n")
     return True
 
 

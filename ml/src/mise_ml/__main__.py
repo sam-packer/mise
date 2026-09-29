@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 from mise_ml import log as logs
 from mise_ml.config import ML_ROOT
+from mise_ml.provenance import StampInput
 
 COMMANDS = {
     "download": "Fetch sources, curate the catalog, and resolve media and links.",
@@ -56,7 +57,7 @@ class Run:
         self,
         name: str,
         fn: Callable[[], Any],
-        stamp: tuple[list[Path], Any, list[Path]] | None = None,
+        stamp: tuple[list[StampInput], Any, list[Path]] | None = None,
     ) -> Any:
         from mise_ml import provenance as pv
 
@@ -83,34 +84,46 @@ class Run:
             log.info("  %-14s %-8s %s", name, status, took)
 
 
-def run_train(run: Run) -> None:
-    from mise_ml import evaluate, export, install, student, teacher
+def training_stamps() -> dict[str, tuple[list[StampInput], Any, list[Path]]]:
+    """Hash catalog identity, text, categories, and queries, without media fields."""
+    import hashlib
+    import json
+
+    from mise_ml import student, teacher
     from mise_ml.config import (
-        BUNDLE,
-        CATALOG_BUNDLE,
         DISTILL,
         EVAL_FEELINGS,
-        EVAL_REPORT,
         MODELS,
         PAT,
         PAT_SENTENCES,
         PROFILES,
         RESOLVED,
         VOCAB_PATH,
-        ExportConfig,
         StudentConfig,
         TeacherConfig,
     )
     from mise_ml.data import load_catalog
+    from mise_ml.provenance import ContentInput
     from mise_ml.vocab import labels_path, load_vocab
 
     labels = labels_path(load_vocab())
     source = Path(__file__).parent
     common = [source / f"{name}.py" for name in ("data", "heads", "training", "inference")]
     curated = [RESOLVED, PROFILES, labels, PAT, PAT_SENTENCES, EVAL_FEELINGS, VOCAB_PATH]
+    catalog = load_catalog()
+    content = [
+        (it["id"], it["category"], text, it["queries"])
+        for it, text in zip(catalog.items, catalog.texts, strict=True)
+    ]
+    resolved = ContentInput(
+        RESOLVED,
+        hashlib.sha256(
+            json.dumps(content, ensure_ascii=True, sort_keys=True).encode("utf-8")
+        ).hexdigest(),
+    )
+    curated = [resolved if p == RESOLVED else p for p in curated]
     teacher_in = [*curated, DISTILL, *common, source / "teacher.py", source / "features.py"]
     teacher_out = [MODELS / "teacher.pt", teacher.OUTPUTS]
-    run.step("train-teacher", teacher.run, (teacher_in, TeacherConfig(), teacher_out))
     student_out = [
         student.STUDENT_DIR / "meta.json",
         student.STUDENT_DIR / "heads.pt",
@@ -123,13 +136,62 @@ def run_train(run: Run) -> None:
     student_in = [
         teacher.OUTPUTS,
         DISTILL,
-        RESOLVED,
+        resolved,
         PROFILES,
         VOCAB_PATH,
         *common,
         source / "student.py",
     ]
-    run.step("train-student", student.run, (student_in, StudentConfig(), student_out))
+    return {
+        "train-teacher": (teacher_in, TeacherConfig(), teacher_out),
+        "train-student": (student_in, StudentConfig(), student_out),
+    }
+
+
+def migrate_training_stamps() -> None:
+    from mise_ml.config import PROFILES, RESOLVED
+    from mise_ml.provenance import migrate_stamp, stamp_path
+
+    trained = any(stamp_path(name).exists() for name in ("train-teacher", "train-student"))
+    if trained and PROFILES.exists() and RESOLVED.exists():
+        for name, stamp in training_stamps().items():
+            log.info("%s stamp current: %s", name, migrate_stamp(name, *stamp))
+
+
+def run_train(run: Run) -> None:
+    from mise_ml import evaluate, export, install, student, teacher
+    from mise_ml.config import (
+        BUNDLE,
+        CATALOG_BUNDLE,
+        EVAL_FEELINGS,
+        EVAL_REPORT,
+        PAT,
+        PAT_SENTENCES,
+        PROFILES,
+        RESOLVED,
+        VOCAB_PATH,
+        ExportConfig,
+    )
+    from mise_ml.data import load_catalog
+    from mise_ml.vocab import labels_path, load_vocab
+
+    migrate_training_stamps()
+    stamps = training_stamps()
+    run.step("train-teacher", teacher.run, stamps["train-teacher"])
+    run.step("train-student", student.run, stamps["train-student"])
+    student_out = stamps["train-student"][2]
+    source = Path(__file__).parent
+    common = [source / f"{name}.py" for name in ("data", "heads", "training", "inference")]
+    curated = [
+        RESOLVED,
+        PROFILES,
+        labels_path(load_vocab()),
+        PAT,
+        PAT_SENTENCES,
+        EVAL_FEELINGS,
+        VOCAB_PATH,
+    ]
+
     encoder_files = sorted(p for p in (student.STUDENT_DIR / "encoder").rglob("*") if p.is_file())
     export_in = [*student_out, *encoder_files, *curated, *common, source / "export.py"]
     images = [
@@ -183,6 +245,7 @@ def command(name: str) -> None:
                 from mise_ml import curate, fetch, resolve
                 from mise_ml.config import CATALOG, CATALOG_META, PAT, SOURCES, CurateConfig
 
+                migrate_training_stamps()
                 run.step("fetch", fetch.run)
                 raw = [src.dest for src in fetch.load_sources() if src.dest.exists()]
                 run.step(

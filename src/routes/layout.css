@@ -18,6 +18,7 @@
 	html {
 		background: var(--ground);
 		overflow-x: hidden;
+		scrollbar-gutter: stable;
 	}
 
 	body {
@@ -31,6 +32,48 @@
 		-webkit-font-smoothing: antialiased;
 		text-rendering: optimizeLegibility;
 		overflow-x: hidden;
+	}
+
+	/*
+	 * Scrollbars: transparent track, thin rounded thumb from --ink.
+	 * Chromium and Safari ignore ::-webkit-scrollbar once scrollbar-color is set,
+	 * and scrollbar-color has no hover state. So Chromium and Safari use the
+	 * ::-webkit-scrollbar rules, and only Firefox gets the standard properties.
+	 */
+	* {
+		--thumb: color-mix(in oklab, var(--ink) 28%, transparent);
+		--thumb-hover: color-mix(in oklab, var(--ink) 48%, transparent);
+	}
+
+	@supports (-moz-appearance: none) {
+		* {
+			scrollbar-width: thin;
+			scrollbar-color: var(--thumb) transparent;
+		}
+	}
+
+	*::-webkit-scrollbar {
+		width: 10px;
+		height: 10px;
+		background: transparent;
+	}
+
+	*::-webkit-scrollbar-track,
+	*::-webkit-scrollbar-corner {
+		background: transparent;
+		border: 0;
+	}
+
+	*::-webkit-scrollbar-thumb {
+		background: var(--thumb);
+		background-clip: padding-box;
+		border: 2px solid transparent;
+		border-radius: 999px;
+	}
+
+	*::-webkit-scrollbar-thumb:hover {
+		background: var(--thumb-hover);
+		background-clip: padding-box;
 	}
 
 	::selection {

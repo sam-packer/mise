@@ -49,7 +49,7 @@ Run these commands from `ml/`. Use `--help` with any command to see its purpose.
 | `download` | fetch, curate, resolve | catalog API keys |
 | `label` | profile | CUDA, vocab, eval feelings file |
 | `train` | train-teacher, train-student, export, eval-judge, eval, install | CUDA, vocab, eval feelings file |
-| `publish` | publish | R2 keys |
+| `publish` | publish | R2 keys and Wrangler login for Vectorize |
 
 Each command skips completed work. Training and export use provenance stamps. Fetch,
 resolve, and labeling use their own resumable caches. A failed step stops its command.
@@ -86,7 +86,7 @@ The times are estimates for an RTX 5090, except where the text says "measured".
 | `eval-judge` | teacher, student, bundle | `data/curated/judgments.jsonl` | 1–2 h |
 | `eval` | all of the above | `out/eval_report.json`, `out/run.json` | 5 min |
 | `install` | `out/bundle/`, `out/catalog/` | `../static/bundle/`, local R2, `out/installed-catalog/`, `.dev.vars` | seconds |
-| `publish` | `../static/bundle/`, `out/installed-catalog/` | both R2 buckets, `bundle.ts`, `catalog.ts` | minutes the first time |
+| `publish` | `../static/bundle/`, `out/installed-catalog/` | both R2 buckets, Vectorize, `bundle.ts`, `catalog.ts` | minutes the first time |
 
 ### fetch
 
@@ -452,7 +452,8 @@ goes into a public Cloudflare R2 bucket. `publish` uploads the installed public 
 Run `uv run train` to export, check the gate, and install a trained model.
 The Bun stub installs its own public files and local catalog without Python.
 Run `uv run train` again before publishing a trained export after a stub build.
-The Worker reads the catalog through its R2 binding.
+The Worker reads the compact anchor index through R2 and searches item vectors through
+Vectorize. Complete [the one-time Vectorize setup](#vectorize-catalog-search) before publishing.
 The browser runs inference and sends the query and embedding to `POST /api/match`.
 Only selected items leave the server. Stub responses also include the computed heads.
 
@@ -481,7 +482,8 @@ uv run publish
 - **Public bundle files** go to `bundles/<date>-<hash8>/`: `manifest.json`, `model/`,
   and `vocab.json`. The manifest goes last.
 - **Private catalog files** go to `catalog/<date>-<hash8>/` in the private bucket:
-  `items.json`, `vectors.bin`, `catalog.json`, and `anchors.*` for the stub only.
+  `items.json`, `vectors.bin`, `catalog.json`, `search-index.json`, `vectorize-v1.json`,
+  and `anchors.*` for the stub only.
   Each `image.src` in `items.json` becomes the public URL
   `<R2_PUBLIC_URL>/img/<hash>.webp`. The catalog metadata goes last.
 - **Version.** Each prefix uses the UTC date and the first eight hex digits of a SHA-256
@@ -551,6 +553,84 @@ Judged recall averages the categories with relevant works within each feeling, t
 feelings. The report and log include a paired bootstrap 95% interval for each gap. The
 bootstrap resamples feelings 10,000 times with seed 1337. The gate uses the point estimates;
 it reports intervals to show uncertainty. Missing scores fail the gate.
+
+## Vectorize catalog search
+
+The Worker reads item vectors and item records from the private `mise-catalog` Vectorize
+index. It reads `search-index.json` from the private `mise-catalog` R2 bucket. That file
+contains catalog metadata, the common-word list, title/album/creator fields in catalog
+order, and the precomputed representative row for each album and creator. The browser
+receives only the selected records from `/api/match`.
+
+Run these one-time commands from the repository root. Use the same Cloudflare account
+as the R2 configuration in `ml/.env`. Inspect an existing index before changing anything.
+
+```powershell
+bunx wrangler login
+bunx wrangler vectorize list
+bunx wrangler vectorize create mise-catalog --dimensions 384 --metric cosine --update-config=false
+bunx wrangler vectorize create-metadata-index mise-catalog --property-name category --type string
+bunx wrangler vectorize create-metadata-index mise-catalog --property-name creator --type number
+bunx wrangler vectorize create-metadata-index mise-catalog --property-name title --type number
+bunx wrangler vectorize list-metadata-index mise-catalog
+```
+
+Wait until all three metadata indexes appear before uploading vectors. These resources
+were created on 2026-09-29. Do not repeat their creation for a normal publish.
+
+`publish` uses the installed Wrangler through `bun x wrangler`. It uses your existing
+Wrangler login, with `R2_ACCOUNT_ID` as the account. No separate Vectorize token is needed
+with that login. In CI, provide `CLOUDFLARE_API_TOKEN` with Vectorize read/write access to
+that account. Keep the existing R2 credentials for R2 uploads.
+
+Each namespace equals the complete R2 catalog prefix, for example
+`catalog/2026-09-29-e6a24991/`. Each vector ID contains that prefix and its catalog row.
+Thus a new publish cannot replace the live version's vectors, even for the same item.
+The model's `catalog.json` version remains the value checked by the API's 409 response.
+The derived search files do not change the existing catalog content hash or prefix reuse.
+
+After rewriting image URLs to their CDN form, `publish` prepares NDJSON batches of at
+most 5,000 records and uploads them with `vectorize upsert`. It checks every uploaded
+Float32 vector and record, then checks category queries. It writes a private
+`vectorize-v1.json` completion record only after these checks pass. A rerun verifies and
+reuses that completed namespace. An interrupted upload can safely repeat the upserts.
+If a completed namespace differs, publishing stops. It does not recreate indexes or
+change permissions. Publishing writes `src/lib/server/catalog.ts` only after the
+Vectorize data and private R2 files are ready.
+
+Metadata contains the category, catalog row, exact creator/title group identifiers,
+and the complete item as a JSON string. The current largest metadata record is 1,775
+UTF-8 bytes, including poem text, below the 10 KiB limit. Preparation stops if a future
+record exceeds the limit. Creator and title group identifiers avoid the 64-byte indexed
+string limit and preserve exact string equality for anchor exclusions.
+
+The Worker requests 50 candidates per category with values and metadata, then reranks
+them by the original dot product with catalog order as the tie breaker. It applies
+creator/title exclusions before candidate selection. Anchor rules, the 0.7 item blend,
+and stub heads use shared code with local search. A zero embedding uses catalog order.
+Vectorize search is approximate; see [the measured agreement](vectorize-report.md).
+
+For `install` plus `vite dev`, and for `bun run stub`, keep the local R2 catalog and the
+in-memory search. The API selects that path in development. `bun run query` also uses
+the local catalog. The adapter, local installer, query script, and preview command select
+the `local` Wrangler environment, which has no Vectorize binding. Local development does
+not require a remote index or a Cloudflare login. Both implementations use `loadCatalog`
+and the same match interface. This fallback is needed for unpublished local models and
+the anchors-kind stub bundle. Production uses `CATALOG_SEARCH` from `wrangler.jsonc`.
+
+Inspect the `Server-Timing` response header on a successful `/api/match` request.
+`catalog` measures cached catalog/index loading. `search` measures anchor matching,
+Vectorize reads and queries, and reranking. CLI process timings are not Worker latency.
+
+Cloudflare references:
+
+- [Create an index](https://developers.cloudflare.com/vectorize/best-practices/create-indexes/)
+- [Insert/upsert NDJSON and namespaces](https://developers.cloudflare.com/vectorize/best-practices/insert-vectors/)
+- [Query options and getByIds](https://developers.cloudflare.com/vectorize/reference/client-api/)
+- [Metadata indexes and filters](https://developers.cloudflare.com/vectorize/reference/metadata-filtering/)
+- [Limits](https://developers.cloudflare.com/vectorize/platform/limits/)
+- [Wrangler commands](https://developers.cloudflare.com/vectorize/reference/wrangler-commands/)
+- [Worker binding configuration](https://developers.cloudflare.com/workers/wrangler/configuration/#vectorize-indexes)
 
 ## Eval feelings
 

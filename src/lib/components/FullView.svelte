@@ -152,6 +152,7 @@
 		place-items: center;
 		padding: max(2.5vw, 12px);
 		overflow-y: auto;
+		scrollbar-gutter: stable;
 		background: color-mix(in oklab, var(--ground) 86%, transparent);
 		backdrop-filter: blur(18px);
 		-webkit-backdrop-filter: blur(18px);

@@ -38,7 +38,7 @@ if (!queries.length) {
 	process.exit(1);
 }
 
-const platform = await getPlatformProxy<Env>();
+const platform = await getPlatformProxy<Env>({ environment: 'local' });
 try {
 	const catalog = await loadCatalog(
 		platform.env.CATALOG,

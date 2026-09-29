@@ -54,7 +54,8 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
 	const { id, text } = msg;
 	try {
 		if (!engine) throw new Error('worker was not initialized');
-		const mood = await (await engine).infer(text);
+		const ready = await engine;
+		const mood = await ready.infer(text, (local) => post({ type: 'local', id, mood: local }));
 		post({ type: 'result', id, mood });
 	} catch (err) {
 		post({ type: 'error', id, message: err instanceof Error ? err.message : String(err) });

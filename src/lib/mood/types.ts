@@ -69,21 +69,25 @@ export type Anchor =
 
 export type Palette = [OKLab, OKLab, OKLab, OKLab, OKLab];
 
-export type Mood = {
+/** The part of a mood the browser computes on its own, before the server answers with the picks. */
+export type LocalMood = {
 	query: string;
 	/** Five colors in dominance order. */
 	palette: Palette;
 	light: Light;
 	typeface: Typeface;
 	scent: Scent;
+	/** Inference time in milliseconds. */
+	ms: number;
+};
+
+export type Mood = LocalMood & {
 	picks: Record<Category, Item>;
 	/**
 	 * The catalog item the feeling names ("blood orange essex honey"), or null. When set, the wall takes that
 	 * item's vibe, and the item itself is not one of the picks.
 	 */
 	anchor: Item | null;
-	/** Inference time in milliseconds. */
-	ms: number;
 };
 
 export type MatchResult = {
