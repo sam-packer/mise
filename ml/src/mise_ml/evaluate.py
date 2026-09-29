@@ -11,6 +11,7 @@ from transformers import AutoModel, AutoTokenizer
 
 from mise_ml.config import (
     BUNDLE,
+    CATALOG_BUNDLE,
     CATEGORIES,
     EVAL_REPORT,
     JUDGMENTS,
@@ -83,12 +84,12 @@ def teacher_outputs(texts: list[str], catalog: Catalog) -> Outputs:
 
 
 def student_outputs(texts: list[str], catalog: Catalog) -> tuple[Outputs, list[float]]:
-    """The shipped path: the int8 ONNX graph and vectors.bin from the bundle."""
+    """Read the public int8 ONNX graph and private catalog vectors."""
     model_path = BUNDLE / "model" / "model.onnx"
     if not model_path.exists():
         raise SystemExit(f"no bundle at {BUNDLE}; run export first")
     _, tokenizer, _ = load_student()
-    items = np.fromfile(BUNDLE / "vectors.bin", dtype="<f4").reshape(len(catalog.items), -1)
+    items = np.fromfile(CATALOG_BUNDLE / "vectors.bin", dtype="<f4").reshape(len(catalog.items), -1)
     session = onnx_session(model_path, threads=1)
     max_tokens = StudentConfig().max_length
     rows, latency = [], []

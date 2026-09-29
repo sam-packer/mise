@@ -23,6 +23,7 @@ R2 = {
     "R2_PUBLIC_URL": "the public custom domain of the bucket, such as https://cdn.mise.art",
 }
 R2_BUCKET_DEFAULT = "mise"
+R2_CATALOG_BUCKET_DEFAULT = "mise-catalog"
 
 
 def env(name: str) -> str:
@@ -31,7 +32,7 @@ def env(name: str) -> str:
 
 def r2() -> dict[str, str]:
     """The R2 settings. Names each missing variable and stops if one is missing."""
-    for name in (*R2, "R2_BUCKET"):
+    for name in (*R2, "R2_BUCKET", "R2_CATALOG_BUCKET"):
         log.debug("%s: %s", name, "set" if env(name) else "missing")
     problems = [
         f"missing {name} ({use}); set it in ml/.env" for name, use in R2.items() if not env(name)
@@ -45,8 +46,13 @@ def r2() -> dict[str, str]:
         "access_key_id": env("R2_ACCESS_KEY_ID"),
         "secret_access_key": env("R2_SECRET_ACCESS_KEY"),
         "bucket": env("R2_BUCKET") or R2_BUCKET_DEFAULT,
+        "catalog_bucket": catalog_bucket(),
         "public_url": env("R2_PUBLIC_URL").rstrip("/"),
     }
+
+
+def catalog_bucket() -> str:
+    return env("R2_CATALOG_BUCKET") or R2_CATALOG_BUCKET_DEFAULT
 
 
 def missing_r2() -> list[str]:

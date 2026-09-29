@@ -1,6 +1,8 @@
 import logging
+import re
 import shutil
 import time
+import unicodedata
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -14,6 +16,7 @@ from transformers import PreTrainedTokenizerBase
 
 from mise_ml.config import (
     BUNDLE,
+    CATALOG_BUNDLE,
     IMG,
     ML_ROOT,
     OUT,
@@ -173,11 +176,28 @@ def validate_items(items: list[dict[str, Any]]) -> list[str]:
     return problems
 
 
+def common_words(tokenizer: PreTrainedTokenizerBase, items: list[dict[str, Any]]) -> list[str]:
+    """Check vocabulary words and each name word with the exported tokenizer."""
+    candidates = {word for word in tokenizer.get_vocab() if re.fullmatch(r"[a-z0-9]+", word)}
+    for item in items:
+        for field in ("title", "creator", "album"):
+            text = unicodedata.normalize("NFD", item.get(field) or "")
+            text = re.sub(r"[\u0300-\u036f]", "", text).lower().replace("&", " and ")
+            text = re.sub(r"['\u2019]", "", text)
+            candidates.update(filter(None, re.split(r"[^a-z0-9]+", text)))
+    return sorted(
+        word for word in candidates if len(tokenizer.encode(word, add_special_tokens=False)) == 1
+    )
+
+
 def write_bundle(
     model_path: Path, tokenizer: PreTrainedTokenizerBase, encoder_dir: Path, catalog: Catalog
 ) -> None:
     if BUNDLE.exists():
         shutil.rmtree(BUNDLE)
+    if CATALOG_BUNDLE.exists():
+        shutil.rmtree(CATALOG_BUNDLE)
+    CATALOG_BUNDLE.mkdir(parents=True)
     model_dir = BUNDLE / "model"
     model_dir.mkdir(parents=True)
     shutil.copy2(model_path, model_dir / "model.onnx")
@@ -203,8 +223,8 @@ def write_bundle(
     vectors = onnx_embed(
         session, tokenizer, catalog.texts, StudentConfig().item_max_length, desc="item vectors"
     )
-    (BUNDLE / "vectors.bin").write_bytes(vectors.astype("<f4").tobytes())
-    write_json(BUNDLE / "items.json", items)
+    (CATALOG_BUNDLE / "vectors.bin").write_bytes(vectors.astype("<f4").tobytes())
+    write_json(CATALOG_BUNDLE / "items.json", items)
     shutil.copy2(VOCAB_PATH, BUNDLE / "vocab.json")
 
     img_dir = BUNDLE / "img"
@@ -216,7 +236,7 @@ def write_bundle(
     manifest = {
         "version": "ml-"
         + sha256_file(model_dir / "model.onnx")[:8]
-        + sha256_file(BUNDLE / "vectors.bin")[:8],
+        + sha256_file(CATALOG_BUNDLE / "vectors.bin")[:8],
         "encoder": {
             "model": "model/model.onnx",
             "tokenizer": "model/",
@@ -230,6 +250,16 @@ def write_bundle(
         "counts": {"items": len(items)},
     }
     write_json(BUNDLE / "manifest.json", manifest)
+    write_json(
+        CATALOG_BUNDLE / "catalog.json",
+        {
+            "version": manifest["version"],
+            "dims": manifest["encoder"]["dims"],
+            "counts": manifest["counts"],
+            "heads": manifest["heads"],
+            "words": common_words(tokenizer, items),
+        },
+    )
     counts = Counter(it["category"] for it in items)
     size = sum(p.stat().st_size for p in BUNDLE.rglob("*") if p.is_file())
     log.info(

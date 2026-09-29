@@ -85,3 +85,9 @@ export type Mood = {
 	/** Inference time in milliseconds. */
 	ms: number;
 };
+
+export type MatchResult = {
+	picks: Record<Category, Item>;
+	anchor: Item | null;
+	heads?: { palette: Palette; light: string; typeface: string; scent: string };
+};

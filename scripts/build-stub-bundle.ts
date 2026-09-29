@@ -1,12 +1,14 @@
-// Builds the stub mood bundle into static/bundle/. See the spec, §8.
+// Build and install the stub from ml/out/stub/.
 // Run: bun scripts/build-stub-bundle.ts
 import sharp from 'sharp';
+import { Tokenizer } from '@huggingface/tokenizers';
 import * as ortNode from 'onnxruntime-node';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { createEncoder, type EngineIO } from '../src/lib/mood/engine';
+import { createEncoder, type EncoderIO } from '../src/lib/mood/engine';
+import { installLocalCatalog } from './local-catalog';
 import {
 	CATEGORIES,
 	LIGHTS,
@@ -22,7 +24,8 @@ import {
 const ROOT = path.resolve(import.meta.dirname, '..');
 const STUB = path.join(ROOT, 'scripts', 'stub');
 const CACHE = path.join(STUB, '.cache');
-const OUT = path.join(ROOT, 'static', 'bundle');
+const OUT = path.join(ROOT, 'ml', 'out', 'stub', 'bundle');
+const CATALOG = path.join(ROOT, 'ml', 'out', 'stub', 'catalog');
 const MODEL_REPO = 'https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main';
 const MODEL_FILES = {
 	'model.onnx': 'onnx/model_quantized.onnx',
@@ -428,9 +431,9 @@ function embeddingText(item: Item, s: Source): string {
 	return `${s.vibe}. ${s.mood.replace(/\.$/, '')}. ${item.category}: ${item.title} by ${item.creator}.`;
 }
 
-function fileIO(): EngineIO {
+function fileIO(): EncoderIO {
 	return {
-		ort: ortNode as unknown as EngineIO['ort'],
+		ort: ortNode as unknown as EncoderIO['ort'],
 		async fetchBytes(p) {
 			const b = await readFile(path.join(OUT, p));
 			return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
@@ -462,6 +465,8 @@ async function main() {
 		await mkdir(path.join(CACHE, d), { recursive: true });
 	}
 	await rm(OUT, { recursive: true, force: true });
+	await rm(CATALOG, { recursive: true, force: true });
+	await mkdir(CATALOG, { recursive: true });
 	await mkdir(path.join(OUT, 'img'), { recursive: true });
 
 	const vocab = await readJson<Vocab>(path.join(STUB, 'vocab.json'));
@@ -519,10 +524,45 @@ async function main() {
 	const itemVectors = await encoder.embed(resolved.map((r) => embeddingText(r.item, r.source)));
 	const anchorVectors = await encoder.embed(anchors.map((a) => a.phrase));
 
-	await writeFile(path.join(OUT, 'vectors.bin'), toBin(itemVectors));
-	await writeFile(path.join(OUT, 'anchors.bin'), toBin(anchorVectors));
-	await writeFile(path.join(OUT, 'items.json'), JSON.stringify(items));
-	await writeFile(path.join(OUT, 'anchors.json'), JSON.stringify(anchors));
+	await writeFile(path.join(CATALOG, 'vectors.bin'), toBin(itemVectors));
+	await writeFile(path.join(CATALOG, 'anchors.bin'), toBin(anchorVectors));
+	await writeFile(path.join(CATALOG, 'items.json'), JSON.stringify(items));
+	await writeFile(path.join(CATALOG, 'anchors.json'), JSON.stringify(anchors));
+	const tokenizerJson = await readJson<{ model: { vocab: Record<string, number> } }>(
+		path.join(OUT, 'model', 'tokenizer.json')
+	);
+	const tokenizer = new Tokenizer(
+		tokenizerJson,
+		await readJson<object>(path.join(OUT, 'model', 'tokenizer_config.json'))
+	);
+	const candidates = new Set(
+		Object.keys(tokenizerJson.model.vocab).filter((word) => /^[a-z0-9]+$/.test(word))
+	);
+	for (const item of items) {
+		const names = [item.title, item.creator, item.album ?? ''].join(' ');
+		for (const word of names
+			.normalize('NFD')
+			.replace(/[\u0300-\u036f]/g, '')
+			.toLowerCase()
+			.replace(/&/g, ' and ')
+			.replace(/['\u2019]/g, '')
+			.split(/[^a-z0-9]+/)
+			.filter(Boolean))
+			candidates.add(word);
+	}
+	const words = [...candidates]
+		.filter((word) => tokenizer.encode(word, { add_special_tokens: false }).ids.length === 1)
+		.sort();
+	await writeFile(
+		path.join(CATALOG, 'catalog.json'),
+		JSON.stringify({
+			version: manifest.version,
+			dims: manifest.encoder.dims,
+			counts: manifest.counts,
+			heads: manifest.heads,
+			words
+		})
+	);
 	await writeFile(path.join(OUT, 'vocab.json'), JSON.stringify(vocab));
 	await writeFile(path.join(OUT, 'manifest.json'), JSON.stringify(manifest, null, '\t'));
 
@@ -538,8 +578,8 @@ async function main() {
 	}
 	if (new Set(items.map((i) => i.id)).size !== items.length) errors.push('duplicate item ids');
 	const dims = manifest.encoder.dims;
-	const vecBytes = (await stat(path.join(OUT, 'vectors.bin'))).size;
-	const ancBytes = (await stat(path.join(OUT, 'anchors.bin'))).size;
+	const vecBytes = (await stat(path.join(CATALOG, 'vectors.bin'))).size;
+	const ancBytes = (await stat(path.join(CATALOG, 'anchors.bin'))).size;
 	if (vecBytes !== items.length * dims * 4) errors.push('vectors.bin row count mismatch');
 	if (ancBytes !== anchors.length * dims * 4) errors.push('anchors.bin row count mismatch');
 	for (const v of [...itemVectors, ...anchorVectors]) {
@@ -599,6 +639,10 @@ async function main() {
 		process.exit(1);
 	}
 	console.log('validation passed');
+	const target = path.join(ROOT, 'static', 'bundle');
+	await rm(target, { recursive: true, force: true });
+	await cp(OUT, target, { recursive: true });
+	await installLocalCatalog(CATALOG);
 }
 
 await main();

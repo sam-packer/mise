@@ -1,10 +1,8 @@
-"""Upload the bundle in ../static/bundle/ to Cloudflare R2.
+"""Upload public assets and the private catalog to separate R2 buckets.
 
-Images go to `img/<sha256[:20]>.webp`, shared by all versions. The other bundle files go to
-`bundles/<date>-<hash8>/`, where `<hash8>` is the first 8 hex of a SHA-256 over their content
-and `<date>` is the UTC date of the publish that first uploaded that content. items.json there
-points each image at its absolute public URL. Nothing under a version prefix ever changes, so
-every object gets an immutable Cache-Control header.
+Store images under img/<hash20>.webp and public files under bundles/<date>-<hash8>/.
+Store the private catalog under catalog/<date>-<hash8>/ in its own bucket.
+Set each item's image URL to the public image URL before hashing the catalog.
 """
 
 import hashlib
@@ -19,7 +17,15 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from mise_ml import keys
-from mise_ml.config import REPO_ROOT
+from mise_ml.config import INSTALLED_CATALOG, REPO_ROOT
+from mise_ml.delivery import (
+    catalog_files,
+    check_binding,
+    content_hash,
+    install_local_catalog,
+    public_files,
+    write_catalog_ts,
+)
 from mise_ml.install import TARGET
 from mise_ml.log import elapsed, get, num, progress
 from mise_ml.threads import run_all
@@ -74,11 +80,11 @@ def existing(s3: Any, bucket: str, prefix: str) -> set[str]:
     return keys_
 
 
-def existing_bundle_prefix(s3: Any, bucket: str, hash8: str) -> str | None:
-    """The `bundles/` prefix already published for this content hash, from any date."""
+def existing_prefix(s3: Any, bucket: str, root: str, hash8: str) -> str | None:
+    """Find the prefix for this content hash, from any date."""
     suffix = f"-{hash8}/"
     paginator = s3.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=bucket, Prefix="bundles/", Delimiter="/"):
+    for page in paginator.paginate(Bucket=bucket, Prefix=root, Delimiter="/"):
         for common in page.get("CommonPrefixes", []):
             if common["Prefix"].endswith(suffix):
                 return common["Prefix"]
@@ -150,11 +156,16 @@ def upload(s3: Any, bucket: str, jobs: list[tuple[str, Path | bytes]], desc: str
 def run() -> None:
     start = time.perf_counter()
     cfg = keys.r2()
+    check_binding(cfg["catalog_bucket"])
+    if cfg["catalog_bucket"] == cfg["bucket"]:
+        raise SystemExit("the public bundle and private catalog need separate R2 buckets")
     manifest_path = TARGET / "manifest.json"
     if not manifest_path.exists():
         raise SystemExit(f"no bundle at {TARGET}; run `uv run mise-ml install` first")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    items = json.loads((TARGET / "items.json").read_text(encoding="utf-8"))
+    private = catalog_files(INSTALLED_CATALOG, manifest)
+    public = public_files(TARGET)
+    items = json.loads((INSTALLED_CATALOG / "items.json").read_text(encoding="utf-8"))
 
     # Images: key by content, and point items.json at the public URL.
     images: dict[str, Path] = {}
@@ -171,30 +182,27 @@ def run() -> None:
         images[key] = path
         item["image"]["src"] = f"{cfg['public_url']}/{key}"
 
-    # Bundle files: everything outside img/, with the rewritten items.json.
+    # Keep catalog data out of the public bucket.
     files: dict[str, Path | bytes] = {
-        p.relative_to(TARGET).as_posix(): p
-        for p in sorted(TARGET.rglob("*"))
-        if p.is_file() and p.relative_to(TARGET).parts[0] != "img"
+        name: path for name, path in public.items() if not name.startswith("img/")
     }
-    files["items.json"] = json.dumps(items, ensure_ascii=False, separators=(",", ":")).encode()
-    digest = hashlib.sha256()
-    for name in sorted(files):
-        body = files[name]
-        data = body.read_bytes() if isinstance(body, Path) else body
-        digest.update(f"{name}\0{hashlib.sha256(data).hexdigest()}\n".encode())
-    hash8 = digest.hexdigest()[:8]
+    private["items.json"] = json.dumps(items, ensure_ascii=False, separators=(",", ":")).encode()
+    hash8 = content_hash(files)
+    catalog_hash = content_hash(private)
 
     s3 = client(cfg)
     apply_cors(s3, cfg["bucket"])
 
-    reused = existing_bundle_prefix(s3, cfg["bucket"], hash8)
+    reused = existing_prefix(s3, cfg["bucket"], "bundles/", hash8)
     if reused:
         prefix = reused
         log.info(f"bundle {prefix} is already online, reuse")
     else:
         date = datetime.now(UTC).strftime("%Y-%m-%d")
         prefix = f"bundles/{date}-{hash8}/"
+    catalog_prefix = existing_prefix(s3, cfg["catalog_bucket"], "catalog/", catalog_hash)
+    if catalog_prefix is None:
+        catalog_prefix = f"catalog/{datetime.now(UTC):%Y-%m-%d}-{catalog_hash}/"
     log.info(
         f"bundle {manifest['version']} -> {prefix.removeprefix('bundles/').rstrip('/')}: "
         f"{num(len(files))} files, {num(len(images))} images, bucket {cfg['bucket']}"
@@ -218,6 +226,29 @@ def run() -> None:
     file_bytes += upload(
         s3, cfg["bucket"], [j for j in file_jobs if j[0] == manifest_key], "manifest"
     )
+    online = existing(s3, cfg["catalog_bucket"], catalog_prefix)
+    catalog_jobs = [
+        (catalog_prefix + name, body)
+        for name, body in private.items()
+        if catalog_prefix + name not in online
+    ]
+    catalog_key = catalog_prefix + "catalog.json"
+    catalog_bytes = upload(
+        s3,
+        cfg["catalog_bucket"],
+        [job for job in catalog_jobs if job[0] != catalog_key],
+        "catalog",
+    )
+    catalog_bytes += upload(
+        s3,
+        cfg["catalog_bucket"],
+        [job for job in catalog_jobs if job[0] == catalog_key],
+        "catalog metadata",
+    )
+    log.info(
+        f"uploaded {num(len(catalog_jobs))} private catalog files "
+        f"({catalog_bytes / 2**20:.1f} MiB) to {cfg['catalog_bucket']}/{catalog_prefix}"
+    )
 
     log.info(
         f"uploaded {num(len(img_jobs))} images and {num(len(file_jobs))} bundle files "
@@ -225,8 +256,11 @@ def run() -> None:
         f"{num(len(images) - len(img_jobs))} images and {num(len(files) - len(file_jobs))} "
         f"bundle files already online; took {elapsed(start)}"
     )
+    install_local_catalog(private, catalog_prefix)
     url = f"{cfg['public_url']}/{prefix}"
     if write_bundle_ts(url):
-        log.info("updated src/lib/bundle.ts; commit it and deploy")
+        log.info("updated src/lib/bundle.ts")
     else:
         log.info(f"src/lib/bundle.ts already points at {url}")
+    write_catalog_ts(catalog_prefix)
+    log.info("commit src/lib/bundle.ts and src/lib/server/catalog.ts, then run bun run deploy")

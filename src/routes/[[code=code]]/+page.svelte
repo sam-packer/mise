@@ -115,10 +115,10 @@
 		let m: Mood;
 		try {
 			m = await infer(q);
-		} catch {
+		} catch (cause) {
 			if (my !== seq) return;
 			waiting = false;
-			error = 'the moods are out — try again soon';
+			error = cause instanceof Error ? cause.message : 'the moods are out — try again soon';
 			return;
 		}
 		if (my !== seq) return;

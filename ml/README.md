@@ -2,7 +2,7 @@
 
 This package builds the real mood bundle for mise. It selects a current catalog from public APIs
 and museum data, finds images and links, labels everything with a local LLM, trains a teacher,
-distills it into a small student, and writes the bundle to `out/bundle/` in the format of spec §4.
+distills it into a small student, and writes public files to `out/bundle/` and private files to `out/catalog/`.
 
 The pipeline uses three models. All three run on your GPU and are pinned to a revision:
 
@@ -50,12 +50,13 @@ them alone.
 At the end, `all` checks the ship rule (see "eval" below):
 
 - If the student passes, `all` runs `install`, which puts the new bundle into
-  `../static/bundle/`. The web app then uses it.
+  `../static/bundle/` and puts the private catalog in local R2. The web app then uses both.
 - If the student fails, `all` stops. It prints why and the path of `out/eval_report.json`. To
   use the student anyway, run `uv run mise-ml install`.
 
 After `install`, `all` checks for the R2 variables (see "Publish" below). If they are all set, it
-runs `publish`, which puts the bundle online and updates `../src/lib/bundle.ts`. If any are
+runs `publish`, which puts both outputs online and updates `../src/lib/bundle.ts` and
+`../src/lib/server/catalog.ts`. If any are
 missing, `all` names them and logs that `uv run mise-ml publish` puts the bundle online once they
 are set.
 
@@ -85,11 +86,11 @@ The times are estimates for an RTX 5090, except where the text says "measured".
 | `profile` | `resolved.jsonl`, `eval_feelings.jsonl`, vocab | `data/curated/profiles.jsonl`, `moods.jsonl`, `pat_sentences.jsonl`, `labels-<vocab>.jsonl` | 4–10 h |
 | `train-teacher` | the curated files | `data/models/teacher.pt`, `teacher_outputs.pt` | 30–60 min |
 | `train-student` | teacher outputs | `data/models/student/` | 20–40 min |
-| `export` | student, curated files, images | `out/bundle/` | 5 min |
+| `export` | student, curated files, images | `out/bundle/`, `out/catalog/` | 5 min |
 | `eval --judge` | teacher, student, bundle | `data/curated/judgments.jsonl` | 1–2 h |
 | `eval` | all of the above | `out/eval_report.json`, `out/run.json` | 5 min |
-| `install` | `out/bundle/` | `../static/bundle/` | seconds |
-| `publish` (in `all` only if R2 is set) | `../static/bundle/` | the R2 bucket, `../src/lib/bundle.ts` | minutes the first time |
+| `install` | `out/bundle/`, `out/catalog/` | `../static/bundle/`, local R2, `out/installed-catalog/`, `.dev.vars` | seconds |
+| `publish` (in `all` only if R2 is set) | `../static/bundle/`, `out/installed-catalog/` | both R2 buckets, `bundle.ts`, `catalog.ts` | minutes the first time |
 
 ### fetch
 
@@ -334,30 +335,54 @@ differ from an uninterrupted run.
 - Dynamic int8 quantization. The step stops if the model is larger than 24 MiB. The int8 MiniLM
   graph is about 23 MiB.
 - The bundle has `manifest.json` (`heads.kind = "onnx"`, `pooling = "none"`, `maxTokens = 96`),
-  `model/` (the model and the tokenizer files), `items.json`, `vectors.bin`, `vocab.json`, and
-  `img/`. The int8 graph computes the item vectors, so items and queries use one code path.
+  `model/` (the model and the tokenizer files), `vocab.json`, and `img/` in `out/bundle/`.
+  The private `out/catalog/` has `items.json`, `vectors.bin`, and `catalog.json`.
+  The metadata has the dimensions, item count, heads kind, and common words for name matching.
+  The stub uses `out/stub/bundle/` and `out/stub/catalog/`. It adds private `anchors.json`
+  and `anchors.bin`. It does not change the trained export.
+  The int8 graph computes the item vectors, so items and queries use one code path.
   Songs carry `album`. The manifest version is a hash of the model and the vectors.
 
 ### install
 
-`install` copies `out/bundle/` to a new folder next to `../static/bundle/`. When the copy is
-complete, it swaps the new folder in and deletes the old one. So a failed copy never leaves half
-a bundle. It prints the manifest version and the item count of each category.
+`install` copies `out/bundle/` to `../static/bundle/`. It replaces the old public bundle
+and removes private files from older installs. It keeps a private copy in
+`out/installed-catalog/` for publish. It puts each catalog file in local R2 with
+`bunx wrangler r2 object put <bucket>/<key> --local --file <path>`. It writes
+`CATALOG_PREFIX` in the ignored `../.dev.vars` file and keeps the other lines.
+It does not change `src/lib/server/catalog.ts`. No catalog file goes into `static/`.
+
+Set `R2_CATALOG_BUCKET` to the bucket name (default `mise-catalog`). Set the same name
+for the `CATALOG` binding in `../wrangler.jsonc`. Install checks that they match.
+The adapter in `vite.config.ts` provides `platform.env.CATALOG` during development.
+It also loads `.dev.vars` into `platform.env`. Remove the `CATALOG_PREFIX` line to select
+the tracked published prefix again. That catalog must already be in local R2.
+Both Vite and `wrangler dev` use `.wrangler/state` from the repository root. Restart
+the dev server after install. Use `PUBLIC_BUNDLE_URL=/bundle/` for local model files.
 
 ### publish
 
 The web app runs on Cloudflare Workers. The bundle does not go into the app's static assets. It
-goes into a Cloudflare R2 bucket. `publish` uploads the bundle that is in `../static/bundle/`
-now: the stub, or the trained bundle after `install`. It never changes the local files.
+goes into a public Cloudflare R2 bucket. `publish` uploads the installed public bundle from
+`../static/bundle/` and its private catalog from `out/installed-catalog/`. Run `install`
+after export. The Bun stub installs its own public files and local catalog without Python.
+Run install again before publishing a trained export after a stub build.
+The Worker reads the catalog through its R2 binding.
+The browser runs inference and sends the query and embedding to `POST /api/match`.
+Only selected items leave the server. Stub responses also include the computed heads.
 
 Set up the bucket one time:
 
 1. Create the bucket: `bunx wrangler r2 bucket create mise`.
 2. Connect a custom domain, such as `cdn.mise.art`: R2 > `mise` > Settings > Custom Domains.
+   Create the private bucket with `bunx wrangler r2 bucket create mise-catalog`.
+   Do not connect a public domain or enable public access for this bucket.
 3. Create an API token: R2 > Manage API tokens > Create API token. Choose "Object Read & Write"
-   and scope it to the bucket.
+   and scope it to both buckets.
 4. Set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET` (default
-   `mise`), and `R2_PUBLIC_URL` (such as `https://cdn.mise.art`) in `.env`. See `.env.example`.
+   `mise`), `R2_CATALOG_BUCKET` (default `mise-catalog`), and `R2_PUBLIC_URL`
+   (such as `https://cdn.mise.art`) in `.env`. See `.env.example`.
+   Match `R2_CATALOG_BUCKET` to `CATALOG.bucket_name` in `../wrangler.jsonc`.
    `publish` names each missing variable and stops.
 
 Then run:
@@ -368,21 +393,25 @@ uv run mise-ml publish
 
 - **Images** go to `img/<first 20 hex of the SHA-256 of the file>.webp`. `publish` lists the
   keys under `img/` once and uploads only the images that are not there yet, 16 at a time.
-- **Bundle files** go to `bundles/<date>-<hash8>/`: `manifest.json`, `model/`, `vectors.bin`,
-  `vocab.json`, `anchors.*` (stub only), and `items.json`. In this `items.json`, each
-  `image.src` is the absolute URL `<R2_PUBLIC_URL>/img/<hash>.webp`. `manifest.json` goes last.
-- **Version.** `hash8` is the first 8 hex of a SHA-256 over all bundle files, with the rewritten
-  `items.json`; `date` is the UTC date of the publish that first uploaded that content, such as
-  `2026-09-27-a1b2c3d4`. Before uploading, `publish` looks for a `bundles/` prefix that already
-  ends with that hash, from any date, and reuses it instead of uploading a copy. A new prefix
-  starting from the identical content therefore never appears twice.
+- **Public bundle files** go to `bundles/<date>-<hash8>/`: `manifest.json`, `model/`,
+  and `vocab.json`. The manifest goes last.
+- **Private catalog files** go to `catalog/<date>-<hash8>/` in the private bucket:
+  `items.json`, `vectors.bin`, `catalog.json`, and `anchors.*` for the stub only.
+  Each `image.src` in `items.json` becomes the public URL
+  `<R2_PUBLIC_URL>/img/<hash>.webp`. The catalog metadata goes last.
+- **Version.** Each prefix uses the UTC date and the first eight hex digits of a SHA-256
+  over its files. The catalog hash includes the rewritten image URLs. Publish reuses an
+  existing prefix with the same content hash, including one from an earlier date.
 - **Headers.** Each object gets `Cache-Control: public, max-age=31536000, immutable`, because
   no key ever gets new content. JSON is `application/json`, `.onnx` and `.bin` are
   `application/octet-stream`, and images are `image/webp`.
 
-At the end, `publish` rewrites `../src/lib/bundle.ts` to `export const BUNDLE_URL =
-'<R2_PUBLIC_URL>/bundles/<date>-<hash8>/';` and logs that the file changed. Commit it, then
-`bun run deploy` (or push, if a deploy runs on push).
+After both uploads finish, publish writes the public URL to `../src/lib/bundle.ts` and
+the private prefix to `../src/lib/server/catalog.ts`. Only publish writes this prefix.
+Publish puts the same catalog bytes under the same prefix in local R2 and selects that
+prefix in `.dev.vars`. The server checks the public model version on each search and
+returns HTTP 409 if it differs from the catalog version. Publish first. Commit both files.
+Then run `bun run deploy` from the repository root.
 
 **CORS.** The app's web worker fetches the model and the JSON from another origin, so the bucket
 needs a CORS rule. `publish` adds the rule if no rule covers it yet, and keeps the other rules.

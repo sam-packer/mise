@@ -16,15 +16,15 @@ STEPS = {
     "profile": "local LLM pass: item profiles, moods, PAT sentences, labels (resumable)",
     "train-teacher": "cache Qwen3-Embedding-8B features and train the teacher heads",
     "train-student": "distill the teacher into MiniLM",
-    "export": "export ONNX, quantize, and write out/bundle",
+    "export": "export ONNX, quantize, and write out/bundle and out/catalog",
     "eval": "report recall@10, palette delta E, choice accuracy, latency; write out/run.json",
-    "install": "copy out/bundle into ../static/bundle for the web app",
+    "install": "install the public bundle and private catalog for local development",
     "all": (
         "run every step above in order, skip finished work; install and publish if the student "
         "ships and R2 is set"
     ),
     "publish": (
-        "upload ../static/bundle to Cloudflare R2; also runs at the end of `all` if R2 is set"
+        "upload the installed bundle and catalog to R2; also runs at the end of `all` if R2 is set"
     ),
 }
 
@@ -107,6 +107,7 @@ def run_all() -> None:
     from mise_ml.config import (
         BUNDLE,
         CATALOG,
+        CATALOG_BUNDLE,
         CATALOG_META,
         EVAL_FEELINGS,
         EVAL_REPORT,
@@ -140,7 +141,15 @@ def run_all() -> None:
     student_in = [teacher.OUTPUTS, RESOLVED, PROFILES, VOCAB_PATH]
     run.step("train-student", student.run, (student_in, StudentConfig(), student_out))
     export_in = [*student_out, student.STUDENT_DIR / "encoder" / "model.safetensors", *curated]
-    run.step("export", export.run, (export_in, ExportConfig(), [BUNDLE / "manifest.json"]))
+    run.step(
+        "export",
+        export.run,
+        (
+            export_in,
+            ExportConfig(),
+            [BUNDLE / "manifest.json", CATALOG_BUNDLE / "catalog.json"],
+        ),
+    )
     run.step("eval-judge", evaluate.judge)
     report = run.step("eval", evaluate.run)
     if not report["ship"]["ok"]:
