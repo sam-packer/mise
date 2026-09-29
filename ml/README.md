@@ -79,7 +79,7 @@ The times are estimates for an RTX 5090, except where the text says "measured".
 | `fetch` | `sources.toml` | `data/raw/` | 5–10 min |
 | `curate` | APIs, `data/raw/` | `data/curated/catalog.jsonl`, `catalog.meta.json`, `pat.jsonl` | about 21 min the first time (song selection, measured); under 1 min from the cache |
 | `resolve` | `catalog.jsonl`, APIs | `data/curated/resolved.jsonl`, `data/img/` | about 15 min (songs are the slowest) |
-| `profile` | `resolved.jsonl`, `eval_feelings.jsonl`, vocab | `data/curated/profiles.jsonl`, `moods.jsonl`, `pat_sentences.jsonl`, `labels-<vocab>.jsonl` | 4–10 h |
+| `profile` | `resolved.jsonl`, `eval_feelings.jsonl`, vocab | `data/curated/profiles.jsonl`, `moods.jsonl`, `pat_sentences.jsonl`, `labels-<vocab>.jsonl`, `distill.jsonl` | 4–10 h plus distillation feelings |
 | `train-teacher` | the curated files | `data/models/teacher.pt`, `teacher_outputs.pt` | 30–60 min |
 | `train-student` | teacher outputs | `data/models/student/` | 20–40 min |
 | `export` | student, curated files, images | `out/bundle/`, `out/catalog/` | 5 min |
@@ -241,7 +241,7 @@ average OKLab `tone`. Run `uv run download` to resolve all categories.
 ### profile (§9.2)
 
 `profile` runs `Qwen/Qwen3.5-9B` (Apache-2.0, pinned revision) in-process with transformers, in
-bf16, with thinking mode off. It runs four jobs:
+bf16, with thinking mode off. It runs five jobs:
 
 1. **items:** a vibe line, a mood description, and three example feelings for each item. Art
    items also send the image.
@@ -252,8 +252,21 @@ bf16, with thinking mode off. It runs four jobs:
 4. **labels:** five colors, a light, a typeface, and a scent for about 30,000 feelings: your eval
    feelings, the synthetic moods, and item feelings to fill the rest.
 
-Every prompt asks for feelings as a sentence about a scene or a moment, 6 to 30 words. It never
-asks for a list of mood words.
+5. **distill:** 40,000 requested unlabeled feelings. A fixed grid crosses 100 situations with
+   20 writing styles. Each of the 2,000 seed keys requests 20 feelings. Set the total with
+   `ProfileConfig.distill_feelings` and the request size with `distill_per_request`.
+   The grid covers life events, places, seasons, weather, relationships, work, travel,
+   nature, city life, emotions, and aesthetics. Styles include one or two words, fragments,
+   questions, typos, sensory details, and sentences of up to about 25 words.
+
+The existing feeling jobs request scenes of 6 to 30 words. The separate `distill` prompt
+allows short and informal text. It never includes eval feelings, including in retries.
+After cache replay, it drops empty text, text over the app's 500 UTF-16-unit limit,
+duplicates across the job, and eval matches. Matching uses lower case, collapsed spaces,
+and punctuation removed from both ends. It logs generated, kept, and dropped counts by reason.
+`data/curated/distill.jsonl` holds one `text` and its seed `key` per row. The cache preserves
+completed seed requests even when some feelings are dropped. A rerun generates only missing
+keys. This job does not change the existing prompts, caches, or label pool.
 
 **Valid JSON.** `profile` uses constrained decoding with xgrammar. xgrammar compiles each JSON
 schema, including the enums of vocab ids and a `#rrggbb` pattern for colors, into a grammar.
@@ -303,7 +316,11 @@ differ from an uninterrupted run.
     hidden state of that last token (4,096 values), L2-normalized.
 - `data/features/` caches the features by text. The file names hold the model id and revision,
   so features from another backbone are never reused. A second run encodes only new texts.
-- The feature pass encodes about 60,000 to 75,000 texts, at most 256 tokens each.
+- The feature pass encodes about 60,000 to 75,000 existing texts plus the kept distillation
+  feelings, at most 256 tokens each. Distillation feelings use the same query template and
+  feature cache. They do not train the teacher heads. The best teacher checkpoint writes
+  their embeddings, palettes, and choice logits with split `distill` and positive item `-1`.
+  The loader excludes normalized matches to existing queries before adding these rows.
   It sorts by token length and packs batches by padded token count. It derives the starting
   budget from free GPU memory and model size. Each memory failure halves the budget and
   retries the pending batch. It restores input order after encoding.
@@ -331,6 +348,19 @@ differ from an uninterrupted run.
 
 ### train-student (§9.4)
 
+The student previously trained on about 40,000 LLM-written queries. The measured baseline
+in `out/eval_report.json` uses 290 human-style eval feelings:
+
+| Model | Held-out recall@10 (LLM paraphrases) | Judged recall@10 (human-style feelings) |
+|---|---|---|
+| Qwen3-Embedding-8B teacher with heads | 0.329 | 0.718 |
+| MiniLM-L6 student, int8 | 0.312 | 0.644 |
+
+The held-out gap is about 1.6 percentage points with unrounded scores. The human-style gap
+is 7.4 points, with a confidence interval of [5.8, 9.1]. The student is at the 24 MiB cap.
+Unlabeled distillation adds varied text without a larger student or another labeling pass.
+These are baseline measurements, not results from training with the new feelings.
+
 - Set `StudentConfig.backbone` and `revision` to choose the encoder. The default is
   `sentence-transformers/all-MiniLM-L6-v2`, fully fine-tuned, at a pinned revision.
   The model uses masked mean pooling. A learned projection maps other hidden sizes to
@@ -345,11 +375,19 @@ differ from an uninterrupted run.
 - The losses are: KL divergence between the teacher and student query-to-item similarity
   distributions (temperature 0.05), InfoNCE on (item feeling, item) pairs, the shared palette
   loss against teacher colors, and KL to the teacher choice logits.
+  Distillation rows use only the three teacher-derived losses. They have no InfoNCE target.
 - Each step encodes, with gradients, the teacher's top 16 items for each query, 128 random
-  items, and the positives. The step keeps the checkpoint with the best validation recall@10.
+  draws, and the positives. After deduplication, full batches keep 1,030–1,120 items by adding
+  or trimming random extras. They always keep the teacher's neighbors and the positives.
+  A final partial batch can use fewer items. Training keeps the checkpoint with the best
+  validation recall@10.
 - The maximum is 12 epochs, with patience 3 and the same warmup/cosine schedule as the
   teacher. The training batch size stays 64. Item and validation encoding use the shared
   token-budget helper. The helper never changes the training batch size.
+- One epoch is one pass over `train` plus `distill` rows. Training logs both row counts.
+  Validation and checkpoint selection use only `val`. Held-out and val splits stay unchanged.
+  Both training stamps include `data/curated/distill.jsonl`. If that file is missing,
+  `uv run train` stops and asks you to run `uv run label`.
 
 ### export
 
