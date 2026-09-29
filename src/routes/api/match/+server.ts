@@ -3,7 +3,12 @@ import { MAX_FEELING, normalize } from '$lib/code';
 import { loadCatalog } from '$lib/server/load-catalog';
 import type { RequestHandler } from './$types';
 
-export const POST: RequestHandler = async ({ request, platform }) => {
+export const POST: RequestHandler = async ({ request, platform, getClientAddress }) => {
+	// The app has no accounts, so the client IP is the only key. The limit leaves room for shared IPs.
+	const limiter = platform?.env.MATCH_LIMIT;
+	if (limiter && !(await limiter.limit({ key: getClientAddress() })).success) {
+		error(429, 'Too many searches. Wait a minute and try again.');
+	}
 	const body = (await request.json().catch(() => null)) as {
 		query?: unknown;
 		embedding?: unknown;

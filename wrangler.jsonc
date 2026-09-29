@@ -11,6 +11,10 @@
 	// Short links: code → feeling. Made with `bunx wrangler kv namespace create moods`.
 	"kv_namespaces": [{ "binding": "MOODS", "id": "73941fa8ddb9434f8ceddc6edbf3bc78" }],
 	"r2_buckets": [{ "binding": "CATALOG", "bucket_name": "mise-catalog" }],
+	// Slows down scripts that page through the private catalog with /api/match.
+	"ratelimits": [
+		{ "name": "MATCH_LIMIT", "namespace_id": "1001", "simple": { "limit": 30, "period": 60 } }
+	],
 	"workers_dev": true,
 	"preview_urls": true
 }
