@@ -28,16 +28,32 @@ PACKAGES = (
 )
 
 
-def file_hashes(paths: list[Path]) -> dict[str, str | None]:
+@dataclasses.dataclass(frozen=True)
+class ContentInput:
+    """A file dependency hashed from the content a step actually consumes."""
+
+    path: Path
+    digest: str
+
+
+StampInput = Path | ContentInput
+
+
+def file_hashes(paths: list[StampInput]) -> dict[str, str | None]:
     return {
-        str(p.relative_to(config.REPO_ROOT)).replace("\\", "/"): sha256_file(p)
-        if p.exists()
-        else None
-        for p in sorted(paths)
+        str(p.relative_to(config.REPO_ROOT)).replace("\\", "/"): (
+            entry.digest
+            if isinstance(entry, ContentInput)
+            else sha256_file(p)
+            if p.exists()
+            else None
+        )
+        for entry in paths
+        for p in [entry.path if isinstance(entry, ContentInput) else entry]
     }
 
 
-def stamp_digest(inputs: list[Path], cfg: Any) -> str:
+def stamp_digest(inputs: list[StampInput], cfg: Any) -> str:
     blob = json.dumps(
         {"inputs": file_hashes(inputs), "config": dataclasses.asdict(cfg)}, sort_keys=True
     )
@@ -48,7 +64,7 @@ def stamp_path(step: str) -> Path:
     return config.MODELS / f"{step}.stamp"
 
 
-def is_current(step: str, inputs: list[Path], cfg: Any, outputs: list[Path]) -> bool:
+def is_current(step: str, inputs: list[StampInput], cfg: Any, outputs: list[Path]) -> bool:
     path = stamp_path(step)
     return (
         all(p.exists() for p in outputs)
@@ -57,7 +73,18 @@ def is_current(step: str, inputs: list[Path], cfg: Any, outputs: list[Path]) -> 
     )
 
 
-def write_stamp(step: str, inputs: list[Path], cfg: Any) -> None:
+def migrate_stamp(step: str, inputs: list[StampInput], cfg: Any, outputs: list[Path]) -> bool:
+    """Convert a legacy file stamp only while every original input still matches."""
+    if is_current(step, inputs, cfg, outputs):
+        return True
+    original = [i.path if isinstance(i, ContentInput) else i for i in inputs]
+    if is_current(step, original, cfg, outputs):
+        write_stamp(step, inputs, cfg)
+        return True
+    return False
+
+
+def write_stamp(step: str, inputs: list[StampInput], cfg: Any) -> None:
     path = stamp_path(step)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(stamp_digest(inputs, cfg), encoding="utf-8")

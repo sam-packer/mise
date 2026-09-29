@@ -1,3 +1,4 @@
+import hashlib
 import io
 import json
 import re
@@ -6,7 +7,7 @@ import time
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import quote, quote_plus, urlencode
+from urllib.parse import quote, quote_plus, urlencode, urlsplit
 
 import numpy as np
 from PIL import Image
@@ -56,6 +57,23 @@ Result = tuple[Record | None, str]
 
 TMDB_IMAGES = "https://image.tmdb.org/t/p/w780"
 DEEZER = "https://api.deezer.com"
+# Deezer can return this JPEG even for a nonempty md5_image (track 185287).
+# Include the WebP produced by image() so old downloads are repaired too.
+PLACEHOLDER_HASHES = {
+    "b1fad669172f6263a50ca6d519a91d8cd16488014c1cb1623d823d2106c8586a",
+    "5a4c35e31281988c6dbdeb16c22ab43f9745cc79afce62c9fa0f8d14b9c40180",
+}
+LASTFM_PLACEHOLDER = "2a96cbd8b46e442fc41c2b86b821562f"
+
+
+def placeholder_url(url: str) -> bool:
+    return "/images/cover//" in url or LASTFM_PLACEHOLDER in url
+
+
+def placeholder_bytes(data: bytes) -> bool:
+    return hashlib.sha256(data).hexdigest() in PLACEHOLDER_HASHES
+
+
 WIKIDATA = "https://query.wikidata.org/sparql"
 P18_QUERY = """SELECT ?item ?image WHERE {{
   VALUES ?item {{ {ids} }}
@@ -143,6 +161,13 @@ def commons_url(file_url: str) -> str:
 class Resolver:
     def __init__(self, cfg: ResolveConfig) -> None:
         self.cfg = cfg
+        # Extend this resolver's config without changing limits supplied by callers.
+        for host, interval in {
+            "lastfm.freetls.fastly.net": 0.2,
+            "lastfm-img.freetls.fastly.net": 0.2,
+            "itunes.apple.com": 3.1,
+        }.items():
+            cfg.min_interval.setdefault(host, interval)
         self.curate = CurateConfig()
         self.http = CachedClient(cfg)
         self.met_images: dict[str, str] = {}
@@ -150,10 +175,12 @@ class Resolver:
         self.song_tags: dict[tuple[str, str], list[tuple[int, str]]] = {}
 
     def image(self, url: str, item_id: str) -> dict | None:
+        if not url or placeholder_url(url):
+            return None
         name = item_id.replace(":", "-") + ".webp"
         path = IMG / name
         img = None
-        if path.exists():
+        if path.exists() and not placeholder_bytes(path.read_bytes()):
             try:
                 img = Image.open(path).convert("RGB")
             except OSError:
@@ -162,7 +189,7 @@ class Resolver:
                 path.unlink()
         if img is None:
             data = self.http.get_bytes(url)
-            if not data:
+            if not data or placeholder_bytes(data):
                 return None
             try:
                 img = Image.open(io.BytesIO(data)).convert("RGB")
@@ -175,6 +202,8 @@ class Resolver:
             )
             out = io.BytesIO()
             img.save(out, "WEBP", quality=self.cfg.webp_quality, method=6)
+            if placeholder_bytes(out.getvalue()):
+                return None
             atomic_write(path, out.getvalue())
         small = img.copy()
         small.thumbnail((64, 64))
@@ -291,11 +320,9 @@ class Resolver:
         def fits(t: dict) -> bool:
             names = [t.get("artist", {}).get("name", "")]
             names += [c.get("name", "") for c in t.get("contributors") or []]
-            return (
-                bool(want_artists & {norm(n) for n in names})
-                and norm(base_title(t.get("title", ""))).startswith(want_track)
-                and bool(t.get("album", {}).get("cover_xl"))
-            )
+            return bool(want_artists & {norm(n) for n in names}) and norm(
+                base_title(t.get("title", ""))
+            ).startswith(want_track)
 
         isrc = r["source"].get("isrc")
         if isrc:
@@ -346,11 +373,85 @@ class Resolver:
         ]
         return unique(tags + own, self.curate.song_tags)
 
+    def song_image(self, r: Record, track: dict) -> dict | None:
+        """Try Deezer, Last.fm album, Last.fm track album, then iTunes, in that order."""
+        album = track.get("album") or {}
+        url = album.get("cover_xl") or ""
+        errors = []
+        if track.get("md5_image") != "" and album.get("md5_image") != "":
+            try:
+                image = self.image(url, r["id"])
+                if image:
+                    return image
+            except FetchError as e:
+                errors.append(str(e))
+                log.warning("%s: Deezer art failed: %s", r["id"], e)
+        for method, field, value in (
+            ("album.getinfo", "album", r.get("album") or album.get("title")),
+            ("track.getinfo", "track", base_title(r["title"])),
+        ):
+            if not value:
+                continue
+            params = {
+                "method": method,
+                "artist": r["creator"],
+                field: value,
+                "autocorrect": 1,
+                "format": "json",
+            }
+            try:
+                body = (
+                    self.http.get_json(f"{LASTFM}?{urlencode(params)}", secret=keys.lastfm()) or {}
+                )
+                info = (
+                    body.get("album")
+                    if field == "album"
+                    else (body.get("track") or {}).get("album")
+                )
+                for cover in reversed((info or {}).get("image") or []):
+                    url = cover.get("#text") or ""
+                    image = self.image(url, r["id"])
+                    if image:
+                        log.info("%s: artwork from Last.fm %s", r["id"], method)
+                        return image
+            except FetchError as e:
+                errors.append(str(e))
+        params = {"term": f"{r['creator']} {base_title(r['title'])}", "entity": "song", "limit": 25}
+        try:
+            body = self.http.get_json(f"https://itunes.apple.com/search?{urlencode(params)}") or {}
+            matches = [
+                t
+                for t in body.get("results", [])
+                if song_key(t.get("artistName", ""), t.get("trackName", ""))
+                == song_key(r["creator"], r["title"])
+            ]
+            matches.sort(
+                key=lambda t: (
+                    norm(t.get("collectionName", ""))
+                    != norm(r.get("album") or album.get("title", "")),
+                    bool(NOT_ORIGINAL.search(t.get("collectionName", ""))),
+                )
+            )
+            for t in matches:
+                url = (t.get("artworkUrl100") or "").replace("100x100bb", "800x800bb")
+                host = urlsplit(url).hostname
+                if host:
+                    self.cfg.min_interval.setdefault(host, 0.2)
+                image = self.image(url, r["id"])
+                if image:
+                    log.info("%s: artwork from iTunes", r["id"])
+                    return image
+        except FetchError as e:
+            errors.append(str(e))
+        if errors:
+            raise FetchError("; ".join(errors))
+        return None
+
     def song(self, r: Record) -> Result:
         track, reason = self.deezer_track(r)
         if track is None:
             return None, reason
-        image = self.image(track["album"]["cover_xl"], r["id"])
+        image = self.song_image(r, track)
         if image is None:
             return None, "no_image"
         query = f"{r['creator']} {base_title(r['title'])}"
@@ -486,6 +587,38 @@ def retry_fixable_drops() -> None:
     write_json(RESOLVE_META, {"version": RESOLVE_VERSION})
 
 
+def repair_song_art(resolver: Resolver, rows: list[Record]) -> None:
+    """Repair only placeholder artwork; preserve all other resolved fields."""
+    pending = []
+    for r in rows:
+        if r["category"] != "song":
+            continue
+        image = r.get("image")
+        if not image:
+            pending.append(r)
+            continue
+        path = IMG / image["src"].rsplit("/", 1)[-1]
+        if placeholder_url(image.get("url", "")) or (
+            path.exists() and placeholder_bytes(path.read_bytes())
+        ):
+            pending.append(r)
+    for r in progress(pending, desc="repair song art", unit="song"):
+        old = r.get("image")
+        if old and placeholder_url(old.get("url", "")):
+            (IMG / old["src"].rsplit("/", 1)[-1]).unlink(missing_ok=True)
+        # Do not serve the placeholder if every source fails. A missing image retries.
+        r["image"] = None
+        try:
+            r["image"] = resolver.song_image(r, {"album": {"title": r.get("album")}})
+        except FetchError as e:
+            log.warning("%s: no artwork: %s", r["id"], e)
+        if not r["image"]:
+            log.warning("%s: no artwork from Last.fm or matching iTunes tracks", r["id"])
+            if old:
+                (IMG / old["src"].rsplit("/", 1)[-1]).unlink(missing_ok=True)
+        write_jsonl(RESOLVED, rows)
+
+
 def run() -> None:
     start = time.perf_counter()
     cfg = ResolveConfig()
@@ -512,6 +645,7 @@ def run() -> None:
     )
 
     resolver = Resolver(cfg)
+    repair_song_art(resolver, resolved)
     lock = threading.Lock()
     stats: dict[str, Counter[str]] = {c: Counter() for c in wanted}
     group_targets = targets(CurateConfig())
