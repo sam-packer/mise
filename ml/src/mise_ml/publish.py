@@ -9,7 +9,7 @@ from typing import Any
 
 import boto3
 from botocore.config import Config
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from mise_ml import keys
 from mise_ml.config import REPO_ROOT
@@ -165,9 +165,8 @@ def upload(s3: Any, bucket: str, jobs: list[tuple[str, Path | bytes]], desc: str
     return sent
 
 
-def run() -> None:
-    start = time.perf_counter()
-    cfg = keys.r2()
+def prepare(cfg: dict[str, str]) -> tuple[dict, dict[str, Path | bytes], dict[str, Path]]:
+    """Build the exact upload bytes without writes or network access."""
     manifest_path = TARGET / "manifest.json"
     if not manifest_path.exists():
         raise SystemExit(f"no bundle at {TARGET}; run `uv run train` first")
@@ -197,8 +196,54 @@ def run() -> None:
     files[manifest["files"]["items"]["path"]] = json.dumps(
         items, ensure_ascii=False, separators=(",", ":")
     ).encode()
-    hash8 = content_hash(files)
+    return manifest, files, images
 
+
+def plan() -> list[str]:
+    """Use only HEAD and LIST requests. There is no local online-object inventory."""
+    missing = keys.missing_r2()
+    if missing:
+        return ["online state unknown: read-only R2 listing needs " + ", ".join(missing)]
+    cfg = keys.r2()
+    _, files, images = prepare(cfg)
+    try:
+        s3 = client(cfg)
+        s3.head_bucket(Bucket=cfg["bucket"])
+        prefix = existing_prefix(s3, cfg["bucket"], "bundles/", content_hash(files))
+        online_images = existing(s3, cfg["bucket"], "img/")
+        online_files = existing(s3, cfg["bucket"], prefix) if prefix else set()
+    except (BotoCoreError, ClientError) as exc:
+        return [
+            f"online state unknown: read-only R2 check failed ({type(exc).__name__})",
+            f"local candidates: {len(files)} bundle files, {len(images)} images; "
+            "upload counts cannot be determined",
+        ]
+    new_images = sorted(set(images) - online_images)
+    new_files = sorted(n for n in files if not prefix or prefix + n not in online_files)
+    lines = [
+        f"read-only R2 listing: {len(files) - len(new_files)} bundle files and "
+        f"{len(images) - len(new_images)} images already online",
+        f"new bundle files: {len(new_files)}; examples: {new_files[:5]}",
+        f"new images: {len(new_images)}; examples: {new_images[:5]}",
+    ]
+    if not new_images and not new_files:
+        lines.insert(0, "up to date")
+    else:
+        lines.insert(0, "will run")
+    if prefix:
+        url = f"{cfg['public_url']}/{prefix}"
+        expected = f"{BUNDLE_TS_COMMENT}\nexport const BUNDLE_URL = '{url}';\n"
+        if not BUNDLE_TS.is_file() or BUNDLE_TS.read_text(encoding="utf-8") != expected:
+            lines[0] = "will run"
+            lines.append("update src/lib/bundle.ts to the matching online prefix")
+    return lines
+
+
+def run() -> None:
+    start = time.perf_counter()
+    cfg = keys.r2()
+    manifest, files, images = prepare(cfg)
+    hash8 = content_hash(files)
     s3 = client(cfg)
     require_buckets(s3, cfg)
     apply_cors(s3, cfg["bucket"])

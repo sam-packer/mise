@@ -30,7 +30,7 @@ from mise_ml.data import (
 )
 from mise_ml.export import onnx_run, onnx_session
 from mise_ml.features import shared_encoder
-from mise_ml.llm import Job, Record, Request, Unit, sha
+from mise_ml.llm import Job, JobSpec, Record, Request, Unit, sha
 from mise_ml.log import elapsed, get, num, progress
 from mise_ml.profile import (
     FEELING_RULES,
@@ -41,7 +41,6 @@ from mise_ml.profile import (
     obj,
     parse_numbered,
 )
-from mise_ml.provenance import write_run_json
 from mise_ml.student import Student, encode_texts, load_student
 from mise_ml.teacher import item_store, load_teacher, query_store
 from mise_ml.util import iter_jsonl, make_deterministic, write_json
@@ -169,27 +168,45 @@ def judge() -> None:
         f"judge: {num(len(texts))} eval feelings; pool = top {k} per category from the "
         "teacher, the student, and the untrained MiniLM"
     )
-    systems = []
-    for name, fn in progress(
-        (
-            ("teacher", teacher_outputs),
-            ("student", lambda t, c: student_outputs(t, c)[0]),
-            ("baseline", baseline_outputs),
-        ),
-        desc="judge pool",
-        unit="system",
-    ):
-        log.debug(f"judge pool: ranking with the {name}")
-        systems.append(top_by_category(fn(texts, catalog), catalog, k))
-    shared_encoder.cache_clear()  # free the 8B teacher before the 9B labeler loads
-    gc.collect()
-    torch.cuda.empty_cache()
-    keys = [
-        SEP.join((text, cat, catalog.items[i]["id"]))
-        for t, text in enumerate(texts)
-        for cat in CATEGORIES
-        for i in dict.fromkeys(i for s in systems for i in s[t][cat])
-    ]
+    import json
+
+    from mise_ml.steps import JUDGE_POOL, judge_pool_state
+
+    state = judge_pool_state()
+    saved = json.loads(JUDGE_POOL.read_text(encoding="utf-8")) if JUDGE_POOL.is_file() else None
+    if saved and saved["state"] == state:
+        keys = saved["keys"]
+    else:
+        systems = []
+        for name, fn in progress(
+            (
+                ("teacher", teacher_outputs),
+                ("student", lambda t, c: student_outputs(t, c)[0]),
+                ("baseline", baseline_outputs),
+            ),
+            desc="judge pool",
+            unit="system",
+        ):
+            log.debug(f"judge pool: ranking with the {name}")
+            systems.append(top_by_category(fn(texts, catalog), catalog, k))
+        shared_encoder.cache_clear()  # free the 8B teacher before the 9B labeler loads
+        gc.collect()
+        torch.cuda.empty_cache()
+        keys = [
+            SEP.join((text, cat, catalog.items[i]["id"]))
+            for t, text in enumerate(texts)
+            for cat in CATEGORIES
+            for i in dict.fromkeys(i for s in systems for i in s[t][cat])
+        ]
+        write_json(JUDGE_POOL, {"state": state, "keys": keys})
+    judge_job(keys).run(lazy_llm(cfg))
+    fits = sum(1 for r in iter_jsonl(JUDGMENTS) if r["fit"])
+    log.info(f"judge: {num(fits)} pairs judged a fit")
+
+
+def judge_job(keys: list[str]) -> JobSpec:
+    cfg = ProfileConfig()
+    catalog = load_catalog()
 
     def describe(key: str) -> str:
         return catalog.texts[catalog.index[key.split(SEP)[2]]]
@@ -216,10 +233,19 @@ def judge() -> None:
     def fingerprint(key: str) -> str:
         return sha(key + describe(key))
 
-    log.info(f"judge: {num(len(keys))} (feeling, item) pairs in the pool")
-    Job("judge", JUDGMENTS, cfg).run(keys, build, parse, fingerprint, lazy_llm(cfg))
-    fits = sum(1 for r in iter_jsonl(JUDGMENTS) if r["fit"])
-    log.info(f"judge: {num(fits)} pairs judged a fit")
+    return JobSpec(
+        Job("judge", JUDGMENTS, cfg),
+        keys,
+        build,
+        parse,
+        fingerprint,
+        lambda k: {
+            "feeling": k.split(SEP)[0],
+            "category": k.split(SEP)[1],
+            "item_id": k.split(SEP)[2],
+            "text": describe(k),
+        },
+    )
 
 
 def judged_fits(catalog: Catalog) -> dict[tuple[str, str], set[int]]:
@@ -426,7 +452,7 @@ def run() -> dict[str, Any]:
 
     def cell(value: float | None, width: int, digits: int = 3) -> str:
         if value is None or np.isnan(value):
-            return f"{'—':>{width}}"
+            return f"{'â€”':>{width}}"
         return f"{value:>{width}.{digits}f}"
 
     log.info(
@@ -446,6 +472,5 @@ def run() -> dict[str, Any]:
     log.info(f"student latency: median {lat['median']:.1f} ms, p95 {lat['p95']:.1f} ms (1 thread)")
     verdict = "ship" if report["ship"]["ok"] else "do not ship"
     (log.info if report["ship"]["ok"] else log.warning)(verdict)
-    write_run_json()
     log.info(f"done in {elapsed(start)}: report -> {EVAL_REPORT.relative_to(ML_ROOT).as_posix()}")
     return report

@@ -9,6 +9,7 @@ import httpx
 
 from mise_ml.config import CACHE, ResolveConfig
 from mise_ml.log import get, num
+from mise_ml.provenance import observe_read
 from mise_ml.util import atomic_write, stable_hash
 
 log = get(__name__)
@@ -200,6 +201,7 @@ class CachedClient:
         post: Any,
     ) -> Any | None:
         path = self._path(key, ".json")
+        observe_read(path)
         if path.exists():
             try:
                 cached = json.loads(path.read_text(encoding="utf-8"))
@@ -260,6 +262,7 @@ class CachedClient:
         """
         miss = self._path(url, ".404")
         if miss.exists():
+            observe_read(miss)
             return None
         host = self._check(url)
         try:
@@ -272,6 +275,7 @@ class CachedClient:
         self._result(host, True)
         if resp.status_code == 404:
             atomic_write(miss, b"")
+            observe_read(miss)
             return None
         return resp.content
 

@@ -1013,3 +1013,8 @@ def run() -> None:
         f"({', '.join(f'{c} {num(totals[c])}' for c in CATEGORIES)}); "
         f"{num(resolver.http.requests)} API calls, {num(resolver.http.hits)} answers from the cache"
     )
+    errors = sum(
+        n for counts in stats.values() for reason, n in counts.items() if reason.startswith("error")
+    )
+    if errors:
+        raise RuntimeError(f"{errors} unresolved requests failed; rerun download to retry them")
