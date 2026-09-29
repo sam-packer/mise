@@ -248,7 +248,9 @@ bf16, with thinking mode off. It runs four jobs:
 
 1. **items:** a vibe line, a mood description, and three example feelings for each item. Art
    items also send the image.
-2. **moods:** 6,000 synthetic feelings, 25 for each prompt, from random scene hints.
+2. **moods:** up to 6,000 synthetic feelings, 25 for each prompt, from random scene hints.
+   The parser drops invalid or repeated feelings. It rejects an answer with fewer than 20
+   good feelings.
 3. **pat:** one feeling sentence for each PAT palette name. The PAT palette stays the label.
 4. **labels:** five colors, a light, a typeface, and a scent for about 30,000 feelings: your eval
    feelings, the synthetic moods, and item feelings to fill the rest.
@@ -257,18 +259,36 @@ Every prompt asks for feelings as a sentence about a scene or a moment, 6 to 30 
 asks for a list of mood words.
 
 **Valid JSON.** `profile` uses constrained decoding with xgrammar. xgrammar compiles each JSON
-schema, including the enums of vocab ids and a `#rrggbb` pattern for colors, into a grammar. A
-logits processor then blocks every token that would break the schema. jsonschema checks each
-answer again. If an answer is cut off at the token limit, `profile` retries it once alone with
-twice the limit, and then logs and skips it. The xgrammar CUDA kernel needs Triton, which is
-not available on Windows, so the processor applies the token mask with plain PyTorch.
+schema, including the enums of vocab ids and a `#rrggbb` pattern for colors, into a grammar.
+Numbered jobs require exactly one row per input, with fixed row numbers. A logits processor
+blocks tokens that would break the schema and applies the token mask with plain PyTorch.
+jsonschema checks each answer again. Content checks reject copied prompt instructions,
+copied prompt examples, repeated feelings within a request, and text outside the word limits.
+An item must have three distinct feelings and a vibe of at most 12 words. The item grammar
+limits a word to 20 characters with no comma inside, so the model cannot glue words together
+to pass the word limit.
+
+If an answer fails validation, `profile` retries it once with the reason and twice the token
+limit. The retry samples at temperature 0.7 with a seed from the key, because a greedy retry
+often repeats the failed answer. A numbered answer keeps its accepted rows. Its rejected rows
+get one more pass in a new request in the same run. `profile` saves persistent failures with the response and reason. It stops before downstream
+steps if any key still lacks an accepted record.
 
 **Resume.** Each job keeps its answers in `data/llm/<job>.jsonl`. A line holds a signature
 (model, revision, system prompt, schema, token limit) and a hash of each key's own prompt. A
-rerun generates only the keys without a matching line. A new model, revision, or prompt redoes
-exactly the keys it affects.
+rerun validates matching cached answers and generates only missing or rejected records. Failed
+answers remain eligible for retry. A new model, revision, or prompt redoes the keys it affects.
+Accepted records retain their original request keys and row numbers during cache replay.
 
-**Repeatability.** Decoding is greedy, the batch size is fixed, and the prompts run in a fixed
+When one feeling refers to several works, the query loader does not choose an arbitrary work
+as its retrieval target. It keeps available palette and choice labels for that feeling. It
+excludes non-evaluation rows that have no remaining training label.
+
+**Prefill.** Text-only batches prefill the prompt in 512-token chunks with explicit text
+positions. This keeps prefill memory low, so 40 `labels` requests fit in one batch. Chunked
+prefill changes bf16 rounding the same way a change of batch size does.
+
+**Repeatability.** Decoding is greedy except for retries, the batch size is fixed, and the prompts run in a fixed
 sorted order with left padding. bf16 batching makes the results repeatable on the same GPU,
 driver, and torch version. The results are not bit-identical on other hardware. A run that
 resumes after an interruption can put different prompts in one batch, so a few answers can
@@ -454,7 +474,8 @@ JSON object per line with one field, `text`:
 
 The defaults are dataclasses in `src/mise_ml/config.py`: `CurateConfig`, `ResolveConfig`,
 `ProfileConfig`, `TeacherConfig`, `StudentConfig`, and `ExportConfig`. Change a value there to
-change a run. If `profile` runs out of GPU memory, lower `ProfileConfig.batch_size`.
+change a run. If a `profile` batch runs out of GPU memory, `profile` lowers the batch size to
+three quarters and keeps that limit for the rest of the job.
 
 The vocab source of truth is `../scripts/stub/vocab.json`. The labels and the heads use its
 order. The label file name contains a hash of the vocab, so a new vocab gets new labels.

@@ -1,6 +1,8 @@
 import functools
 import random
+import re
 import time
+from collections import Counter
 from typing import Any
 
 from mise_ml.color import parse_hex
@@ -141,12 +143,47 @@ def obj(properties: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def array_of(properties: dict[str, Any]) -> dict[str, Any]:
-    return {"type": "array", "items": obj(properties)}
+def numbered_array(properties: dict[str, Any], count: int) -> dict[str, Any]:
+    return {
+        "type": "array",
+        "prefixItems": [obj({"n": {"const": i + 1}, **properties}) for i in range(count)],
+        "items": False,
+        "minItems": count,
+        "maxItems": count,
+    }
+
+
+def normalized(text: str) -> str:
+    return " ".join(text.lower().split())
+
+
+PROMPT_EXAMPLES = {
+    normalized(line[2:]) for line in FEELING_RULES.splitlines() if line.startswith("- ")
+}
+INSTRUCTION_FRAGMENTS = (
+    "three different feelings a person might type",
+    "follow the feeling rules",
+    "two or three plain sentences about the mood",
+    "one quiet line about the mood",
+    "at most 12 words",
+    "never name a title",
+    "never write a bare list of mood words",
+    "6 to 30 words",
+)
+
+
+def copies_instruction(text: str) -> bool:
+    text = normalized(text)
+    return any(fragment in text for fragment in INSTRUCTION_FRAGMENTS)
 
 
 def is_feeling(text: Any) -> bool:
-    return isinstance(text, str) and 5 <= word_count(text) <= 32
+    return (
+        isinstance(text, str)
+        and 6 <= word_count(text) <= 30
+        and normalized(text) not in PROMPT_EXAMPLES
+        and not copies_instruction(text)
+    )
 
 
 def numbered(texts: list[str]) -> str:
@@ -155,9 +192,10 @@ def numbered(texts: list[str]) -> str:
 
 def parse_numbered(keys: list[str], rows: list[dict[str, Any]], make: Any) -> list[Record]:
     out: dict[str, Record] = {}
+    repeated = {n for n, count in Counter(row["n"] for row in rows).items() if count > 1}
     for row in rows:
         i = row["n"] - 1
-        if 0 <= i < len(keys) and keys[i] not in out:
+        if 0 <= i < len(keys) and row["n"] not in repeated:
             rec = make(row)
             if rec is not None:
                 out[keys[i]] = {"key": keys[i], **rec}
@@ -204,6 +242,9 @@ def item_prompt(r: Record) -> str:
         value = signal.get(key)
         if value in (None, [], ""):
             continue
+        # Hardcover's Casino Royale description contains an unrelated casino advertisement.
+        if key == "description" and "https://chipz-finland.com/" in value:
+            continue
         if isinstance(value, list):
             value = ", ".join(value)
         lines.append(f"{label}: {value}")
@@ -219,6 +260,57 @@ def item_image(r: Record):
 
 
 ITEM_SCHEMA = obj({k: {"type": "string"} for k in ("vibe", "description", "q1", "q2", "q3")})
+# Exclude Python's whitespace characters so the grammar agrees with word_count(). A word has
+# a length limit and no comma inside, so the model cannot glue words to pass the word limit
+# or repeat inside one word until the token limit.
+MAX_WORD = 20
+WORD = (
+    r"[^\u0000-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000,;]"
+    rf"{{1,{MAX_WORD}}}[,;]?"
+)
+PLAIN_WORD = re.compile(rf"[^\s,;]{{1,{MAX_WORD}}}[,;]?")
+FEELING_TEXT = {"type": "string", "pattern": f"^{WORD}( {WORD}){{5,29}}$"}
+ITEM_GENERATION_SCHEMA = obj(
+    {
+        "vibe": {"type": "string", "pattern": f"^{WORD}( {WORD}){{0,11}}$"},
+        "description": {"type": "string"},
+        **{q: FEELING_TEXT for q in ("q1", "q2", "q3")},
+    }
+)
+
+
+def parse_item(keys: list[str], data: dict[str, Any]) -> list[Record]:
+    if any(copies_instruction(data[k]) for k in ITEM_SCHEMA["properties"]):
+        raise ValueError("answer copies prompt instructions instead of describing the work")
+    vibe = normalized(data["vibe"]).rstrip(".")
+    if not 1 <= word_count(vibe) <= 12:
+        raise ValueError("vibe must contain 1 to 12 words")
+    if not data["description"].strip():
+        raise ValueError("description is empty")
+    queries = [normalized(data[q]) for q in ("q1", "q2", "q3")]
+    for name, query in zip(("q1", "q2", "q3"), queries, strict=True):
+        # Name the copied example: a general reason lets the retry copy it again.
+        if query in PROMPT_EXAMPLES:
+            raise ValueError(
+                f"{name} copies the prompt example {query!r}; write a new feeling about this work"
+            )
+        if not is_feeling(query):
+            raise ValueError(f"{name} must use 6 to 30 words")
+    if not all(PLAIN_WORD.fullmatch(w) for t in (vibe, *queries) for w in t.split()):
+        raise ValueError(
+            f"put a space between words; a word has at most {MAX_WORD} characters "
+            "and no comma inside"
+        )
+    if len(set(queries)) != 3:
+        raise ValueError("q1, q2, and q3 must be three different feelings")
+    return [
+        {
+            "key": keys[0],
+            "vibe": vibe,
+            "description": data["description"].strip(),
+            "queries": queries,
+        }
+    ]
 
 
 def run_items(cfg: ProfileConfig, llm: Any) -> None:
@@ -232,26 +324,19 @@ def run_items(cfg: ProfileConfig, llm: Any) -> None:
         return [
             Unit(
                 [k],
-                Request(ITEM_SYSTEM, item_prompt(items[k]), ITEM_SCHEMA, 400, item_image(items[k])),
+                Request(
+                    ITEM_SYSTEM,
+                    item_prompt(items[k]),
+                    ITEM_SCHEMA,
+                    400,
+                    item_image(items[k]),
+                    generation_schema=ITEM_GENERATION_SCHEMA,
+                ),
             )
             for k in keys
         ]
 
-    def parse(keys: list[str], data: dict[str, Any]) -> list[Record]:
-        queries = [data[q].strip() for q in ("q1", "q2", "q3") if is_feeling(data[q])]
-        vibe = data["vibe"].strip().lower().rstrip(".")
-        if not vibe or not data["description"].strip() or len(queries) < 2:
-            return []
-        return [
-            {
-                "key": keys[0],
-                "vibe": vibe,
-                "description": data["description"].strip(),
-                "queries": queries,
-            }
-        ]
-
-    Job("items", PROFILES, cfg).run(list(items), build, parse, fingerprint, llm)
+    Job("items", PROFILES, cfg).run(list(items), build, parse_item, fingerprint, llm)
 
 
 # synthetic moods
@@ -264,22 +349,33 @@ def moods_prompt(index: int, n: int) -> str:
     return f"Write {n} different feelings. Draw on these hints, and combine them freely:\n{hints}"
 
 
-MOODS_SCHEMA = obj({"feelings": {"type": "array", "items": {"type": "string"}}})
+def moods_schema(n: int) -> dict[str, Any]:
+    return obj(
+        {"feelings": {"type": "array", "items": {"type": "string"}, "minItems": n, "maxItems": n}}
+    )
 
 
 def run_moods(cfg: ProfileConfig, llm: Any) -> None:
     n = cfg.moods_per_request
+    schema = moods_schema(n)
     keys = [f"moods-{i:05d}" for i in range(-(-cfg.synthetic_moods // n))]
 
     def prompt(k: str) -> str:
         return moods_prompt(int(k.split("-")[1]), n)
 
     def build(pending: list[str]) -> list[Unit]:
-        return [Unit([k], Request(MOODS_SYSTEM, prompt(k), MOODS_SCHEMA, 40 * n)) for k in pending]
+        return [Unit([k], Request(MOODS_SYSTEM, prompt(k), schema, 40 * n)) for k in pending]
 
     def parse(keys: list[str], data: dict[str, Any]) -> list[Record]:
-        feelings = [f.strip().lower() for f in data["feelings"] if is_feeling(f)]
-        return [{"key": keys[0], "feelings": feelings}] if feelings else []
+        # Drop a bad or repeated feeling and keep the others: one repeat in 25 feelings
+        # must not reject the whole answer. Too few good feelings means a bad answer.
+        feelings = list(dict.fromkeys(normalized(f) for f in data["feelings"] if is_feeling(f)))
+        if len(feelings) < n * 4 // 5:
+            raise ValueError(
+                f"only {len(feelings)} of {n} feelings are different and valid; write {n} "
+                "different feelings of 6 to 30 words and do not copy the prompt examples"
+            )
+        return [{"key": keys[0], "feelings": feelings}]
 
     Job("moods", MOODS, cfg).run(keys, build, parse, lambda k: sha(prompt(k)), llm)
 
@@ -287,7 +383,8 @@ def run_moods(cfg: ProfileConfig, llm: Any) -> None:
 # PAT palette names to feeling sentences
 
 
-PAT_SCHEMA = obj({"sentences": array_of({"n": {"type": "integer"}, "text": {"type": "string"}})})
+def pat_schema(count: int) -> dict[str, Any]:
+    return obj({"sentences": numbered_array({"text": {"type": "string"}}, count)})
 
 
 def run_pat(cfg: ProfileConfig, llm: Any) -> None:
@@ -296,9 +393,21 @@ def run_pat(cfg: ProfileConfig, llm: Any) -> None:
         log.warning("pat: no PAT palettes in data/curated/pat.jsonl; skip")
         return
 
+    # The grammar forces 6 to 30 words, so the model cannot echo a short palette name.
     def build(pending: list[str]) -> list[Unit]:
         return [
-            Unit(chunk, Request(PAT_SYSTEM, numbered(chunk), PAT_SCHEMA, 50 * len(chunk)))
+            Unit(
+                chunk,
+                Request(
+                    PAT_SYSTEM,
+                    numbered(chunk),
+                    pat_schema(len(chunk)),
+                    50 * len(chunk),
+                    generation_schema=obj(
+                        {"sentences": numbered_array({"text": FEELING_TEXT}, len(chunk))}
+                    ),
+                ),
+            )
             for chunk in chunks(pending, cfg.pat_per_request)
         ]
 
@@ -306,7 +415,7 @@ def run_pat(cfg: ProfileConfig, llm: Any) -> None:
         return parse_numbered(
             keys,
             data["sentences"],
-            lambda row: {"text": row["text"].strip().lower()} if is_feeling(row["text"]) else None,
+            lambda row: {"text": normalized(row["text"])} if is_feeling(row["text"]) else None,
         )
 
     Job("pat", PAT_SENTENCES, cfg).run(phrases, build, parse, sha, llm)
@@ -321,20 +430,21 @@ def label_pool(cfg: ProfileConfig) -> list[str]:
     paraphrases = sorted({q for r in iter_jsonl(PROFILES) for q in r["queries"]}, key=hash_fraction)
     pool = list(dict.fromkeys(evals + moods))
     room = max(0, cfg.label_queries - len(pool))
-    return list(dict.fromkeys(pool + paraphrases[:room]))
+    present = set(pool)
+    return pool + [q for q in paraphrases if q not in present][:room]
 
 
-def label_schema(vocab: Vocab) -> dict[str, Any]:
+def label_schema(vocab: Vocab, count: int) -> dict[str, Any]:
     return obj(
         {
-            "labels": array_of(
+            "labels": numbered_array(
                 {
-                    "n": {"type": "integer"},
                     **{f"c{i}": HEX for i in range(1, 6)},
                     "light": {"type": "string", "enum": vocab.lights},
                     "typeface": {"type": "string", "enum": vocab.typeface_ids},
                     "scent": {"type": "string", "enum": vocab.scent_ids},
-                }
+                },
+                count,
             )
         }
     )
@@ -343,11 +453,13 @@ def label_schema(vocab: Vocab) -> dict[str, Any]:
 def run_labels(cfg: ProfileConfig, llm: Any) -> None:
     vocab = load_vocab()
     system = LABEL_SYSTEM + vocab.prompt_block()
-    schema = label_schema(vocab)
 
     def build(pending: list[str]) -> list[Unit]:
         return [
-            Unit(chunk, Request(system, numbered(chunk), schema, 90 * len(chunk)))
+            Unit(
+                chunk,
+                Request(system, numbered(chunk), label_schema(vocab, len(chunk)), 160 * len(chunk)),
+            )
             for chunk in chunks(pending, cfg.labels_per_request)
         ]
 
@@ -377,7 +489,8 @@ def run() -> None:
     start = time.perf_counter()
     log.info(
         f"labeler {cfg.model} at {cfg.revision[:12]}, batch {cfg.batch_size} "
-        f"({cfg.image_batch_size} with images), greedy; jobs: items, moods, pat, labels"
+        f"({cfg.image_batch_size} with images), greedy with sampled retries; "
+        "jobs: items, moods, pat, labels"
     )
     llm = lazy_llm(cfg)
     for job in progress((run_items, run_moods, run_pat, run_labels), desc="profile", unit="job"):

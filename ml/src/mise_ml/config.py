@@ -131,8 +131,10 @@ class ProfileConfig:
     model: str = "Qwen/Qwen3.5-9B"
     revision: str = "c202236235762e1c871ad0ccb60c8ee5ba337b9a"
     # Generation pays a fixed per-step cost (grammar masks, reference conv1d, the generate loop),
-    # so larger batches raise throughput. Batches split when they exceed the GPU budget.
-    batch_size: int = 32
+    # so larger batches raise throughput. With chunked prefill, 40 labels requests fit a 32 GB
+    # GPU (measured peak 24.9 GiB); 48 runs out of memory during decode. A batch that exceeds
+    # the GPU budget lowers the limit for the rest of the job.
+    batch_size: int = 40
     image_batch_size: int = 8
     synthetic_moods: int = 6000
     moods_per_request: int = 25

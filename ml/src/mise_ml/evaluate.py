@@ -27,10 +27,10 @@ from mise_ml.llm import Job, Record, Request, Unit, sha
 from mise_ml.log import elapsed, get, num, progress
 from mise_ml.profile import (
     FEELING_RULES,
-    array_of,
     chunks,
     lazy_llm,
     numbered,
+    numbered_array,
     obj,
     parse_numbered,
 )
@@ -51,6 +51,10 @@ shows works that should feel like it.
 
 For each numbered work, answer fit = true when a thoughtful person would say the work \
 feels like the moment, and false otherwise. Judge the mood, not the literal topic."""
+
+
+def judge_schema(count: int) -> dict[str, Any]:
+    return obj({"fits": numbered_array({"fit": {"type": "boolean"}}, count)})
 
 
 @dataclass
@@ -166,7 +170,6 @@ def judge() -> None:
         for cat in CATEGORIES
         for i in dict.fromkeys(i for s in systems for i in s[t][cat])
     ]
-    schema = obj({"fits": array_of({"n": {"type": "integer"}, "fit": {"type": "boolean"}})})
 
     def describe(key: str) -> str:
         return catalog.texts[catalog.index[key.split(SEP)[2]]]
@@ -179,7 +182,12 @@ def judge() -> None:
         for text, group in sorted(groups.items()):
             for chunk in chunks(group, 20):
                 prompt = f"Feeling: {text}\n\nWorks:\n{numbered([describe(k) for k in chunk])}"
-                units.append(Unit(chunk, Request(JUDGE_SYSTEM, prompt, schema, 20 * len(chunk))))
+                units.append(
+                    Unit(
+                        chunk,
+                        Request(JUDGE_SYSTEM, prompt, judge_schema(len(chunk)), 20 * len(chunk)),
+                    )
+                )
         return units
 
     def parse(unit_keys: list[str], data: dict[str, Any]) -> list[Record]:

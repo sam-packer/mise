@@ -13,10 +13,12 @@ from mise_ml.config import (
     RESOLVED,
     TeacherConfig,
 )
+from mise_ml.log import get as get_logger
 from mise_ml.util import hash_fraction, iter_jsonl
 from mise_ml.vocab import Vocab, labels_path
 
 SPLITS = ("train", "val", "heldout", "eval")
+log = get_logger(__name__)
 
 
 def load_eval_texts() -> list[str]:
@@ -93,9 +95,14 @@ def load_queries(catalog: Catalog, vocab: Vocab, cfg: TeacherConfig) -> QuerySet
     def get(text: str) -> Query:
         return queries.setdefault(text, Query(text))
 
-    for i, item in enumerate(catalog.items):
+    matches: dict[str, set[str]] = {}
+    for item in catalog.items:
         for q in item["queries"]:
-            get(q).pos = i
+            matches.setdefault(q, set()).add(item["id"])
+    for text, ids in matches.items():
+        q = get(text)
+        if len(ids) == 1:
+            q.pos = catalog.index[next(iter(ids))]
 
     light_ix = {x: i for i, x in enumerate(vocab.lights)}
     face_ix = {x: i for i, x in enumerate(vocab.typeface_ids)}
@@ -128,7 +135,25 @@ def load_queries(catalog: Catalog, vocab: Vocab, cfg: TeacherConfig) -> QuerySet
         elif hash_fraction("val:" + q.text) < cfg.val_fraction:
             q.split = "val"
 
-    rows = sorted(queries.values(), key=lambda q: q.text)
+    rows = sorted(
+        (
+            q
+            for q in queries.values()
+            if q.split == "eval"
+            or q.pos >= 0
+            or q.palette is not None
+            or any(label >= 0 for label in (q.light, q.typeface, q.scent))
+        ),
+        key=lambda q: q.text,
+    )
+    ambiguous = sum(len(ids) > 1 for ids in matches.values())
+    if ambiguous:
+        log.warning(
+            "%d feelings match multiple works; omitted their retrieval labels; "
+            "removed %d rows without another training label",
+            ambiguous,
+            len(queries) - len(rows),
+        )
     zero = np.zeros((5, 3))
     return QuerySet(
         texts=[q.text for q in rows],

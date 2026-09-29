@@ -11,7 +11,7 @@ import json
 import time
 from collections import Counter
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +28,8 @@ from mise_ml.util import append_jsonl, iter_jsonl, write_jsonl
 Record = dict[str, Any]
 log = get(__name__)
 LLM_CACHE = DATA / "llm"
+# A multiple of the 64-token Gated DeltaNet block, so chunks keep its block boundaries.
+PREFILL_CHUNK = 512
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,8 @@ class Request:
     schema: dict[str, Any]
     max_new_tokens: int
     image: Path | None = None
+    # Extra decoding constraints do not invalidate cached answers that pass the parser.
+    generation_schema: dict[str, Any] | None = None
 
 
 @dataclass
@@ -113,11 +117,14 @@ class LocalLLM:
         )
         self.compiler = xgr.GrammarCompiler(info)
         self.grammars: dict[str, xgr.CompiledGrammar] = {}
+        # The largest batch that fits, by token limit, learned from out-of-memory errors.
+        self.batch_limits: dict[int, int] = {}
         used = torch.cuda.memory_allocated() / 2**30
         log.info(f"model ready in {elapsed(start)}, {used:.1f} GiB on the GPU")
 
     def grammar(self, schema: dict[str, Any]) -> xgr.CompiledGrammar:
-        key = json.dumps(schema, sort_keys=True)
+        # Preserve property order so numbered answers identify the input before its labels.
+        key = json.dumps(schema)
         if key not in self.grammars:
             self.grammars[key] = self.compiler.compile_json_schema(key, any_whitespace=False)
         return self.grammars[key]
@@ -133,28 +140,49 @@ class LocalLLM:
             {"role": "user", "content": user},
         ]
 
-    def generate(self, requests: list[Request], max_new_tokens: int) -> tuple[list[str], int]:
+    def generate(
+        self, requests: list[Request], max_new_tokens: int, sample: bool = False
+    ) -> tuple[list[str], int]:
         """The answers and the number of new tokens generated.
 
-        A batch that runs out of GPU memory is split in half and retried, down to one request,
-        so the longest batches at the end of a job slow down instead of stopping the run.
+        A batch that runs out of GPU memory lowers the batch limit for its token limit to
+        three quarters of its size and runs again, down to one request, so the longest batches
+        at the end of a job slow down instead of stopping the run. Later batches start at the
+        lower limit and do not repeat the failed attempt.
         """
+        limit = self.batch_size(max_new_tokens, len(requests))
+        if len(requests) > limit:
+            texts: list[str] = []
+            tokens = 0
+            for i in range(0, len(requests), limit):
+                part, n = self.generate(requests[i : i + limit], max_new_tokens, sample)
+                texts += part
+                tokens += n
+            return texts, tokens
         try:
-            return self._generate(requests, max_new_tokens)
+            return self._generate(requests, max_new_tokens, sample)
         except torch.OutOfMemoryError:
             if len(requests) == 1:
                 raise
         # Leave the exception handler first: its traceback retains the failed batch's tensors.
         gc.collect()
         torch.cuda.empty_cache()
-        half = len(requests) // 2
-        log.warning(f"out of GPU memory on a batch of {len(requests)}; retrying as two halves")
-        first, t1 = self.generate(requests[:half], max_new_tokens)
-        second, t2 = self.generate(requests[half:], max_new_tokens)
-        return first + second, t1 + t2
+        # A small step keeps batches large: a failed attempt costs seconds, in prefill.
+        self.batch_limits[max_new_tokens] = max(1, len(requests) * 3 // 4)
+        log.warning(
+            f"out of GPU memory on a batch of {len(requests)}; batches with up to "
+            f"{max_new_tokens} new tokens now hold at most "
+            f"{self.batch_limits[max_new_tokens]} requests"
+        )
+        return self.generate(requests, max_new_tokens, sample)
+
+    def batch_size(self, max_new_tokens: int, size: int) -> int:
+        return min(size, self.batch_limits.get(max_new_tokens, size))
 
     @torch.inference_mode()
-    def _generate(self, requests: list[Request], max_new_tokens: int) -> tuple[list[str], int]:
+    def _generate(
+        self, requests: list[Request], max_new_tokens: int, sample: bool
+    ) -> tuple[list[str], int]:
         inputs = self.processor.apply_chat_template(
             [self.messages(r) for r in requests],
             add_generation_prompt=True,
@@ -165,13 +193,21 @@ class LocalLLM:
             processor_kwargs={"padding": True},
             enable_thinking=False,
         ).to("cuda")
-        grammars = [self.grammar(r.schema) for r in requests]
+        grammars = [self.grammar(r.generation_schema or r.schema) for r in requests]
+        prefill: dict[str, Any] = {}
+        if all(r.image is None for r in requests):
+            # Chunked prefill keeps prefill memory flat as the prompt grows. Qwen builds 3D
+            # mrope positions, and the chunk loop slices them on the batch axis; plain 2D text
+            # positions are exact for text-only input, and Qwen expands them itself.
+            positions = (inputs["attention_mask"].long().cumsum(-1) - 1).clamp(min=0)
+            prefill = {"position_ids": positions, "prefill_chunk_size": PREFILL_CHUNK}
         out = self.model.generate(
             **inputs,
+            **prefill,
             max_new_tokens=max_new_tokens,
-            do_sample=False,
-            temperature=None,
-            top_p=None,
+            do_sample=sample,
+            temperature=0.7 if sample else None,
+            top_p=0.95 if sample else None,
             top_k=None,
             eos_token_id=self.eos,
             pad_token_id=self.processor.tokenizer.pad_token_id,
@@ -182,13 +218,31 @@ class LocalLLM:
         return self.processor.batch_decode(new, skip_special_tokens=True), tokens
 
 
-def valid_json(text: str, schema: dict[str, Any]) -> dict[str, Any] | None:
+def parse_answer(text: str, unit: Unit, parse: Parse) -> tuple[dict[str, Any] | None, str | None]:
     try:
         data = json.loads(text)
-        jsonschema.validate(data, schema)
-    except (json.JSONDecodeError, jsonschema.ValidationError):
-        return None
-    return data
+        jsonschema.validate(data, unit.request.schema)
+    except json.JSONDecodeError as exc:
+        return None, f"incomplete or invalid JSON at character {exc.pos}: {exc.msg}"
+    except jsonschema.ValidationError as exc:
+        return None, f"schema mismatch: {exc.message}"
+    try:
+        accepted = {r["key"] for r in parse(unit.keys, data)}
+    except ValueError as exc:
+        return None, str(exc)
+    missing = [k for k in unit.keys if k not in accepted]
+    if missing:
+        # Return the data too: the accepted rows of a numbered answer stay valid records.
+        rows = ", ".join(str(unit.keys.index(k) + 1) for k in missing)
+        return data, f"content rejected for {len(missing)} of {len(unit.keys)} keys (rows {rows})"
+    return data, None
+
+
+def cached_records(keys: list[str], data: dict[str, Any], parse: Parse) -> list[Record]:
+    try:
+        return parse(keys, data)
+    except ValueError:
+        return []
 
 
 class Job:
@@ -196,8 +250,10 @@ class Job:
 
     The cache holds one line per answered request, with the job signature (model,
     revision, system prompt, schema, token limit) and one fingerprint per key (the hash
-    of that key's own prompt content). A key is done when a cache line with the current
-    signature and fingerprint covers it. A new model, revision, or prompt therefore
+    of that key's own prompt content). A key is done when an accepted record with the current
+    signature and fingerprint covers it. Keys without an accepted record remain pending; a
+    partly rejected numbered answer keeps its accepted rows. A new model, revision, or prompt
+    therefore
     redoes exactly the affected keys, and a rerun never redoes finished work.
     """
 
@@ -225,19 +281,12 @@ class Job:
     ) -> None:
         keys = sorted(set(keys))
         prints = {k: fingerprint(k) for k in keys}
+        # Use a one-key request for stable identity across chunk sizes. Cached answers are
+        # parsed against their original keys, including their original row numbers.
         probe = build(keys[:1])[0].request if keys else None
         sig = self.signature(probe) if probe else ""
-        entries = [
-            e for e in iter_jsonl(self.cache) if e["sig"] == sig and e.get("data") is not None
-        ]
-        attempted = {
-            k
-            for e in iter_jsonl(self.cache)
-            if e["sig"] == sig
-            for k, p in e["prints"].items()
-            if prints.get(k) == p
-        }
-        pending = [k for k in keys if k not in attempted]
+        records = self.records(sig, prints, parse)
+        pending = [k for k in keys if k not in records]
         log.info(
             f"{self.name}: {num(len(keys))} keys; {num(len(keys) - len(pending))} in the cache, "
             f"{num(len(pending))} to generate"
@@ -246,7 +295,17 @@ class Job:
             units = build(pending)
             model = llm()
             start = time.perf_counter()
-            stats = self._generate(units, sig, prints, model)
+            stats = self._generate(units, sig, prints, model, parse)
+            records = self.records(sig, prints, parse)
+            # Keys rejected inside a partly accepted numbered answer get one more pass, in a
+            # new request with other rows around them.
+            again = [k for u in units if len(u.keys) > 1 for k in u.keys if k not in records]
+            if again:
+                log.info(f"{self.name}: {num(len(again))} rejected rows; one more pass")
+                more = build(again)
+                stats += self._generate(more, sig, prints, model, parse)
+                units += more
+                records = self.records(sig, prints, parse)
             rate = stats["tokens"] / max(time.perf_counter() - start, 1e-9)
             log.info(
                 f"{self.name}: {num(len(units))} requests in {elapsed(start)}, "
@@ -255,21 +314,10 @@ class Job:
             )
             if stats["skipped"]:
                 log.warning(
-                    f"{self.name}: {num(stats['skipped'])} requests gave no valid JSON after a "
-                    "retry and were cached as failed (keys in the log file); "
-                    "a rerun does not retry these cached failures automatically"
+                    f"{self.name}: {num(stats['skipped'])} requests failed validation after a "
+                    "retry; failed answers and reasons are saved in the cache; "
+                    "a rerun retries these failures"
                 )
-            entries = [
-                e for e in iter_jsonl(self.cache) if e["sig"] == sig and e.get("data") is not None
-            ]
-        # Keep each parsed record on its own merits: a cached answer can cover keys that are
-        # no longer wanted, and its other keys must not be lost with them.
-        records: dict[str, Record] = {}
-        for e in entries:
-            for rec in parse(e["keys"], e["data"]):
-                k = rec["key"]
-                if prints.get(k) is not None and prints[k] == e["prints"].get(k):
-                    records[k] = rec
         write_jsonl(self.output, [records[k] for k in sorted(records)])
         missing = len(keys) - len(records)
         log.info(
@@ -277,9 +325,27 @@ class Job:
             + (f" ({num(missing)} without: skipped or rejected by parse)" if missing else "")
             + f" -> {self.output.relative_to(ML_ROOT).as_posix()}"
         )
+        if missing:
+            raise RuntimeError(
+                f"{self.name}: {missing} keys have no accepted record; "
+                "stopping before downstream steps use incomplete data"
+            )
+
+    def records(self, sig: str, prints: dict[str, str], parse: Parse) -> dict[str, Record]:
+        # Keep each parsed record on its own merits: a cached answer can cover keys that are
+        # no longer wanted, and its other keys must not be lost with them.
+        records: dict[str, Record] = {}
+        for e in iter_jsonl(self.cache):
+            if e["sig"] != sig or e.get("data") is None:
+                continue
+            for rec in cached_records(e["keys"], e["data"], parse):
+                k = rec["key"]
+                if prints.get(k) is not None and prints[k] == e["prints"].get(k):
+                    records[k] = rec
+        return records
 
     def _generate(
-        self, units: list[Unit], sig: str, prints: dict[str, str], llm: LocalLLM
+        self, units: list[Unit], sig: str, prints: dict[str, str], llm: LocalLLM, parse: Parse
     ) -> Counter[str]:
         stats: Counter[str] = Counter()
         by_kind: dict[bool, list[Unit]] = {False: [], True: []}
@@ -294,9 +360,13 @@ class Job:
             starting_stats = stats.copy()
             start = time.perf_counter()
             with progress(total=len(group), desc=desc, unit="req") as bar:
-                for i in range(0, len(group), size):
-                    batch = group[i : i + size]
-                    for _ in self._run_batch(batch, sig, prints, llm, stats):
+                i = 0
+                while i < len(group):
+                    # Size each batch to the limit learned from out-of-memory errors.
+                    tokens = max(u.request.max_new_tokens for u in group[i : i + size])
+                    batch = group[i : i + llm.batch_size(tokens, size)]
+                    i += len(batch)
+                    for _ in self._run_batch(batch, sig, prints, llm, stats, parse):
                         group_stats = stats - starting_stats
                         rate = group_stats["tokens"] / max(time.perf_counter() - start, 1e-9)
                         bar.set_postfix(
@@ -317,32 +387,46 @@ class Job:
         prints: dict[str, str],
         llm: LocalLLM,
         stats: Counter[str],
+        parse: Parse,
     ) -> Iterator[None]:
         limit = max(u.request.max_new_tokens for u in batch)
         texts, tokens = llm.generate([u.request for u in batch], limit)
         stats["tokens"] += tokens
         answers = [
-            (unit, text, valid_json(text, unit.request.schema))
+            (unit, text, *parse_answer(text, unit, parse))
             for unit, text in zip(batch, texts, strict=True)
         ]
         # Save and count completed answers before starting the slower retries.
-        answers.sort(key=lambda answer: answer[2] is None)
-        for unit, text, data in answers:
-            if data is None:
-                # One retry alone, with room for a longer answer.
+        answers.sort(key=lambda answer: answer[3] is not None)
+        for unit, text, data, error in answers:
+            if error:
+                # Give the model validation feedback, rather than repeat the same failed answer.
                 stats["retried"] += 1
                 log.info(
-                    f"{self.name}: retrying {unit.keys[0]!r} after invalid or incomplete JSON "
+                    f"{self.name}: retrying {unit.keys[0]!r}: {error} "
                     f"(up to {2 * unit.request.max_new_tokens} tokens)"
                 )
                 log.debug(f"{self.name}: retry {unit.keys[0]!r}: {text[-200:]!r}")
-                retry, tokens = llm.generate([unit.request], 2 * unit.request.max_new_tokens)
+                retry_request = replace(
+                    unit.request,
+                    user=unit.request.user + f"\n\nThe previous answer failed validation: {error}. "
+                    "Return complete JSON. Keep text concise and follow the requested counts "
+                    "and word limits. Ignore unrelated source text; use the relevant facts "
+                    "and mood hints. Do not copy lists of metadata into the answer.",
+                )
+                # Sample the retry: greedy decoding often repeats the failed answer. A seed
+                # from the key keeps each retry repeatable.
+                torch.manual_seed(int(sha(unit.keys[0])[:8], 16))
+                retry, tokens = llm.generate(
+                    [retry_request], 2 * unit.request.max_new_tokens, sample=True
+                )
                 stats["tokens"] += tokens
-                data = valid_json(retry[0], unit.request.schema)
-                if data is None:
+                text = retry[0]
+                data, error = parse_answer(text, unit, parse)
+                if error:
                     stats["skipped"] += 1
-                    log.debug(f"{self.name}: skip {unit.keys}: no valid JSON after a retry")
-            if data is not None:
+                    log.warning(f"{self.name}: failed {unit.keys}: {error}")
+            if not error:
                 stats["valid"] += 1
             append_jsonl(
                 self.cache,
@@ -352,6 +436,7 @@ class Job:
                         "keys": unit.keys,
                         "prints": {k: prints[k] for k in unit.keys},
                         "data": data,
+                        **({"error": error, "response": text} if error else {}),
                     }
                 ],
             )
