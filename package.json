@@ -15,7 +15,7 @@
 		"gen": "wrangler types",
 		"stub": "bun scripts/build-stub-bundle.ts",
 		"query": "bun scripts/query-bundle.ts",
-		"deploy": "vite build && wrangler deploy"
+		"deploy": "vite build && wrangler deploy --env=\"\""
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
