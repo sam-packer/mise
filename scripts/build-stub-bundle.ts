@@ -1,4 +1,4 @@
-// Build and install the stub from ml/out/stub/.
+// Build the stub bundle from scripts/stub/ and install it in static/bundle/.
 // Run: bun scripts/build-stub-bundle.ts
 import sharp from 'sharp';
 import { Tokenizer } from '@huggingface/tokenizers';
@@ -53,8 +53,6 @@ type AnchorSources = {
 	typefaces: Record<string, string[]>;
 	scents: Record<string, string[]>;
 };
-
-// ---------- small helpers ----------
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const sha1 = (s: string) => createHash('sha1').update(s).digest('hex');
@@ -122,7 +120,7 @@ function srgbToOklab(r8: number, g8: number, b8: number): OKLab {
 
 const round = (x: number) => Math.round(x * 10000) / 10000;
 
-// ---------- cached, throttled HTTP ----------
+// Space requests by host and cache responses for repeat builds.
 
 const HOST_GAP: Record<string, number> = {
 	'itunes.apple.com': 3200,
@@ -162,8 +160,7 @@ async function fetchRetry(url: string): Promise<Response | null> {
 async function getJson<T>(url: string): Promise<T | null> {
 	const file = path.join(CACHE, 'http', `${sha1(url)}.json`);
 	if (existsSync(file)) return readJson<T>(file);
-	// The Met answers a burst with an HTML bot-check page and status 200, so a body that is not
-	// JSON is retried after a pause.
+	// The Met can return an HTML bot check with status 200. Pause before retrying a non-JSON response.
 	for (let attempt = 0; attempt < 5; attempt++) {
 		const res = await fetchRetry(url);
 		if (!res) return null;
@@ -189,7 +186,7 @@ async function getBytes(url: string, dir = 'bytes'): Promise<Buffer | null> {
 	return bytes;
 }
 
-// ---------- resolvers ----------
+// Resolve each category through its source API before building the shared item format.
 
 async function resolveFilm(s: Source): Promise<Resolved | string> {
 	type Hit = { id: string; l: string; y?: number; qid?: string; i?: { imageUrl: string } };
@@ -231,7 +228,7 @@ async function resolveSong(s: Source): Promise<Resolved | string> {
 			(!s.albumKey || norm(t.collectionName ?? '').includes(norm(s.albumKey))) &&
 			!/karaoke|tribute|made famous|in the style/i.test(`${t.collectionName} ${t.artistName}`)
 	);
-	// Prefer the original album over a compilation, so the album name means something.
+	// Prefer the original album so the displayed name identifies the release.
 	const compilation =
 		/best of|greatest|hits|collection|essential|anthology|gold|classics|now that/i;
 	const track = tracks.find((t) => !compilation.test(t.collectionName ?? '')) ?? tracks[0];
@@ -262,19 +259,16 @@ async function resolveBook(s: Source): Promise<Resolved | string> {
 		cover_i?: number;
 		editions?: { docs: { cover_i?: number; language?: string[] }[] };
 	};
-	// With lang=en, Open Library also returns its top-ranked English edition of each work. A work's
-	// own cover is often a translation.
+	// With lang=en, Open Library returns its top English edition. The work's cover can show a translation.
 	const url = `https://openlibrary.org/search.json?limit=10&lang=en&fields=key,title,author_name,cover_i,editions,editions.cover_i,editions.language&q=${encodeURIComponent(s.hint)}`;
 	const data = await getJson<{ docs: Doc[] }>(url);
 	const surname = norm(s.creator.split(' ').at(-1)!);
-	// Match the author first. Some works list the author only in another script, so an exact
-	// title is the fallback; a prefix would also catch study guides ("... Notes").
+	// Some works list the author in another script. Use an exact title as the fallback to exclude study guides.
 	const docs = (data?.docs ?? []).filter((d) => d.cover_i);
 	const doc =
 		docs.find((d) => (d.author_name ?? []).some((a) => norm(a).includes(surname))) ??
 		docs.find((d) => norm(d.title) === norm(s.title)) ??
-		// A hint of the form key:/works/OL…W names the work directly (for works filed under a
-		// non-Latin title and author).
+		// A key:/works/OL…W hint identifies works with a non-Latin title and author.
 		(s.hint.startsWith('key:') ? docs[0] : undefined);
 	if (!doc) return 'no Open Library work with a cover';
 	const english = doc.editions?.docs.find((e) => e.cover_i && e.language?.includes('eng'));
@@ -351,7 +345,7 @@ const RESOLVERS: Record<Category, (s: Source) => Promise<Resolved | string>> = {
 	art: resolveArt
 };
 
-// ---------- images ----------
+// Store display images and average their colors in OKLab for the tile background.
 
 async function processImage(url: string, id: string): Promise<NonNullable<Item['image']> | null> {
 	const bytes = await getBytes(url, 'img');
@@ -373,7 +367,7 @@ async function processImage(url: string, id: string): Promise<NonNullable<Item['
 	return { src: `/bundle/img/${file}`, w: info.width, h: info.height, tone };
 }
 
-// ---------- build ----------
+// Assemble the model, resolved items, and vectors into the browser bundle.
 
 async function fetchModel() {
 	await mkdir(path.join(OUT, 'model'), { recursive: true });
@@ -571,7 +565,7 @@ async function main() {
 	await writeFile(path.join(OUT, 'vocab.json'), JSON.stringify(vocab));
 	await writeFile(path.join(OUT, 'manifest.json'), JSON.stringify(manifest, null, '\t'));
 
-	// ---------- validate (§8.6) ----------
+	// Check item metadata and vector dimensions before installing the bundle.
 	const errors: string[] = [...failures.map((f) => `unresolved ${f}`)];
 	for (const item of items) {
 		if (item.category !== 'poem' && !item.image) errors.push(`${item.id}: no image`);
@@ -628,7 +622,6 @@ async function main() {
 		else errors.push(`typeface ${t.id}: Google Fonts returned ${res.status} for "${t.axes}"`);
 	}
 
-	// ---------- summary ----------
 	const counts = CATEGORIES.map((c) => `${c} ${items.filter((i) => i.category === c).length}`);
 	console.log(`\nitems: ${items.length} (${counts.join(', ')})`);
 	console.log(
