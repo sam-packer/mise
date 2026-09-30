@@ -1,15 +1,12 @@
 import argparse
 import os
 import time
-from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
 
 from mise_ml import log as logs
 from mise_ml.config import ML_ROOT
-from mise_ml.provenance import StampInput
 
 COMMANDS = {
     "download": "Fetch sources, curate the catalog, and resolve media and links.",
@@ -47,231 +44,105 @@ def preflight(command: str) -> None:
 
 
 class Run:
-    """Run a command with step headers and a summary."""
+    """Execute the registry and record the exact stamps used by this command."""
 
-    def __init__(self, total: int) -> None:
+    def __init__(self) -> None:
         self.rows: list[tuple[str, str, str]] = []
-        self.total = total
+        self.used: dict[str, Any] = {}
+        self.llm = None
 
-    def step(
-        self,
-        name: str,
-        fn: Callable[[], Any],
-        stamp: tuple[list[StampInput], Any, list[Path]] | None = None,
-    ) -> Any:
+    def step(self, step: Any) -> Any:
         from mise_ml import provenance as pv
+        from mise_ml.cache import inspect_job
+        from mise_ml.config import ProfileConfig
+        from mise_ml.profile import lazy_llm
 
-        n = len(self.rows) + 1
-        if stamp and pv.is_current(name, *stamp):
-            log.info("step %d/%d %s: up to date, skip", n, self.total, name)
-            self.rows.append((name, "skipped", "-"))
+        state = step.state()
+        if step.llm and step.name != "judge":
+            spec = step.call()
+            plan = inspect_job(spec)
+            current = not plan.requests and not plan.output_changed
+        elif step.name == "judge":
+            from mise_ml.plan import judge_plan
+
+            plan, _, verified = judge_plan()
+            current = verified and not plan.requests and not plan.output_changed
+        else:
+            current = step.name != "publish" and pv.is_current(step.name, state, step.outputs())
+        if current:
+            self.used[step.name] = state if step.llm else pv.read_stamp(step.name)
+            self.rows.append((step.name, "up to date", "-"))
+            log.info("%s: up to date", step.name)
             return None
-        log.info("step %d/%d %s", n, self.total, name)
+        log.info("%s: will run", step.name)
         start = time.perf_counter()
-        try:
-            result = fn()
-        except BaseException:
-            self.rows.append((name, "failed", logs.elapsed(start)))
-            raise
-        if stamp:
-            pv.write_stamp(name, stamp[0], stamp[1])
-        self.rows.append((name, "done", logs.elapsed(start)))
+        if step.llm and step.name != "judge":
+            if self.llm is None:
+                self.llm = lazy_llm(ProfileConfig())
+            spec.run(self.llm)
+            result = None
+        else:
+            with pv.capture_reads() as reads:
+                result = step.call()
+            if step.observed_http:
+                state["observed"] = pv.file_hashes(sorted(reads))
+        state["outputs"] = pv.file_hashes(step.outputs())
+        pv.write_stamp(step.name, state)
+        self.used[step.name] = state
+        self.rows.append((step.name, "done", logs.elapsed(start)))
         return result
 
     def summary(self) -> None:
-        log.info("summary:")
         for name, status, took in self.rows:
-            log.info("  %-14s %-8s %s", name, status, took)
-
-
-def training_stamps() -> dict[str, tuple[list[StampInput], Any, list[Path]]]:
-    """Hash catalog identity, text, categories, and queries, without media fields."""
-    import hashlib
-    import json
-
-    from mise_ml import student, teacher
-    from mise_ml.config import (
-        DISTILL,
-        EVAL_FEELINGS,
-        MODELS,
-        PAT,
-        PAT_SENTENCES,
-        PROFILES,
-        RESOLVED,
-        VOCAB_PATH,
-        StudentConfig,
-        TeacherConfig,
-    )
-    from mise_ml.data import load_catalog
-    from mise_ml.provenance import ContentInput
-    from mise_ml.vocab import labels_path, load_vocab
-
-    labels = labels_path(load_vocab())
-    source = Path(__file__).parent
-    common = [source / f"{name}.py" for name in ("data", "heads", "training", "inference")]
-    curated = [RESOLVED, PROFILES, labels, PAT, PAT_SENTENCES, EVAL_FEELINGS, VOCAB_PATH]
-    catalog = load_catalog()
-    content = [
-        (it["id"], it["category"], text, it["queries"])
-        for it, text in zip(catalog.items, catalog.texts, strict=True)
-    ]
-    resolved = ContentInput(
-        RESOLVED,
-        hashlib.sha256(
-            json.dumps(content, ensure_ascii=True, sort_keys=True).encode("utf-8")
-        ).hexdigest(),
-    )
-    curated = [resolved if p == RESOLVED else p for p in curated]
-    teacher_in = [*curated, DISTILL, *common, source / "teacher.py", source / "features.py"]
-    teacher_out = [MODELS / "teacher.pt", teacher.OUTPUTS]
-    student_out = [
-        student.STUDENT_DIR / "meta.json",
-        student.STUDENT_DIR / "heads.pt",
-        student.STUDENT_DIR / "projection.pt",
-        student.STUDENT_DIR / "encoder" / "model.safetensors",
-        student.STUDENT_DIR / "encoder" / "config.json",
-        student.STUDENT_DIR / "encoder" / "tokenizer.json",
-        student.STUDENT_DIR / "encoder" / "tokenizer_config.json",
-    ]
-    student_in = [
-        teacher.OUTPUTS,
-        DISTILL,
-        resolved,
-        PROFILES,
-        VOCAB_PATH,
-        *common,
-        source / "student.py",
-    ]
-    return {
-        "train-teacher": (teacher_in, TeacherConfig(), teacher_out),
-        "train-student": (student_in, StudentConfig(), student_out),
-    }
-
-
-def migrate_training_stamps() -> None:
-    from mise_ml.config import PROFILES, RESOLVED
-    from mise_ml.provenance import migrate_stamp, stamp_path
-
-    trained = any(stamp_path(name).exists() for name in ("train-teacher", "train-student"))
-    if trained and PROFILES.exists() and RESOLVED.exists():
-        for name, stamp in training_stamps().items():
-            log.info("%s stamp current: %s", name, migrate_stamp(name, *stamp))
-
-
-def run_train(run: Run) -> None:
-    from mise_ml import evaluate, export, install, student, teacher
-    from mise_ml.config import (
-        BUNDLE,
-        EVAL_FEELINGS,
-        EVAL_REPORT,
-        PAT,
-        PAT_SENTENCES,
-        PROFILES,
-        REPO_ROOT,
-        RESOLVED,
-        VOCAB_PATH,
-        ExportConfig,
-    )
-    from mise_ml.data import load_catalog
-    from mise_ml.vocab import labels_path, load_vocab
-
-    migrate_training_stamps()
-    stamps = training_stamps()
-    run.step("train-teacher", teacher.run, stamps["train-teacher"])
-    run.step("train-student", student.run, stamps["train-student"])
-    student_out = stamps["train-student"][2]
-    source = Path(__file__).parent
-    common = [source / f"{name}.py" for name in ("data", "heads", "training", "inference")]
-    curated = [
-        RESOLVED,
-        PROFILES,
-        labels_path(load_vocab()),
-        PAT,
-        PAT_SENTENCES,
-        EVAL_FEELINGS,
-        VOCAB_PATH,
-    ]
-
-    encoder_files = sorted(p for p in (student.STUDENT_DIR / "encoder").rglob("*") if p.is_file())
-    export_in = [
-        *student_out,
-        *encoder_files,
-        *curated,
-        *common,
-        source / "export.py",
-        REPO_ROOT / "scripts" / "build-name-data.ts",
-        *sorted((REPO_ROOT / "src" / "lib" / "mood").glob("*.ts")),
-    ]
-    images = [
-        BUNDLE / "img" / item["image"]["src"].rsplit("/", 1)[-1]
-        for item in load_catalog().items
-        if item.get("image")
-    ]
-    run.step(
-        "export",
-        export.run,
-        (
-            export_in,
-            ExportConfig(),
-            [
-                BUNDLE / "manifest.json",
-                BUNDLE / "vocab.json",
-                BUNDLE / "model" / "model.onnx",
-                BUNDLE / "model" / "tokenizer.json",
-                BUNDLE / "model" / "tokenizer_config.json",
-                BUNDLE / "model" / "config.json",
-                BUNDLE / "search-index.json",
-                BUNDLE / "items.json",
-                BUNDLE / "vectors.bin",
-                *images,
-            ],
-        ),
-    )
-    run.step("eval-judge", evaluate.judge)
-    report = run.step("eval", evaluate.run)
-    if not report["ship"]["ok"]:
-        run.rows.append(("install", "not run", "-"))
-        log.error(
-            "ship gate failed: %s; report: %s", "; ".join(report["ship"]["reasons"]), EVAL_REPORT
-        )
-        raise SystemExit(1)
-    run.step("install", install.run)
+            log.info("%-14s %-12s %s", name, status, took)
 
 
 def command(name: str) -> None:
-    argparse.ArgumentParser(prog=name, description=COMMANDS[name]).parse_args()
+    import json
+    import sys
+
+    parser = argparse.ArgumentParser(prog=name, description=COMMANDS[name])
+    parser.add_argument(
+        "--plan",
+        action="store_true",
+        help="Show what would run and why, without writes or model loads.",
+    )
+    if name == "label":
+        parser.add_argument(
+            "--prune",
+            action="store_true",
+            help="Report and remove only unused LLM cache records; do not generate.",
+        )
+    args = parser.parse_args()
     load_dotenv(ML_ROOT / ".env", override=False)
-    # The student encodes about 1,030-1,120 items per step. Without rounding, the allocator
-    # caches a block for each size, reserves more than the GPU has, and a kernel launch fails.
-    # Torch reads this before its first CUDA allocation, and no torch import happens above.
+    if args.plan or getattr(args, "prune", False):
+        sys.dont_write_bytecode = True
+        from mise_ml.plan import show
+
+        show(name, prune=getattr(args, "prune", False) and not args.plan)
+        return
     os.environ.setdefault("PYTORCH_ALLOC_CONF", "roundup_power2_divisions:4")
-    run = Run({"download": 3, "label": 1, "train": 6, "publish": 1}[name])
+    from mise_ml.config import EVAL_REPORT
+    from mise_ml.provenance import write_run_json
+    from mise_ml.steps import command_steps
+
+    run = Run()
     with logs.session(name):
         try:
             preflight(name)
-            if name == "download":
-                from mise_ml import curate, fetch, resolve
-                from mise_ml.config import CATALOG, CATALOG_META, PAT, SOURCES, CurateConfig
+            if name == "label":
+                from mise_ml.config import SEED
+                from mise_ml.util import make_deterministic
 
-                migrate_training_stamps()
-                run.step("fetch", fetch.run)
-                raw = [src.dest for src in fetch.load_sources() if src.dest.exists()]
-                run.step(
-                    "curate",
-                    curate.run,
-                    ([*raw, SOURCES], CurateConfig(), [CATALOG, CATALOG_META, PAT]),
-                )
-                run.step("resolve", resolve.run)
-            elif name == "label":
-                from mise_ml import profile
-
-                run.step("profile", profile.run)
-            elif name == "train":
-                run_train(run)
-            else:
-                from mise_ml import publish as delivery
-
-                run.step("publish", delivery.run)
+                make_deterministic(SEED, warn_only=True)
+            for step in command_steps(name):
+                if step.name == "install":
+                    report = json.loads(EVAL_REPORT.read_text(encoding="utf-8"))
+                    if not report["ship"]["ok"]:
+                        log.error("ship gate failed: %s", "; ".join(report["ship"]["reasons"]))
+                        raise SystemExit(1)
+                run.step(step)
+            write_run_json(run.used)
         finally:
             run.summary()
 

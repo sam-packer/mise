@@ -1,10 +1,11 @@
 """Stamps that let commands skip finished steps, and the run.json provenance record."""
 
 import dataclasses
-import hashlib
 import importlib.metadata
 import json
 import platform
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,30 @@ from mise_ml.log import get
 from mise_ml.util import sha256_file, write_json
 
 log = get(__name__)
+_reads: set[Path] | None = None
+_read_lock = threading.Lock()
+
+
+def observe_read(path: Path) -> None:
+    """Record HTTP cache reads across the worker threads of the active step."""
+    with _read_lock:
+        if _reads is not None:
+            _reads.add(path)
+
+
+@contextmanager
+def capture_reads():
+    global _reads
+    with _read_lock:
+        if _reads is not None:
+            raise RuntimeError("nested pipeline steps cannot share a read receipt")
+        _reads = set()
+    try:
+        yield _reads
+    finally:
+        with _read_lock:
+            _reads = None
+
 
 PACKAGES = (
     "torch",
@@ -34,6 +59,7 @@ class ContentInput:
 
     path: Path
     digest: str
+    label: str = ""
 
 
 StampInput = Path | ContentInput
@@ -41,7 +67,8 @@ StampInput = Path | ContentInput
 
 def file_hashes(paths: list[StampInput]) -> dict[str, str | None]:
     return {
-        str(p.relative_to(config.REPO_ROOT)).replace("\\", "/"): (
+        str(p.relative_to(config.REPO_ROOT)).replace("\\", "/")
+        + (f"#{entry.label}" if isinstance(entry, ContentInput) and entry.label else ""): (
             entry.digest
             if isinstance(entry, ContentInput)
             else sha256_file(p)
@@ -53,41 +80,91 @@ def file_hashes(paths: list[StampInput]) -> dict[str, str | None]:
     }
 
 
-def stamp_digest(inputs: list[StampInput], cfg: Any) -> str:
-    blob = json.dumps(
-        {"inputs": file_hashes(inputs), "config": dataclasses.asdict(cfg)}, sort_keys=True
+def snapshot(inputs: list[StampInput], cfg: Any, sources: list[Path]) -> dict[str, Any]:
+    return json.loads(
+        json.dumps(
+            {
+                "version": 2,
+                "inputs": file_hashes(inputs),
+                "config": dataclasses.asdict(cfg),
+                "sources": file_hashes(sources),
+            },
+            sort_keys=True,
+        )
     )
-    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
 def stamp_path(step: str) -> Path:
     return config.MODELS / f"{step}.stamp"
 
 
-def is_current(step: str, inputs: list[StampInput], cfg: Any, outputs: list[Path]) -> bool:
+def read_stamp(step: str) -> dict[str, Any] | None:
     path = stamp_path(step)
-    return (
-        all(p.exists() for p in outputs)
-        and path.exists()
-        and path.read_text(encoding="utf-8") == stamp_digest(inputs, cfg)
+    if not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, UnicodeError):
+        return None
+    return value if isinstance(value, dict) and value.get("version") == 2 else None
+
+
+def changed(old: dict, new: dict, prefix: str) -> list[str]:
+    reasons = []
+    for key in sorted(old.keys() | new.keys()):
+        a, b = old.get(key), new.get(key)
+        name = (
+            f"{prefix}.{key}"
+            if prefix == "config" or prefix.startswith("config.")
+            else f"{prefix} {key}"
+        )
+        if isinstance(a, dict) and isinstance(b, dict):
+            reasons.extend(changed(a, b, name))
+        elif a != b:
+            reasons.append(
+                f"{name} changed" + (f": {a!r} -> {b!r}" if prefix.startswith("config") else "")
+            )
+    return reasons
+
+
+def stale_reasons(step: str, state: dict[str, Any], outputs: list[Path]) -> list[str]:
+    reasons = [
+        f"missing output {p.relative_to(config.REPO_ROOT).as_posix()}"
+        for p in outputs
+        if not p.is_file()
+    ]
+    old = read_stamp(step)
+    if old is None:
+        reasons.append(
+            "old or invalid stamp (not verified)" if stamp_path(step).exists() else "no stamp"
+        )
+    else:
+        for section in ("inputs", "config", "sources", "observed", "outputs"):
+            reasons.extend(
+                changed(
+                    old.get(section) or {},
+                    state.get(section) or {},
+                    section.rstrip("s") if section != "config" else section,
+                )
+            )
+    reasons.extend(
+        f"missing input {key}" for key, digest in state["inputs"].items() if digest is None
     )
+    if state.get("observed") is None and step in ("fetch", "curate", "resolve"):
+        reasons.append("HTTP input receipt not recorded; verify cached API inputs on next run")
+    for key, digest in state.get("observed", {}).items() if state.get("observed") else ():
+        if digest is None:
+            reasons.append(f"missing cached API input {key}")
+    return reasons
 
 
-def migrate_stamp(step: str, inputs: list[StampInput], cfg: Any, outputs: list[Path]) -> bool:
-    """Convert a legacy file stamp only while every original input still matches."""
-    if is_current(step, inputs, cfg, outputs):
-        return True
-    original = [i.path if isinstance(i, ContentInput) else i for i in inputs]
-    if is_current(step, original, cfg, outputs):
-        write_stamp(step, inputs, cfg)
-        return True
-    return False
+def is_current(step: str, state: dict[str, Any], outputs: list[Path]) -> bool:
+    return not stale_reasons(step, state, outputs)
 
 
-def write_stamp(step: str, inputs: list[StampInput], cfg: Any) -> None:
+def write_stamp(step: str, state: dict[str, Any]) -> None:
     path = stamp_path(step)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(stamp_digest(inputs, cfg), encoding="utf-8")
+    write_json(path, state)
 
 
 def configs() -> dict[str, Any]:
@@ -113,8 +190,10 @@ def gpu() -> dict[str, Any]:
     }
 
 
-def write_run_json() -> None:
+def write_run_json(used: dict[str, Any] | None = None) -> None:
     from mise_ml.fetch import load_sources
+    from mise_ml.plan import cache_plans
+    from mise_ml.steps import STEPS
 
     sources = []
     for src in load_sources():
@@ -156,6 +235,17 @@ def write_run_json() -> None:
             "intermediate": file_hashes(sorted(config.CURATED.glob("*.jsonl"))),
             "outputs": file_hashes(bundle_files),
             "ship": report["ship"] if report else None,
+            "steps": {name: (used or {}).get(name) or read_stamp(name) for name in STEPS},
+            "llm": {
+                p.name: {
+                    "cache": str(p.path.relative_to(config.REPO_ROOT)),
+                    "sha256": p.digest,
+                    "records_used": p.used,
+                    "membership_verified": p.membership_verified,
+                    "notes": p.notes,
+                }
+                for p in cache_plans()
+            },
         },
     )
     log.info(f"provenance -> {config.RUN_JSON.relative_to(config.ML_ROOT).as_posix()}")

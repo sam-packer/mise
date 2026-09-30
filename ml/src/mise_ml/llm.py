@@ -21,6 +21,7 @@ import xgrammar as xgr
 from PIL import Image
 from transformers import AutoModelForImageTextToText, AutoProcessor, LogitsProcessor
 
+from mise_ml.cache_io import cache_lock
 from mise_ml.config import DATA, ML_ROOT, ProfileConfig
 from mise_ml.log import elapsed, get, num, progress
 from mise_ml.util import append_jsonl, iter_jsonl, write_jsonl
@@ -52,6 +53,23 @@ class Unit:
 Build = Callable[[list[str]], list[Unit]]
 Parse = Callable[[list[str], dict[str, Any]], list[Record]]
 Fingerprint = Callable[[str], str]
+Fields = Callable[[str], dict[str, Any]]
+
+
+@dataclass
+class JobSpec:
+    job: "Job"
+    keys: list[str]
+    build: Build
+    parse: Parse
+    fingerprint: Fingerprint
+    fields: Fields
+    project: Callable[[list[Record]], list[Record]] | None = None
+
+    def run(self, llm: Callable[[], "LocalLLM"]) -> None:
+        self.job.run(
+            self.keys, self.build, self.parse, self.fingerprint, llm, self.fields, self.project
+        )
 
 
 def sha(text: str) -> str:
@@ -271,6 +289,15 @@ class Job:
             )
         )
 
+    def signature_parts(self, r: Request) -> dict[str, Any]:
+        return {
+            "model": self.cfg.model,
+            "revision": self.cfg.revision,
+            "prompt": sha(r.system),
+            "schema": sha(json.dumps(r.schema, sort_keys=True)),
+            "max_new_tokens": r.max_new_tokens,
+        }
+
     def run(
         self,
         keys: list[str],
@@ -278,6 +305,8 @@ class Job:
         parse: Parse,
         fingerprint: Fingerprint,
         llm: Callable[[], LocalLLM],
+        fields: Fields,
+        project: Callable[[list[Record]], list[Record]] | None = None,
     ) -> None:
         keys = sorted(set(keys))
         prints = {k: fingerprint(k) for k in keys}
@@ -285,6 +314,8 @@ class Job:
         # parsed against their original keys, including their original row numbers.
         probe = build(keys[:1])[0].request if keys else None
         sig = self.signature(probe) if probe else ""
+        self.parts = self.signature_parts(probe) if probe else {}
+        self.field_digests = {k: field_digests(fields(k)) for k in keys}
         records = self.records(sig, prints, parse)
         pending = [k for k in keys if k not in records]
         log.info(
@@ -318,7 +349,8 @@ class Job:
                     "retry; failed answers and reasons are saved in the cache; "
                     "a rerun retries these failures"
                 )
-        write_jsonl(self.output, [records[k] for k in sorted(records)])
+        rows = [records[k] for k in sorted(records)]
+        write_jsonl(self.output, project(rows) if project else rows)
         missing = len(keys) - len(records)
         log.info(
             f"{self.name}: {num(len(records))} of {num(len(keys))} keys have a record"
@@ -428,16 +460,26 @@ class Job:
                     log.warning(f"{self.name}: failed {unit.keys}: {error}")
             if not error:
                 stats["valid"] += 1
-            append_jsonl(
-                self.cache,
-                [
-                    {
-                        "sig": sig,
-                        "keys": unit.keys,
-                        "prints": {k: prints[k] for k in unit.keys},
-                        "data": data,
-                        **({"error": error, "response": text} if error else {}),
-                    }
-                ],
-            )
+            with cache_lock(self.cache):
+                append_jsonl(
+                    self.cache,
+                    [
+                        {
+                            "sig": sig,
+                            "keys": unit.keys,
+                            "prints": {k: prints[k] for k in unit.keys},
+                            "fields": {k: self.field_digests[k] for k in unit.keys},
+                            "signature": self.parts,
+                            "data": data,
+                            **({"error": error, "response": text} if error else {}),
+                        }
+                    ],
+                )
             yield None
+
+
+def field_digests(fields: dict[str, Any]) -> dict[str, str]:
+    return {
+        name: sha(json.dumps(value, ensure_ascii=True, sort_keys=True))
+        for name, value in fields.items()
+    }

@@ -1,7 +1,6 @@
 import functools
 import random
 import re
-import time
 from collections import Counter
 from typing import Any
 
@@ -9,7 +8,6 @@ from mise_ml.color import parse_hex
 from mise_ml.config import (
     DISTILL,
     IMG,
-    ML_ROOT,
     MOODS,
     PAT,
     PAT_SENTENCES,
@@ -19,15 +17,13 @@ from mise_ml.config import (
     ProfileConfig,
 )
 from mise_ml.data import MAX_FEELING, distill_rejection, load_eval_texts, normalize_feeling
-from mise_ml.llm import Job, LocalLLM, Record, Request, Unit, sha
-from mise_ml.log import elapsed, get, progress
+from mise_ml.llm import Job, JobSpec, LocalLLM, Record, Request, Unit, sha
+from mise_ml.log import get
 from mise_ml.util import (
     hash_fraction,
     iter_jsonl,
-    make_deterministic,
     sha256_file,
     word_count,
-    write_jsonl,
 )
 from mise_ml.vocab import Vocab, labels_path, load_vocab
 
@@ -261,6 +257,23 @@ def item_prompt(r: Record) -> str:
     return "\n".join(lines)
 
 
+def item_fields(r: Record) -> dict[str, Any]:
+    # Digest the rendered values: omitted fields and ignored descriptions stay omitted.
+    fields = {"category": r["category"], "title": r["title"]}
+    fields.update({k: r[k] for k in ("creator", "album", "year", "text") if r.get(k)})
+    for key in SIGNAL_LABELS:
+        value = r.get("signal", {}).get(key)
+        if value in (None, [], ""):
+            continue
+        if key == "description" and "https://chipz-finland.com/" in value:
+            continue
+        fields[f"signal.{key}"] = ", ".join(value) if isinstance(value, list) else value
+    image = item_image(r)
+    if image:
+        fields["image"] = sha256_file(image)
+    return fields
+
+
 def item_image(r: Record):
     if r["category"] != "art" or not r.get("image"):
         return None
@@ -321,7 +334,8 @@ def parse_item(keys: list[str], data: dict[str, Any]) -> list[Record]:
     ]
 
 
-def run_items(cfg: ProfileConfig, llm: Any) -> None:
+def items_job() -> JobSpec:
+    cfg = ProfileConfig()
     items = {r["id"]: r for r in iter_jsonl(RESOLVED)}
 
     def fingerprint(k: str) -> str:
@@ -344,7 +358,14 @@ def run_items(cfg: ProfileConfig, llm: Any) -> None:
             for k in keys
         ]
 
-    Job("items", PROFILES, cfg).run(list(items), build, parse_item, fingerprint, llm)
+    return JobSpec(
+        Job("items", PROFILES, cfg),
+        list(items),
+        build,
+        parse_item,
+        fingerprint,
+        lambda k: item_fields(items[k]),
+    )
 
 
 # synthetic moods
@@ -363,7 +384,8 @@ def moods_schema(n: int) -> dict[str, Any]:
     )
 
 
-def run_moods(cfg: ProfileConfig, llm: Any) -> None:
+def moods_job() -> JobSpec:
+    cfg = ProfileConfig()
     n = cfg.moods_per_request
     schema = moods_schema(n)
     keys = [f"moods-{i:05d}" for i in range(-(-cfg.synthetic_moods // n))]
@@ -385,7 +407,14 @@ def run_moods(cfg: ProfileConfig, llm: Any) -> None:
             )
         return [{"key": keys[0], "feelings": feelings}]
 
-    Job("moods", MOODS, cfg).run(keys, build, parse, lambda k: sha(prompt(k)), llm)
+    return JobSpec(
+        Job("moods", MOODS, cfg),
+        keys,
+        build,
+        parse,
+        lambda k: sha(prompt(k)),
+        lambda k: {"count": n, "hints": prompt(k).split("\n", 1)[1]},
+    )
 
 
 # Unlabeled student queries. These seeds are independent of all evaluation text.
@@ -536,7 +565,8 @@ def distill_seeds(cfg: ProfileConfig) -> dict[str, tuple[str, str, int]]:
     }
 
 
-def run_distill(cfg: ProfileConfig, llm: Any) -> None:
+def distill_job() -> JobSpec:
+    cfg = ProfileConfig()
     seeds = distill_seeds(cfg)
 
     def prompt(k: str) -> str:
@@ -575,33 +605,29 @@ def run_distill(cfg: ProfileConfig, llm: Any) -> None:
         # Keep parsing stateless: Job parses answers several times during generation and replay.
         return [{"key": keys[0], "feelings": [r["text"] for r in data["feelings"]]}]
 
-    job = Job("distill", DISTILL, cfg)
-    job.output = job.cache.with_name("distill-seeds.jsonl")
-    job.run(list(seeds), build, parse, lambda k: sha(prompt(k)), llm)
+    return JobSpec(
+        Job("distill", DISTILL, cfg),
+        list(seeds),
+        build,
+        parse,
+        lambda k: sha(prompt(k)),
+        lambda k: dict(zip(("situation", "style", "count"), seeds[k], strict=True)),
+        distill_rows,
+    )
+
+
+def distill_rows(records: list[Record]) -> list[Record]:
     evals = {normalize_feeling(t) for t in load_eval_texts()}
     seen: set[str] = set()
     rows = []
-    counts: Counter[str] = Counter()
-    for record in iter_jsonl(job.output):
+    for record in records:
         for raw in record["feelings"]:
-            counts["generated"] += 1
             text = raw.strip()
-            reason = distill_rejection(text, evals, seen)
-            if reason:
-                counts[reason] += 1
+            if distill_rejection(text, evals, seen):
                 continue
             seen.add(normalize_feeling(text))
             rows.append({"key": record["key"], "text": text})
-    write_jsonl(DISTILL, rows)
-    log.info(
-        "distill: generated %d, kept %d; dropped empty %d, too_long %d, eval %d, duplicate %d",
-        counts["generated"],
-        len(rows),
-        counts["empty"],
-        counts["too_long"],
-        counts["eval"],
-        counts["duplicate"],
-    )
+    return rows
 
 
 # PAT palette names to feeling sentences
@@ -611,11 +637,9 @@ def pat_schema(count: int) -> dict[str, Any]:
     return obj({"sentences": numbered_array({"text": {"type": "string"}}, count)})
 
 
-def run_pat(cfg: ProfileConfig, llm: Any) -> None:
+def pat_job() -> JobSpec:
+    cfg = ProfileConfig()
     phrases = sorted({r["phrase"] for r in iter_jsonl(PAT)})
-    if not phrases:
-        log.warning("pat: no PAT palettes in data/curated/pat.jsonl; skip")
-        return
 
     # The grammar forces 6 to 30 words, so the model cannot echo a short palette name.
     def build(pending: list[str]) -> list[Unit]:
@@ -642,7 +666,9 @@ def run_pat(cfg: ProfileConfig, llm: Any) -> None:
             lambda row: {"text": normalized(row["text"])} if is_feeling(row["text"]) else None,
         )
 
-    Job("pat", PAT_SENTENCES, cfg).run(phrases, build, parse, sha, llm)
+    return JobSpec(
+        Job("pat", PAT_SENTENCES, cfg), phrases, build, parse, sha, lambda k: {"phrase": k}
+    )
 
 
 # labels: palette, light, typeface, scent for each feeling
@@ -674,7 +700,8 @@ def label_schema(vocab: Vocab, count: int) -> dict[str, Any]:
     )
 
 
-def run_labels(cfg: ProfileConfig, llm: Any) -> None:
+def labels_job() -> JobSpec:
+    cfg = ProfileConfig()
     vocab = load_vocab()
     system = LABEL_SYSTEM + vocab.prompt_block()
 
@@ -697,30 +724,8 @@ def run_labels(cfg: ProfileConfig, llm: Any) -> None:
         return parse_numbered(keys, data["labels"], make)
 
     job = Job(f"labels-{vocab.digest[:8]}", labels_path(vocab), cfg)
-    job.run(label_pool(cfg), build, parse, sha, llm)
+    return JobSpec(job, label_pool(cfg), build, parse, sha, lambda k: {"text": k})
 
 
 def lazy_llm(cfg: ProfileConfig) -> Any:
     return functools.cache(lambda: LocalLLM(cfg))
-
-
-def run() -> None:
-    # Strict mode is untested with the Qwen3.5 generate path, so it only warns here.
-    make_deterministic(SEED, warn_only=True)
-    cfg = ProfileConfig()
-    if not RESOLVED.exists():
-        raise SystemExit(f"no resolved items at {RESOLVED}; run uv run download first")
-    start = time.perf_counter()
-    log.info(
-        f"labeler {cfg.model} at {cfg.revision[:12]}, batch {cfg.batch_size} "
-        f"({cfg.image_batch_size} with images), greedy with sampled retries; "
-        "jobs: items, moods, pat, labels, distill"
-    )
-    llm = lazy_llm(cfg)
-    for job in progress(
-        (run_items, run_moods, run_pat, run_labels, run_distill), desc="profile", unit="job"
-    ):
-        job(cfg, llm)
-    log.info(
-        f"done in {elapsed(start)}: outputs in {PROFILES.parent.relative_to(ML_ROOT).as_posix()}"
-    )
