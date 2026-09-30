@@ -1,27 +1,28 @@
 <script lang="ts">
-	// Arrange category picks as tiles and coordinate their exit before the next mood appears.
-	import { CATEGORIES, type Category, type Item } from '$lib/mood/types';
+	// Arrange items as tiles and coordinate their exit before the next mood or world appears.
+	import type { Item } from '$lib/mood/types';
 	import Tile from './Tile.svelte';
 
 	let {
-		picks,
+		items,
+		label,
 		leaving,
 		active,
 		onopen
 	}: {
-		picks: Record<Category, Item>;
+		items: Item[];
+		label: string;
 		/** Fade the wall out before the next mood arrives. */
 		leaving: boolean;
-		active: Category | null;
+		/** The id of the tile that a world grows from or returns to. */
+		active: string | null;
 		onopen: (item: Item, el: HTMLButtonElement) => void;
 	} = $props();
 </script>
 
-<section class="wall" class:leaving aria-label="picks">
-	{#each CATEGORIES as category, i (category)}
-		{#if picks[category]}
-			<Tile item={picks[category]} index={i} active={active === category} {onopen} />
-		{/if}
+<section class="wall" class:leaving aria-label={label}>
+	{#each items as item, i (item.id)}
+		<Tile {item} index={i} active={active === item.id} {onopen} />
 	{/each}
 	<div class="spacer" aria-hidden="true"></div>
 </section>

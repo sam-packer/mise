@@ -21,6 +21,9 @@ const PALETTE_TOP_K = 3;
 const PALETTE_TEMPERATURE = 0.03;
 /** Above this weight the best anchor's palette is returned as it is. */
 const PALETTE_DOMINANT = 0.7;
+/** Neighbors of a work in its own category and in each other category. */
+const WORLD_SAME = 2;
+const WORLD_OTHER = 2;
 
 /** Average hue on a circle and chroma separately to prevent distinct hues from producing grey. */
 function blendPalettes(palettes: Palette[], weights: number[]): Palette {
@@ -74,6 +77,7 @@ export function createSearch(
 		throw new Error('anchors.bin does not match anchors');
 	const byCategory = new Map<Category, number[]>(CATEGORIES.map((c) => [c, []]));
 	items.forEach((item, i) => byCategory.get(item.category)!.push(i));
+	const rowById = new Map(items.map((item, i) => [item.id, i]));
 
 	const findAnchor = createAnchorMatcher(
 		items,
@@ -81,22 +85,41 @@ export function createSearch(
 		(rows) => representatives[rows.join(',')] ?? representative(vectors, dims, rows)
 	);
 
-	function pick(q: Float32Array, anchor: Item | null): Record<Category, Item> {
-		const picks = {} as Record<Category, Item>;
+	/**
+	 * Return the `count(category)` items closest to `q` in each category, best first.
+	 * Skip rows that `skip` rejects. Take one item per creator in a category.
+	 */
+	function nearest(
+		q: Float32Array,
+		count: (category: Category) => number,
+		skip: (i: number) => boolean
+	): Record<Category, Item[]> {
+		const found = {} as Record<Category, Item[]>;
 		for (const [category, rows] of byCategory) {
-			let best = -1;
-			let bestScore = -Infinity;
-			for (const i of rows) {
-				if (anchor && (items[i].creator === anchor.creator || items[i].title === anchor.title))
-					continue;
-				const s = dot(q, vectors, i * dims);
-				if (s > bestScore) {
-					bestScore = s;
-					best = i;
-				}
+			const scored = rows.filter((i) => !skip(i)).map((i) => ({ i, s: dot(q, vectors, i * dims) }));
+			// A stable sort keeps catalog order for equal scores, so the first best row wins a tie.
+			scored.sort((a, b) => b.s - a.s);
+			const creators = new Set<string>();
+			found[category] = [];
+			for (const { i } of scored) {
+				if (found[category].length >= count(category)) break;
+				if (creators.has(items[i].creator)) continue;
+				creators.add(items[i].creator);
+				found[category].push(items[i]);
 			}
-			if (best >= 0) picks[category] = items[best];
 		}
+		return found;
+	}
+
+	function pick(q: Float32Array, anchor: Item | null): Record<Category, Item> {
+		const near = nearest(
+			q,
+			() => 1,
+			(i) =>
+				anchor !== null && (items[i].creator === anchor.creator || items[i].title === anchor.title)
+		);
+		const picks = {} as Record<Category, Item>;
+		for (const category of CATEGORIES) if (near[category][0]) picks[category] = near[category][0];
 		return picks;
 	}
 
@@ -114,6 +137,30 @@ export function createSearch(
 				anchor,
 				...(info.heads.kind === 'anchors' ? { heads: anchorHeads(q) } : {})
 			};
+		},
+
+		/** Mood attributes from the anchor phrases. Only a bundle with anchor heads has them. */
+		heads: anchorHeads,
+
+		/**
+		 * Find the works around one catalog item from its own vector: WORLD_SAME in its category and
+		 * WORLD_OTHER in each other category. Skip the item, its creator, its title, and `exclude` ids.
+		 */
+		world(id: string, exclude: string[]): { item: Item; neighbors: Item[] } {
+			const row = rowById.get(id);
+			if (row === undefined) throw new Error('that work is not in the catalog');
+			const item = items[row];
+			const skip = new Set(exclude);
+			const near = nearest(
+				vectors.subarray(row * dims, (row + 1) * dims),
+				(c) => (c === item.category ? WORLD_SAME : WORLD_OTHER),
+				(i) =>
+					i === row ||
+					skip.has(items[i].id) ||
+					items[i].creator === item.creator ||
+					items[i].title === item.title
+			);
+			return { item, neighbors: CATEGORIES.flatMap((c) => near[c]) };
 		}
 	};
 }

@@ -1,5 +1,5 @@
 """Select the catalog candidates: films (TMDB), books (Hardcover), songs (ListenBrainz, Last.fm,
-and MusicBrainz), art (the Met CSV, the Art Institute of Chicago, and the Cleveland Museum of Art),
+and MusicBrainz), art (the Met, Chicago, Cleveland, NASA, and Smithsonian),
 and poems (PoetryDB). data/cache/http caches every API answer, so a rerun is fast.
 
 Spread candidates across years within each era and across art sources.
@@ -15,8 +15,9 @@ import re
 import time
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable
+from dataclasses import replace
 from typing import Any
-from urllib.parse import quote_plus, urlencode
+from urllib.parse import quote, quote_plus, urlencode
 
 import numpy as np
 import pandas as pd
@@ -38,10 +39,10 @@ from mise_ml.config import (
     Eras,
     ResolveConfig,
 )
-from mise_ml.http import CachedClient
+from mise_ml.http import CachedClient, FetchError
 from mise_ml.log import elapsed, get, num, progress
 from mise_ml.threads import run_all
-from mise_ml.util import slugify, write_json, write_jsonl
+from mise_ml.util import slugify, stable_hash, write_json, write_jsonl
 
 log = get(__name__)
 
@@ -86,6 +87,11 @@ def clean_song_title(title: str) -> str:
 
 def norm(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", text.lower().replace("&", "and"))
+
+
+def artist_name_key(name: str) -> str:
+    """Match artist names across service IDs without discarding non-Latin characters."""
+    return " ".join(name.casefold().split())
 
 
 def year_or_none(value: Any) -> int | None:
@@ -135,17 +141,31 @@ def era_groups(category: str, eras: Eras) -> dict[str, int]:
     return {f"{category}:{era_name(s, e)}": quota for s, e, quota in eras}
 
 
-def targets(cfg: CurateConfig) -> dict[str, int]:
+def targets(cfg: CurateConfig, catalog: list[Record] | None = None) -> dict[str, int]:
     """The items resolve keeps for each group."""
     quota = cfg.art_met_quota
-    return {
+    met = {f"art:met-{c.lower()}": round(cfg.art_met * s) for c, s in quota.items()}
+    # Put any rounding remainder in the last class so source fallback keeps the total exact.
+    last = next(reversed(met))
+    met[last] += cfg.art_met - sum(met.values())
+    out = {
         **era_groups("film", cfg.film_eras),
         **era_groups("book", cfg.book_eras),
         **era_groups("song", cfg.song_eras),
-        **{f"art:met-{c.lower()}": round(cfg.art_met * s) for c, s in quota.items()},
+        **met,
         "art:aic": cfg.art_aic,
         "art:cma": cfg.art_cma,
+        "art:nasa": cfg.art_nasa,
+        "art:si": cfg.art_si,
     }
+    if catalog is not None:
+        # Art selectors record effective quotas after a missing key or source outage.
+        defaults = out
+        out = {g: n for g, n in out.items() if not g.startswith("art:")}
+        for r in catalog:
+            if r["category"] == "art":
+                out[r["group"]] = r.get("group_target", defaults[r["group"]])
+    return out
 
 
 def wanted(category: str, quota: int, cfg: CurateConfig) -> int:
@@ -181,16 +201,38 @@ def by_era(category: str, rows: list[Record], eras: Eras, cfg: CurateConfig) -> 
             (r for r in rows if start <= r["year"] <= end), key=lambda r: (-r["rank"], r["id"])
         )
         n = wanted(category, quota, cfg)
-        chosen, capped = spread(pool, n, cfg)
-        for r in chosen:
+        if category == "song":
+            scenes: dict[str, list[Record]] = defaultdict(list)
+            for r in pool:
+                scenes[r["signal"]["scene"]].append(r)
+            floor = min(wanted("song", cfg.song_scene_floor, cfg), quota // max(1, len(scenes)))
+            first = [r for scene in sorted(scenes) for r in scenes[scene][:floor]]
+            first.sort(key=lambda r: (-r["rank"], r["id"]))
+            ids = {r["source"]["mbid"] for r in first}
+            rest, capped = spread(
+                [r for r in pool if r["source"]["mbid"] not in ids], n - len(first), cfg
+            )
+            chosen = first + rest
+        else:
+            chosen, capped = spread(pool, n, cfg)
+        for order, r in enumerate(chosen):
             r["group"] = group
+            if category == "song":
+                r["selection_order"] = order
         out.extend(chosen)
         line = (
             f"{category} {era_name(start, end)}: {num(len(chosen))} candidates for "
             f"{num(quota)} slots from {num(len(pool))}"
         )
+        if category == "song" and chosen:
+            line += (
+                f"; last candidate {chosen[-1]['rank']:,} listeners, "
+                f"minimum including scene floors {min(r['rank'] for r in chosen):,}"
+            )
         if len(chosen) < n:
             log.warning(f"{line}; the era is short by {num(n - len(chosen))} candidates")
+        elif category == "song":
+            log.info(f"{line} ({num(len(first))} scene reserves; the rest spread by year)")
         else:
             log.info(f"{line} ({num(len(chosen) - capped)} over the year cap)")
     return out
@@ -388,6 +430,14 @@ OLD_ERA_TAGS = (
     "jazz",
 )
 
+SCENE_TAGS = (
+    "indie", "indie pop", "alternative r&b", "neo-soul", "bedroom pop", "dream pop",
+    "art pop", "shoegaze", "post-punk", "singer-songwriter", "lo-fi", "alternative rock",
+    "electronic", "ambient", "trip-hop", "hip-hop", "k-pop", "j-pop", "city pop",
+    "afrobeats", "latin", "bossa nova", "reggae", "country", "americana", "classical",
+    "soundtrack", "jazz", "indie rock", "synthpop",
+)  # fmt: skip
+
 
 def listenbrainz_pool(http: CachedClient) -> list[dict]:
     """Recordings with a user count: the sitewide top lists, and the top recordings of
@@ -398,28 +448,40 @@ def listenbrainz_pool(http: CachedClient) -> list[dict]:
         for x in (http.get_json(url) or {}).get("payload", {}).get("recordings", []):
             if x.get("recording_mbid") and x.get("artist_mbids"):
                 sitewide.setdefault(x["recording_mbid"], x)
-    found = dict.fromkeys(x["artist_mbids"][0] for x in sitewide.values())
+    found = {x["artist_mbids"][0]: x["artist_name"] for x in sitewide.values()}
     by_recording = len(found)
     for rng in SITEWIDE_RANGES:
         url = f"{LISTENBRAINZ}/stats/sitewide/artists?range={rng}&count=1000"
         for x in (http.get_json(url) or {}).get("payload", {}).get("artists", []):
             if x.get("artist_mbid"):
-                found.setdefault(x["artist_mbid"])
+                found[x["artist_mbid"]] = x.get("artist_name") or found.get(x["artist_mbid"], "")
     by_stats = len(found)
-    # ListenBrainz listeners play mostly recent music, so the stats alone give too few songs
-    # from before 1980. Last.fm's top artists of older decades and genres fill that era.
-    for tag in OLD_ERA_TAGS:
-        params = {"method": "tag.gettopartists", "tag": tag, "limit": 100, "format": "json"}
-        body = http.get_json(f"{LASTFM}?{urlencode(params)}", secret=keys.lastfm()) or {}
-        for a in (body.get("topartists") or {}).get("artist", []):
-            if a.get("mbid"):
-                found.setdefault(a["mbid"])
+    # Keep the first Last.fm discovery tag, including for artists already in sitewide stats.
+    # Round-robin pages give each tag its first 100 artists before fetching the next 100.
+    scenes: dict[str, str] = {}
+    scene_names: dict[str, str] = {}
+    for page in (1, 2):
+        for tag in dict.fromkeys((*OLD_ERA_TAGS, *SCENE_TAGS)):
+            params = {"method": "tag.gettopartists", "tag": tag, "limit": 100, "format": "json"}
+            if page > 1:
+                params["page"] = page
+            try:
+                body = http.get_json(f"{LASTFM}?{urlencode(params)}", secret=keys.lastfm()) or {}
+            except FetchError as e:
+                log.warning("song: Last.fm artist tag %s page %s failed: %s", tag, page, e)
+                continue
+            for a in (body.get("topartists") or {}).get("artist", []):
+                if a.get("mbid"):
+                    found.setdefault(a["mbid"], a.get("name") or "")
+                    scenes.setdefault(a["mbid"], tag)
+                if a.get("name"):
+                    scene_names.setdefault(artist_name_key(a["name"]), tag)
     artists = list(found)
     log.info(
         f"song: {num(len(sitewide))} recordings by {num(by_recording)} artists in the "
         f"ListenBrainz sitewide stats ({len(SITEWIDE_RANGES)} ranges), "
         f"{num(by_stats - by_recording)} more artists from the sitewide artist stats, and "
-        f"{num(len(artists) - by_stats)} from Last.fm's top artists of older decades"
+        f"{num(len(artists) - by_stats)} from Last.fm's decade and scene tags"
     )
     # User counts for the sitewide recordings, in batches.
     ids = sorted(sitewide)
@@ -446,7 +508,11 @@ def listenbrainz_pool(http: CachedClient) -> list[dict]:
     bar = progress(total=len(artists), desc="song artists", unit="artist")
 
     def one(artist: str) -> list[dict]:
-        rows = top(artist)
+        try:
+            rows = top(artist)
+        except FetchError as e:
+            log.warning("song: artist %s failed; keep its sitewide recordings: %s", artist, e)
+            rows = []
         bar.update()
         return rows
 
@@ -458,12 +524,18 @@ def listenbrainz_pool(http: CachedClient) -> list[dict]:
                     {
                         "mbid": x["recording_mbid"],
                         "title": x["recording_name"],
-                        "artist": x.get("artist_name") or "",
+                        "artist": x.get("artist_name") or found[artist],
                         "artist_mbid": artist,
                         "users": x.get("total_user_count") or 0,
                     },
                 )
     bar.close()
+    artist_scenes = {
+        artist: scenes.get(artist, scene_names.get(artist_name_key(name), "sitewide"))
+        for artist, name in found.items()
+    }
+    for x in pool.values():
+        x["scene"] = artist_scenes[x["artist_mbid"]]
     return list(pool.values())
 
 
@@ -472,18 +544,23 @@ def per_artist(pool: list[dict], limit: int) -> list[dict]:
     versions (live, remix, karaoke, ...)."""
     out, seen = [], set()
     count: Counter[str] = Counter()
+    names: Counter[str] = Counter()
     for x in sorted(pool, key=lambda x: (-x["users"], x["mbid"])):
         x["title"] = clean_song_title(x["title"])
-        key = (x["artist_mbid"], norm(base_title(x["title"])))
+        name = artist_name_key(x["artist"])
+        title = base_title(x["title"]).casefold().replace("&", "and")
+        key = (x["artist_mbid"], "".join(c for c in title if c.isalnum()))
         if (
             not x["artist"]
             or VERSION.search(x["title"])
             or key in seen
             or count[x["artist_mbid"]] >= limit
+            or names[name] >= limit
         ):
             continue
         seen.add(key)
         count[x["artist_mbid"]] += 1
+        names[name] += 1
         out.append(x)
     return out
 
@@ -495,7 +572,12 @@ def musicbrainz_dates(http: CachedClient, mbids: list[str]) -> dict[str, dict]:
     for i in progress(range(0, len(ids), 100), desc="musicbrainz", unit="batch"):
         query = "rid:(" + " OR ".join(ids[i : i + 100]) + ")"
         url = f"{MUSICBRAINZ}?{urlencode({'query': query, 'fmt': 'json', 'limit': 100})}"
-        for rec in (http.get_json(url) or {}).get("recordings", []):
+        try:
+            body = http.get_json(url) or {}
+        except FetchError as e:
+            log.warning("song: MusicBrainz date batch failed: %s", e)
+            continue
+        for rec in body.get("recordings", []):
             out[rec["id"]] = {
                 "year": year_or_none((rec.get("first-release-date") or "")[:4]),
                 "isrcs": sorted(rec.get("isrcs") or []),
@@ -519,7 +601,7 @@ def select_songs(http: CachedClient, cfg: CurateConfig) -> list[Record]:
                 "creator": x["artist"],
                 "year": meta["year"],
                 "rank": int(x["users"]),
-                "signal": {},
+                "signal": {"scene": x["scene"]},
                 "source": {
                     "mbid": x["mbid"],
                     "artist_mbid": x["artist_mbid"],
@@ -532,6 +614,12 @@ def select_songs(http: CachedClient, cfg: CurateConfig) -> list[Record]:
         f"song: {num(len(pool))} songs after the per-artist cap of {cfg.song_per_artist}; "
         f"{num(len(rows))} have a release year in MusicBrainz"
     )
+    # Non-Latin names and truncated titles can share a slug. Use stable recording IDs for
+    # every collision so a wider pool cannot reassign an old song's saved media to another song.
+    counts = Counter(r["id"] for r in rows)
+    for r in rows:
+        if counts[r["id"]] > 1:
+            r["id"] += f"-{r['source']['mbid']}"
     return by_era("song", rows, cfg.song_eras, cfg)
 
 
@@ -643,7 +731,7 @@ def select_met(cfg: CurateConfig) -> list[Record]:
     met = load_met()
     rng = random.Random(SEED)
     records = []
-    for cls, share in cfg.art_met_quota.items():
+    for cls in cfg.art_met_quota:
         rows = met[met["cls"] == cls].to_dict("records")
         rng.shuffle(rows)
         rows.sort(
@@ -653,8 +741,8 @@ def select_met(cfg: CurateConfig) -> list[Record]:
                 not isinstance(r["Tags"], str),
             )
         )
-        n = wanted("art", round(cfg.art_met * share), cfg)
         group = f"art:met-{cls.lower()}"
+        n = wanted("art", targets(cfg)[group], cfg)
         records += [met_record(r, group, -rank) for rank, r in enumerate(rows[:n])]
         log.debug(f"art: Met {cls}: {num(len(rows))} public-domain objects, {num(n)} candidates")
     log.info(f"art: {num(len(records))} Met candidates from {num(len(met))} public-domain objects")
@@ -781,8 +869,259 @@ def select_cma(http: CachedClient, cfg: CurateConfig) -> list[Record]:
     return records
 
 
+NASA_TOPICS = (
+    "aurora", "earth at night", "sunset", "clouds", "storm", "ocean", "desert",
+    "glacier", "nebula", "galaxy", "moon surface", "milky way", "lightning", "snow",
+    "forest from above", "mountains", "islands", "earth sunrise",
+)  # fmt: skip
+NASA_JUNK = re.compile(
+    r"copyright|\u00a9|all rights reserved|third.party|Getty|Alamy|Reuters|Associated Press|"
+    r"\b(portrait|headshot|ceremony|ribbon.cutting|award|press conference|"
+    r"test|testing|wind tunnel|calibration|launch pad|"
+    r"crates?|offload\w*|unload\w*|assembly|technicians?|clean room|"
+    r"spacecraft processing|payload processing|launch vehicle|launch complex|"
+    r"rocket|rollout|briefing|hangar|ground support|aircraft|airplane|fuselage|livery|"
+    r"diagram|schematic|chart|graph|staff|logo|insignia)\b",
+    re.I,
+)
+SI_TOPICS = (
+    "Landscapes",
+    "Nature",
+    "Gardens",
+    "Flowers",
+    "Trees",
+    "Mountains",
+    "Water",
+    "Sky",
+    "Night",
+    "Seascapes",
+    "Architecture",
+    "Abstraction",
+)
+SI_PEOPLE = re.compile(r"\b(portraits?|self.portraits?|sitters?|group photograph)\b", re.I)
+SI_BIOGRAPHY = re.compile(r",?\s+\(?(?:born|active|died|founded|b\.|d\.|ca\.)(?:\s|$)", re.I)
+# Catalog numbers used as titles ("PIA14417", "iss025e012345", "S94-12345").
+NASA_TECHNICAL = re.compile(r"\b(PIA\d+|iss\d{3}e\d+|sts\d+-\d+|s\d{2}-\d+|jsc\d+)\b", re.I)
+
+
+def title_shape(r: Record) -> tuple[str, str]:
+    """A title without its numbers, with its creator. Series titles such as "Earth observations
+    taken by the STS-59 crew" share one shape, so the catalog keeps one of them."""
+    return re.sub(r"\d+", "", norm(r.get("title") or "")), r.get("creator") or ""
+
+
+def topic_sample(pools: list[list[Record]], n: int, creator_cap: int = 8) -> list[Record]:
+    """Seeded round-robin selection; no topic exceeds twice its even share. Keep one record per
+    title shape, and at most `creator_cap` records per creator, so one maker cannot fill a
+    source."""
+    rng = random.Random(SEED)
+    cap = max(1, math.ceil(2 * n / max(1, len(pools))))
+    for pool in pools:
+        pool.sort(key=lambda r: r["id"])
+        rng.shuffle(pool)
+    out, seen, shapes = [], set(), set()
+    creators: Counter[str] = Counter()
+    for i in range(cap):
+        for pool in pools:
+            if i >= len(pool) or pool[i]["id"] in seen:
+                continue
+            r = pool[i]
+            shape = title_shape(r)
+            if shape in shapes or creators[r["creator"]] >= creator_cap:
+                continue
+            seen.add(r["id"])
+            shapes.add(shape)
+            creators[r["creator"]] += 1
+            out.append({**r, "rank": -len(out)})
+            if len(out) >= n:
+                return out
+    return out
+
+
+def select_nasa(http: CachedClient, cfg: CurateConfig) -> list[Record]:
+    """Nature and space images; exclude explicit third-party rights and work-site shots."""
+    n = wanted("art", cfg.art_nasa, cfg)
+    if not n:
+        return []
+    pools = []
+    for topic in NASA_TOPICS:
+        params = {"q": topic, "media_type": "image", "page_size": 100}
+        try:
+            body = http.get_json(f"https://images-api.nasa.gov/search?{urlencode(params)}") or {}
+        except FetchError as e:
+            log.warning("art: NASA topic %s failed: %s", topic, e)
+            continue
+        rows = []
+        for item in body.get("collection", {}).get("items", []):
+            data = item.get("data") or []
+            if not data:
+                continue
+            a = data[0]
+            oid = a.get("nasa_id")
+            text = " ".join(
+                [a.get("title", ""), a.get("description", ""), " ".join(a.get("keywords") or [])]
+            )
+            image = next(
+                (
+                    x["href"]
+                    for x in item.get("links", [])
+                    if x.get("render") == "image" and "~medium" in x.get("href", "")
+                ),
+                None,
+            )
+            if not oid or not image or NASA_JUNK.search(text):
+                continue
+            title = clip(a.get("title"), 300) or "Untitled"
+            rows.append(
+                {
+                    "id": f"art:{slugify(title, 40)}-nasa{stable_hash(oid, 12)}",
+                    "category": "art",
+                    "group": "art:nasa",
+                    "title": title,
+                    "creator": " / ".join(
+                        unique(["NASA", a.get("center") or "", a.get("secondary_creator") or ""], 3)
+                    ),
+                    "year": year_or_none((a.get("date_created") or "")[:4]),
+                    "signal": {
+                        "subjects": a.get("keywords") or [],
+                        "topic": topic,
+                        "description": clip(a.get("description"), cfg.description_chars),
+                        "center": a.get("center"),
+                    },
+                    "source": {"nasa": oid, "image": image},
+                    "links": {"primary": f"https://images.nasa.gov/details/{quote(oid, safe='')}"},
+                }
+            )
+        pools.append([r for r in rows if not NASA_TECHNICAL.search(r["title"])])
+    # Every NASA image credits a NASA center, so the per-creator cap does not apply.
+    records = topic_sample(pools, n, creator_cap=n)
+    log.info("art: %s NASA candidates", num(len(records)))
+    return records
+
+
+def select_si(http: CachedClient, cfg: CurateConfig) -> list[Record]:
+    """CC0 photographs and paintings, with a topic cap and no metadata-marked portraits."""
+    n = wanted("art", cfg.art_si, cfg)
+    if not n:
+        return []
+    key = keys.env("SMITHSONIAN_API_KEY")
+    if not key:
+        log.warning("art: SMITHSONIAN_API_KEY missing; other museums fill its slots")
+        return []
+    pools = []
+    for topic in SI_TOPICS:
+        query = (
+            'media_usage:CC0 AND online_media_type:"Images" '
+            'AND object_type:("Photographs" OR "Paintings") '
+            "AND unit_code:(CHNDM OR SAAM OR NASM OR EEPA OR NMAAHC OR SG) "
+            f'AND topic:"{topic}"'
+        )
+        rows = []
+        for start in range(0, 300, 100):
+            params = {"q": query, "start": start, "rows": 100}
+            try:
+                body = (
+                    http.get_json(
+                        f"https://api.si.edu/openaccess/api/v1.0/search?{urlencode(params)}",
+                        secret={"api_key": key},
+                    )
+                    or {}
+                )
+            except FetchError as e:
+                log.warning("art: Smithsonian topic %s failed: %s", topic, e)
+                break
+            response = body.get("response") or {}
+            for a in response.get("rows") or []:
+                content = a.get("content") or {}
+                detail = content.get("descriptiveNonRepeating") or {}
+                free = content.get("freetext") or {}
+                indexed = content.get("indexedStructured") or {}
+                media = next(
+                    (
+                        m
+                        for m in (detail.get("online_media") or {}).get("media", [])
+                        if m.get("type") == "Images"
+                        and m.get("idsId")
+                        and (m.get("usage") or {}).get("access") == "CC0"
+                    ),
+                    None,
+                )
+                if not media or SI_PEOPLE.search(json.dumps(content)):
+                    continue
+                oid = detail.get("record_ID") or a["id"]
+                # Names carry biography ("William H. Rau, born Philadelphia, PA 1855-died ...").
+                # Keep the name itself.
+                names = [
+                    SI_BIOGRAPHY.split(v["content"], maxsplit=1)[0].strip(" ,;")
+                    for v in free.get("name", [])
+                    if v.get("label", "").lower() in ("artist", "photographer", "maker")
+                ]
+                dates = " ".join(v["content"] for v in free.get("date", []))
+                years = [int(y) for y in re.findall(r"\b(1[0-9]{3}|20[0-2][0-9])\b", dates)]
+                description = " ".join(
+                    v["content"] for v in free.get("notes", []) if v.get("label") == "Description"
+                )
+                credit = "; ".join(v["content"] for v in free.get("creditLine", []))
+                rows.append(
+                    {
+                        "id": f"art:si-{oid}",
+                        "category": "art",
+                        "group": "art:si",
+                        "title": clip(a.get("title"), 300) or "Untitled",
+                        # The holding museum is in source.unit and the credit line, not the creator.
+                        "creator": ", ".join(n for n in names if n and n.lower() != "unidentified")
+                        or "Unknown artist",
+                        # The first year in the object's dates: the date it was made.
+                        "year": years[0] if years else None,
+                        "signal": {
+                            "subjects": indexed.get("topic") or [],
+                            "topic": topic,
+                            "date": "; ".join(v["content"] for v in free.get("date", [])),
+                            "description": clip(description, cfg.description_chars),
+                        },
+                        "source": {
+                            "si": oid,
+                            "credit": credit,
+                            "unit": a.get("unitCode"),
+                            "image": "https://ids.si.edu/ids/deliveryService?"
+                            + urlencode({"id": media["idsId"], "max": 1200}),
+                        },
+                        "links": {
+                            "primary": detail.get("record_link")
+                            or f"https://www.si.edu/object/{oid}"
+                        },
+                    }
+                )
+            if start + 100 >= response.get("rowCount", 0):
+                break
+        pools.append(rows)
+    records = topic_sample(pools, n)
+    log.info("art: %s Smithsonian candidates", num(len(records)))
+    return records
+
+
 def select_art(http: CachedClient, cfg: CurateConfig) -> list[Record]:
-    return select_met(cfg) + select_aic(http, cfg) + select_cma(http, cfg)
+    nasa, si = select_nasa(http, cfg), select_si(http, cfg)
+    nasa_quota = min(cfg.art_nasa, int(len(nasa) / cfg.candidate_factor["art"]))
+    si_quota = min(cfg.art_si, int(len(si) / cfg.candidate_factor["art"]))
+    extra = cfg.art_nasa + cfg.art_si - nasa_quota - si_quota
+    met_extra, aic_extra = round(extra * 0.6), round(extra * 0.25)
+    effective = replace(
+        cfg,
+        art_nasa=nasa_quota,
+        art_si=si_quota,
+        art_met=cfg.art_met + met_extra,
+        art_aic=cfg.art_aic + aic_extra,
+        art_cma=cfg.art_cma + extra - met_extra - aic_extra,
+    )
+    if extra:
+        log.info("art: move %s unfilled NASA/Smithsonian slots to the other museums", extra)
+    records = select_met(effective) + select_aic(http, effective) + select_cma(http, effective)
+    records += nasa[: wanted("art", nasa_quota, cfg)] + si[: wanted("art", si_quota, cfg)]
+    quotas = targets(effective)
+    for r in records:
+        r["group_target"] = quotas[r["group"]]
+    return records
 
 
 # PAT palettes
@@ -855,8 +1194,8 @@ def run() -> None:
     start_fresh_if_old()
     log.info(
         "selecting: films from TMDB, books from Hardcover, songs from ListenBrainz and "
-        "MusicBrainz, art from the Met CSV, the Art Institute of Chicago, and the Cleveland "
-        "Museum of Art; poems from PoetryDB (API answers cached in data/cache/http)"
+        "MusicBrainz, art from the Met, Chicago, Cleveland, NASA, and Smithsonian; "
+        "poems from PoetryDB (API answers cached in data/cache/http)"
     )
     http = CachedClient(ResolveConfig())
     steps: dict[str, Callable[[], list[Record]]] = {

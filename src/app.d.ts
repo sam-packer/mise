@@ -1,6 +1,4 @@
 // Define Cloudflare bindings and navigation state for SvelteKit routes.
-import type { Category } from '$lib/mood/types';
-
 declare global {
 	namespace App {
 		interface Platform {
@@ -11,8 +9,13 @@ declare global {
 		}
 
 		interface PageState {
-			/** The category whose full view is open, or the anchor the feeling names. */
-			open?: Category | 'anchor';
+			/** The item ids of the worlds on the path from the feeling, in order. The last one is on screen. */
+			trail?: string[];
+			/**
+			 * The length of the path at the first entry of this run of history entries. Back in history
+			 * reaches no shorter path, so the page pushes a new entry for a shorter one.
+			 */
+			floor?: number;
 		}
 	}
 }

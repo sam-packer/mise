@@ -12,5 +12,11 @@
 	// Short links: code to feeling. Create the namespace with `bunx wrangler kv namespace create moods`.
 	"kv_namespaces": [{ "binding": "MOODS", "id": "73941fa8ddb9434f8ceddc6edbf3bc78" }],
 	"workers_dev": true,
-	"preview_urls": true
+	"preview_urls": true,
+	"observability": {
+		"logs": {
+			"enabled": false,
+			"invocation_logs": true
+		}
+	}
 }

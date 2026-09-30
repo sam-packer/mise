@@ -1,5 +1,7 @@
 """Join catalog items and labels into deterministic query splits for training and evaluation."""
 
+import hashlib
+import random
 import unicodedata
 from dataclasses import dataclass
 from typing import Any
@@ -15,6 +17,7 @@ from mise_ml.config import (
     PAT_SENTENCES,
     PROFILES,
     RESOLVED,
+    SEED,
     TeacherConfig,
 )
 from mise_ml.log import get as get_logger
@@ -64,11 +67,42 @@ def load_distill_texts(exclude: list[str]) -> list[str]:
         if distill_rejection(text, evals, seen) is None:
             texts.append(text)
             seen.add(normalize_feeling(text))
+    # Keep clean originals and add one deterministic typo to about one in ten texts.
+    for text in texts.copy():
+        if hash_fraction("typo:" + text) >= 0.1:
+            continue
+        noisy = typo_feeling(text)
+        if distill_rejection(noisy, evals, seen) is None:
+            texts.append(noisy)
+            seen.add(normalize_feeling(noisy))
     return texts
 
 
+def typo_feeling(text: str) -> str:
+    """Swap, drop, or double a letter without changing spaces or punctuation."""
+    seed = int.from_bytes(hashlib.sha256(f"{SEED}:typo:{text}".encode()).digest()[:8])
+    rng = random.Random(seed)
+    letters = [i for i, c in enumerate(text) if c.isascii() and c.isalpha()]
+    if not letters:
+        return text
+    swaps = [i for i in letters if i + 1 in letters and text[i] != text[i + 1]]
+    operation = rng.choice(["drop", "double", *(["swap"] if swaps else [])])
+    i = rng.choice(swaps if operation == "swap" else letters)
+    if operation == "swap":
+        return text[:i] + text[i + 1] + text[i] + text[i + 2 :]
+    if operation == "drop":
+        return text[:i] + text[i + 1 :]
+    return text[:i] + text[i] + text[i:]
+
+
+def load_eval_sets() -> dict[str, str]:
+    return {
+        r["text"].strip(): r["set"] for r in iter_jsonl(EVAL_FEELINGS) if r.get("text", "").strip()
+    }
+
+
 def load_eval_texts() -> list[str]:
-    return [r["text"].strip() for r in iter_jsonl(EVAL_FEELINGS) if r.get("text", "").strip()]
+    return list(load_eval_sets())
 
 
 def item_text(item: dict[str, Any]) -> str:

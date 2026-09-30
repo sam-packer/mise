@@ -44,6 +44,14 @@ def publish_settings() -> Settings:
     )
 
 
+def curate_settings() -> Settings:
+    from mise_ml import keys
+
+    return settings(
+        c.CurateConfig, c.ResolveConfig, smithsonian_enabled=bool(keys.env("SMITHSONIAN_API_KEY"))
+    )
+
+
 def content(path: Path, value: Any, label: str = "") -> ContentInput:
     return ContentInput(
         path, hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest(), label
@@ -255,7 +263,7 @@ STEPS = {
             "curate",
             "download",
             lambda: [*raw_curate(), constants("SEED", "CATALOG_VERSION")],
-            lambda: settings(c.CurateConfig, c.ResolveConfig),
+            curate_settings,
             ("curate", "http", "util", "threads"),
             lambda: [c.CATALOG, c.CATALOG_META, c.PAT],
             "curate:run",
@@ -379,11 +387,14 @@ STEPS = {
             "train",
             lambda: [
                 *catalog_inputs(False),
+                c.CATALOG,
+                c.RESOLVED,
                 c.EVAL_FEELINGS,
                 c.MODELS / "teacher.pt",
                 *student_files(),
                 c.BUNDLE / "model" / "model.onnx",
                 c.BUNDLE / "vectors.bin",
+                c.BUNDLE / "manifest.json",
                 constants("SEED", "CATEGORIES"),
             ],
             c.ProfileConfig,
@@ -403,6 +414,8 @@ STEPS = {
                 *student_files(),
                 c.BUNDLE / "model" / "model.onnx",
                 c.BUNDLE / "vectors.bin",
+                c.BUNDLE / "manifest.json",
+                selected(c.EVAL_FEELINGS, "text", "set"),
                 constants("SEED", "CATEGORIES"),
             ],
             c.TeacherConfig,

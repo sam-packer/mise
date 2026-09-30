@@ -11,6 +11,7 @@
 		settled = false,
 		waiting = false,
 		onsubmit,
+		onexample,
 		ref = $bindable(null)
 	}: {
 		value?: string;
@@ -22,6 +23,8 @@
 		/** The model is still loading. */
 		waiting?: boolean;
 		onsubmit: (text: string) => void;
+		/** The example on screen changed. */
+		onexample?: (text: string) => void;
 		ref?: HTMLTextAreaElement | null;
 	} = $props();
 
@@ -50,6 +53,8 @@
 		const timer = setInterval(() => (index += 1), 4000);
 		return () => clearInterval(timer);
 	});
+
+	$effect(() => onexample?.(example));
 
 	const hint = $derived.by(() => {
 		if (waiting) return 'getting the room ready';
@@ -253,7 +258,7 @@
 	.ghost {
 		display: grid;
 		pointer-events: none;
-		color: color-mix(in oklab, var(--ink) 32%, transparent);
+		color: var(--ink-soft);
 		user-select: none;
 	}
 
@@ -299,7 +304,6 @@
 		position: absolute;
 		inset: -0.55rem -0.6rem 0;
 		border: 1px solid transparent;
-		border-radius: 0.6rem;
 		pointer-events: none;
 		transition: border-color 900ms var(--ease);
 	}
@@ -337,7 +341,7 @@
 		padding: 0 0.15rem 0.3rem 0.6rem;
 		border: 0;
 		background: none;
-		color: color-mix(in oklab, var(--ink) 50%, transparent);
+		color: var(--ink-soft);
 		font: inherit;
 		font-size: 0.85rem;
 		font-style: normal;
@@ -365,7 +369,7 @@
 		left: 0;
 		right: 0;
 		margin: 0;
-		color: color-mix(in oklab, var(--ink) 45%, transparent);
+		color: var(--ink-soft);
 		font-size: 0.85rem;
 		font-style: normal;
 		font-variant-caps: all-small-caps;

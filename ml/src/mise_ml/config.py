@@ -28,7 +28,7 @@ RESOLVED = CURATED / "resolved.jsonl"
 RESOLVE_DROPPED = CURATED / "resolve_dropped.jsonl"
 # A format mismatch lets resolve retry songs and Chicago art that it can match.
 RESOLVE_META = CURATED / "resolve.meta.json"
-RESOLVE_VERSION = 2
+RESOLVE_VERSION = 3
 PROFILES = CURATED / "profiles.jsonl"
 MOODS = CURATED / "moods.jsonl"
 DISTILL = CURATED / "distill.jsonl"
@@ -48,16 +48,24 @@ Eras = tuple[tuple[int, int, int], ...]
 
 @dataclass(frozen=True)
 class CurateConfig:
-    film_eras: Eras = ((1920, 1969, 300), (1970, 1999, 600), (2000, 2019, 700), (2020, 2026, 400))
+    film_eras: Eras = ((1920, 1969, 450), (1970, 1999, 900), (2000, 2019, 1050), (2020, 2026, 600))
     # TMDB vote_count.gte for each era, in the order of film_eras.
     film_min_votes: tuple[int, ...] = (50, 100, 200, 100)
     film_keywords: int = 15
-    book_eras: Eras = ((-5000, 1949, 300), (1950, 1999, 500), (2000, 2019, 700), (2020, 2026, 500))
+    book_eras: Eras = ((-5000, 1949, 450), (1950, 1999, 750), (2000, 2019, 1050), (2020, 2026, 750))
     book_page: int = 500
     book_max_pages: int = 8
     book_tags: int = 8
-    song_eras: Eras = ((1900, 1979, 450), (1980, 1999, 750), (2000, 2019, 1050), (2020, 2026, 750))
-    song_per_artist: int = 6
+    # Modern quotas give similar listener cutoffs; see ml/catalog-expansion.md.
+    song_eras: Eras = (
+        (1900, 1979, 800),
+        (1980, 1999, 1200),
+        (2000, 2009, 2050),
+        (2010, 2019, 825),
+        (2020, 2026, 125),
+    )
+    song_per_artist: int = 3
+    song_scene_floor: int = 10
     song_tags: int = 10
     # Candidates per kept item. Resolve fills each group's quota in rank order.
     # Replace each drop with the next candidate.
@@ -70,6 +78,8 @@ class CurateConfig:
     art_met: int = 1200
     art_aic: int = 500
     art_cma: int = 300
+    art_nasa: int = 500
+    art_si: int = 500
     # Met public-domain classes and their share of art_met.
     art_met_quota: dict[str, float] = field(
         default_factory=lambda: {
@@ -112,6 +122,11 @@ class ResolveConfig:
             "api.artic.edu": 1.0,
             "openaccess-api.clevelandart.org": 0.5,
             "openaccess-cdn.clevelandart.org": 0.1,
+            "images-api.nasa.gov": 0.5,
+            "images-assets.nasa.gov": 0.1,
+            # Registered api.data.gov keys allow about 1,000 requests/hour.
+            "api.si.edu": 3.7,
+            "ids.si.edu": 0.2,
             # 3 requests/s: Open Library's limit for a User-Agent with a contact email.
             "openlibrary.org": 0.34,
             # Covers by cover ID are not rate-limited.

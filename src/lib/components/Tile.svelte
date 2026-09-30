@@ -1,5 +1,5 @@
 <script lang="ts">
-	// Render one wall item and identify its image for the transition into the full view.
+	// Render one wall item and name its image for the transition into its world.
 	import type { Item } from '$lib/mood/types';
 
 	let {
@@ -10,7 +10,7 @@
 	}: {
 		item: Item;
 		index: number;
-		/** The tile that the full view grows from. */
+		/** The tile that a world grows from or returns to. */
 		active: boolean;
 		onopen: (item: Item, el: HTMLButtonElement) => void;
 	} = $props();
@@ -31,6 +31,7 @@
 	style:--w={w}
 	style:--h={h}
 	style:--i={index}
+	data-item={item.id}
 	aria-label="{item.category}: {item.title}, {item.creator}"
 	onclick={(e) => onopen(item, e.currentTarget)}
 >
@@ -151,7 +152,7 @@
 		font-style: normal;
 		font-variant-caps: all-small-caps;
 		letter-spacing: 0.12em;
-		opacity: 0.55;
+		color: var(--ink-soft);
 	}
 
 	.name {
@@ -161,7 +162,7 @@
 		-webkit-line-clamp: 2;
 		line-clamp: 2;
 		font-size: 0.9rem;
-		color: color-mix(in oklab, var(--ink) 68%, transparent);
+		color: var(--ink-soft);
 		transition: color 400ms var(--ease);
 	}
 

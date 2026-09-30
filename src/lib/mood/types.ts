@@ -46,7 +46,10 @@ export type Manifest = {
 		anchors?: { path: string; format: 'json' };
 		anchorVectors?: { path: string; format: 'fp32-le' };
 	};
-	heads: { kind: 'anchors' | 'onnx' };
+	heads: {
+		kind: 'anchors' | 'onnx';
+		corrections?: Record<'light' | 'typeface' | 'scent', { prior: number[]; tau: number }>;
+	};
 	counts: { items: number };
 };
 
@@ -92,6 +95,13 @@ export type Mood = {
 	 * The catalog item named in the query, or null. Its vector guides the picks, which exclude the item itself.
 	 */
 	anchor: Item | null;
+};
+
+/** One work as a place of its own: the mood of its vibe line, and the works closest to it. */
+export type World = Pick<Mood, 'palette' | 'light' | 'typeface' | 'scent'> & {
+	item: Item;
+	/** Nearest works in category order. They exclude the work, its creator, and the path so far. */
+	neighbors: Item[];
 };
 
 export type MatchResult = {

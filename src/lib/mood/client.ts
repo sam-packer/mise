@@ -1,17 +1,19 @@
 // Send inference requests to the browser worker and pair responses with their callers.
 
-import type { Mood } from './types';
+import type { Mood, World } from './types';
 
 export type WorkerRequest =
-	{ type: 'init'; base: string } | { type: 'infer'; id: number; text: string };
+	| { type: 'init'; base: string }
+	| { type: 'infer'; id: number; text: string }
+	| { type: 'world'; id: number; item: string; exclude: string[] };
 export type WorkerResponse =
 	| { type: 'ready' }
 	| { type: 'failed'; message: string }
-	| { type: 'result'; id: number; mood: Mood }
+	| { type: 'result'; id: number; result: Mood | World }
 	| { type: 'error'; id: number; message: string };
 
 type Pending = {
-	resolve: (m: Mood) => void;
+	resolve: (r: Mood | World) => void;
 	reject: (e: Error) => void;
 };
 
@@ -42,7 +44,7 @@ export function start(base = '/bundle/') {
 			const p = pending.get(msg.id);
 			if (!p) return;
 			pending.delete(msg.id);
-			if (msg.type === 'result') p.resolve(msg.mood);
+			if (msg.type === 'result') p.resolve(msg.result);
 			else p.reject(new Error(msg.message));
 		}
 	};
@@ -53,13 +55,22 @@ export function start(base = '/bundle/') {
 	};
 }
 
-/** Wait for the bundle to load, then request a mood from the worker. */
-export async function infer(text: string): Promise<Mood> {
+/** Wait for the bundle to load, then send one request to the worker. */
+async function request(msg: WorkerRequest & { type: 'infer' | 'world' }): Promise<Mood | World> {
 	start();
 	await ready;
-	const id = nextId++;
 	return new Promise((resolve, reject) => {
-		pending.set(id, { resolve, reject });
-		worker!.postMessage({ type: 'infer', id, text } satisfies WorkerRequest);
+		pending.set(msg.id, { resolve, reject });
+		worker!.postMessage(msg);
 	});
+}
+
+/** Request a mood for a feeling. */
+export function infer(text: string): Promise<Mood> {
+	return request({ type: 'infer', id: nextId++, text }) as Promise<Mood>;
+}
+
+/** Request the world of one catalog item, with `exclude` item ids kept off its wall. */
+export function world(item: string, exclude: string[]): Promise<World> {
+	return request({ type: 'world', id: nextId++, item, exclude }) as Promise<World>;
 }

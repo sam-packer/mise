@@ -23,12 +23,16 @@ You can describe that feeling in a sentence, and mise gives you a place to start
 2. Press Enter. A soft pulse shows while the model loads. The page fades to the new palette, five
    tiles rise in (an artwork, a film, a song, a poem, and a book), and a scent writes itself out
    below them.
-3. Click a tile to see it large. A song plays a 30-second preview. Each tile links to its source,
-   such as IMDb, Hardcover, a music service, or the museum page.
-4. You can also type the name of a work or an artist, like "blade runner" or "pride and prejudice by
+3. Click a tile to travel into that work's world. The page takes on the work's own palette, light,
+   and typeface, and the works nearest to it fill the wall. A song plays a 30-second preview, and
+   each work links to its source, such as IMDb, Hardcover, a music service, or the museum page.
+4. Keep going: click any nearby work to travel again. A trail at the top shows your path. Click a
+   step, press Escape, or use the browser's back button to retrace it.
+5. You can also type the name of a work or an artist, like "blade runner" or "pride and prejudice by
    jane austen". Then a line reads "in the key of" that work, and the picks lean toward it.
-5. Copy the URL to share the feeling. Each feeling gets a short link like `mise.art/k3x9Q2a`.
-6. Edit the sentence to try again, or click the mise logo to start over.
+6. Copy the URL to share the feeling. Each feeling gets a short link like `mise.art/k3x9Q2a`.
+   Each path through its worlds gets its own short link too, and that link opens the same world.
+7. Edit the sentence to try again, or click the mise logo to start over.
 
 The page also covers the other states. The first visit shows a breathing background while the
 model downloads. A failed load or a failed search shows a short note under the text box. A shared
@@ -49,14 +53,15 @@ The course default is React and Next.js. The instructor approved Svelte and a fr
 
 The code is small and split by job:
 
-| Path                  | What it holds                                                             |
-| --------------------- | ------------------------------------------------------------------------- |
-| `src/routes/`         | the pages (the main page and attribution) and the three small API routes  |
-| `src/lib/components/` | the UI: the text box, the wall, a tile, the full view, the room light     |
-| `src/lib/mood/`       | the search engine: the web worker, the model call, and the catalog search |
-| `src/lib/color/`      | OKLab color math and the palette fade                                     |
-| `scripts/`            | a small sample bundle for local work, and a command line search           |
-| `ml/`                 | the pipeline that builds the catalog and trains the model                 |
+| Path                  | What it holds                                                                    |
+| --------------------- | -------------------------------------------------------------------------------- |
+| `src/routes/`         | the pages (the main page and attribution), the API routes, and the preview image |
+| `src/lib/components/` | the UI: the text box, the wall, a tile, a work's world, the room light           |
+| `src/lib/mood/`       | the search engine: the web worker, the model call, and the catalog search        |
+| `src/lib/server/`     | the preview image: its layout, its font, and the palette check                   |
+| `src/lib/color/`      | OKLab color math and the palette fade                                            |
+| `scripts/`            | a small sample bundle for local work, and a command line search                  |
+| `ml/`                 | the pipeline that builds the catalog and trains the model                        |
 
 ## APIs
 
@@ -66,19 +71,27 @@ At run time the app calls three services:
   them. When you open a song, the route `/api/preview/deezer/<id>` asks Deezer for a fresh link and
   redirects the audio player to it.
 - Google Fonts. Each mood picks a typeface. The page downloads only the letters it needs.
-- Cloudflare Workers KV. It stores the sentence behind each share link.
+- Cloudflare Workers KV. It stores the sentence behind each share link, the item ids of a shared
+  path, and the palette of the mood.
+
+Each share link also has its own preview image for chat apps and social sites. The route
+`/og/<code>.png` draws a 1200 by 630 PNG of the feeling in quotes, in the five colors of its mood,
+with the mise wordmark. The palette comes from your browser: after the page finds the mood, it sends
+the palette once to `/api/feeling/<code>/palette`. Until that palette arrives, the image uses the
+brand colors. The Worker draws the image with Satori and resvg in WebAssembly and keeps it in the
+Cloudflare cache. The feeling is set in EB Garamond Italic, under the SIL Open Font License.
 
 The catalog itself comes from APIs too. I built it ahead of time, because a live query to a dozen
 services for each feeling would be slow and would hit rate limits. The pipeline reads TMDB (films),
 Hardcover and Open Library (books), ListenBrainz, MusicBrainz, Last.fm and Deezer (songs),
-PoetryDB (poems), and open-access collections from the Met, the Art Institute of Chicago, and the
-Cleveland Museum of Art (artworks). Their data is everything the wall shows: the titles, the
-posters and covers, the song tags, and the links.
+PoetryDB (poems), and collections from the Met, the Art Institute of Chicago, Cleveland, NASA, and
+Smithsonian (artworks). It reads titles, posters and covers, song tags, and links from these
+sources. mise generates the feelings and mood descriptions.
 
 The search runs in your browser. A small language model (23 MB) turns your sentence into a list of
-numbers and compares it with the numbers for about 11,000 works. The same model also picks the
+numbers and compares it with the numbers for each work in the catalog. The same model also picks the
 palette, the light, the typeface, and the scent. After the first load, a search takes a fraction of
-a second. The server only stores the sentence for the share link.
+a second. The server only stores the sentence and its palette for the share link.
 
 ## Run it locally
 
@@ -115,16 +128,16 @@ to the screen width, and the small controls keep a touch target of at least 44 p
 
 ## Known limitations
 
-- The first visit is heavy. The model, the vectors, and the catalog are about 40 MB before
+- The first visit is heavy. The model, the vectors, and the catalog are about 40 to 50 MB before
   compression. On a slow phone connection the first search can take a while. Later visits use the
   browser cache.
-- The catalog is fixed at about 11,000 works, chosen in September 2026. Newer releases aren't in
-  it, and plenty of good older ones are missing too.
+- The catalog is a snapshot of the source collections. Run the [model pipeline](ml/README.md)
+  to select newer works. The next build targets 15,993 works; the published bundle can have fewer.
 - An AI model labeled the catalog. A local language model wrote the mood descriptions and palettes
   that the small model learned from, so the app's taste is partly that model's taste.
-- The poems and the art are public domain only. Modern poetry and art aren't in the catalog.
-- Names must be exact. An anchor needs the full title or artist name, and the name must be most
-  of the sentence. "blade runner" anchors, but "a rainy night like blade runner" does not.
+- The poems are public domain only. Modern poetry isn't in the catalog.
+- Names must be exact. An anchor needs the full title or artist name, and the name must be the
+  whole sentence (words like "movie" or "song" are fine). "blade runner" anchors, but "a rainy night like blade runner" does not.
 - It only understands English.
 - Share links are public. Anyone with a link can read its sentence.
 

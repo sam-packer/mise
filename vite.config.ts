@@ -8,6 +8,9 @@ export default defineConfig({
 	// The worker loads ORT WASM from the CDN to exclude files larger than 25 MiB from the app build.
 	// Keep Vite's default conditions so Svelte resolves to its browser build and runs onMount.
 	resolve: { conditions: [...defaultClientConditions, 'onnxruntime-web-use-extern-wasm'] },
+	// Leave the preview image renderer to the runtime: the dev server loads its Node build, and
+	// Wrangler bundles its workerd build, with the WebAssembly modules, into the worker.
+	ssr: { external: ['@cf-wasm/og', '@cf-wasm/resvg', '@cf-wasm/satori'] },
 	plugins: [
 		tailwindcss(),
 		sveltekit({

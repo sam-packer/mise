@@ -10,6 +10,7 @@
 
 		--ground: light-dark(#fff, #09090b);
 		--ink: light-dark(oklch(0.32 0 0), oklch(0.86 0 0));
+		--ink-soft: light-dark(oklch(0.48 0 0), oklch(0.7 0 0));
 		--mid-1: light-dark(oklch(0.94 0 0), oklch(0.25 0 0));
 		--mid-2: var(--mid-1);
 		--mid-3: var(--mid-1);

@@ -1,10 +1,9 @@
 <script lang="ts">
-	// Show song links and remember the user's preferred music service when storage is available.
+	// Link a song to each music service that has it. Each name opens that service directly.
 	import type { Item } from '$lib/mood/types';
 
 	type Platform = 'spotify' | 'apple' | 'deezer' | 'youtube';
 	const PLATFORMS: Platform[] = ['spotify', 'apple', 'deezer', 'youtube'];
-	const KEY = 'moodboard:platform';
 	const LABELS: Record<Platform, string> = {
 		spotify: 'Spotify',
 		apple: 'Apple Music',
@@ -14,49 +13,23 @@
 
 	let { links }: { links: Item['links'] } = $props();
 
-	function stored(): Platform {
-		try {
-			const v = localStorage.getItem(KEY);
-			if (PLATFORMS.includes(v as Platform)) return v as Platform;
-		} catch {
-			// Storage can be unavailable during server rendering or blocked by the browser.
-		}
-		return 'spotify';
-	}
-
-	let platform = $state<Platform>(stored());
 	const available = $derived(PLATFORMS.filter((p) => links[p]));
-	const href = $derived(links[platform] ?? links[available[0]] ?? links.primary);
-	const name = $derived(
-		links[platform] ? LABELS[platform] : available[0] ? LABELS[available[0]] : 'the song'
-	);
-
-	function choose(p: Platform) {
-		platform = p;
-		try {
-			localStorage.setItem(KEY, p);
-		} catch {
-			// Keep the selection for this view when the browser blocks storage.
-		}
-	}
 </script>
 
 <div class="links">
-	<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external link -->
-	<a {href} target="_blank" rel="noopener">open in {name} →</a>
-	{#if available.length > 1}
-		<div class="switch" role="group" aria-label="music service">
+	<p class="label">listen on</p>
+	{#if available.length}
+		<ul>
 			{#each available as p (p)}
-				<button
-					type="button"
-					class:on={p === platform}
-					aria-pressed={p === platform}
-					onclick={() => choose(p)}
-				>
-					{LABELS[p]}
-				</button>
+				<li>
+					<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external link -->
+					<a href={links[p]} target="_blank" rel="noopener">{LABELS[p]}</a>
+				</li>
 			{/each}
-		</div>
+		</ul>
+	{:else}
+		<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external link -->
+		<a href={links.primary} target="_blank" rel="noopener">the song →</a>
 	{/if}
 </div>
 
@@ -64,47 +37,45 @@
 	.links {
 		display: flex;
 		flex-direction: column;
-		gap: 0.6rem;
+		gap: 0.2rem;
 		align-items: flex-start;
 	}
 
+	.label {
+		margin: 0;
+		color: var(--ink-soft);
+		font-size: 0.85rem;
+		font-style: normal;
+		font-variant-caps: all-small-caps;
+		letter-spacing: 0.12em;
+	}
+
+	ul {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0 1.1rem;
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	/* Vertical padding makes a 44px touch target without moving the text. */
 	a {
+		display: inline-block;
+		padding: 0.7rem 0;
 		color: var(--ink);
-		text-decoration: none;
-		border-bottom: 1px solid color-mix(in oklab, var(--ink) 40%, transparent);
-		transition: border-color 300ms var(--ease);
+		text-decoration: underline 1px color-mix(in oklab, var(--ink) 40%, transparent);
+		text-underline-offset: 0.3em;
+		transition: text-decoration-color 300ms var(--ease);
 	}
 
 	a:hover,
 	a:focus-visible {
-		border-color: var(--ink);
+		text-decoration-color: var(--ink);
 	}
 
-	.switch {
-		display: flex;
-		gap: 1rem;
-		font-size: 0.85rem;
-	}
-
-	button {
-		padding: 0;
-		border: 0;
-		background: none;
-		color: var(--ink);
-		font: inherit;
-		opacity: 0.45;
-		cursor: pointer;
-		transition: opacity 300ms var(--ease);
-	}
-
-	button.on,
-	button:hover,
-	button:focus-visible {
-		opacity: 1;
-	}
-
-	button:focus-visible {
+	a:focus-visible {
 		outline: 1px solid var(--ink);
-		outline-offset: 4px;
+		outline-offset: 2px;
 	}
 </style>

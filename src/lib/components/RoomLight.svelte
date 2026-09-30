@@ -1,15 +1,30 @@
 <script lang="ts">
 	// Layer the selected light and grain behind the mood wall.
 	import { fade } from 'svelte/transition';
+	import { cssLight, LIGHTS } from '$lib/color/oklab';
 	import type { Light } from '$lib/mood/types';
 
-	let { light }: { light: Light | null } = $props();
+	let {
+		light,
+		strength = 1
+	}: {
+		light: Light | null;
+		/** From lightStrength: the share of the light that the text colors can hold. */
+		strength?: number;
+	} = $props();
 </script>
 
 <div class="room" aria-hidden="true">
 	{#key light}
 		{#if light}
-			<div class="light {light}" transition:fade={{ duration: 900 }}></div>
+			<div class="glow" style:opacity={strength} transition:fade={{ duration: 900 }}>
+				<div
+					class="light {light}"
+					style:--l0={cssLight(LIGHTS[light][0])}
+					style:--l1={LIGHTS[light][1] ? cssLight(LIGHTS[light][1]) : null}
+					style:--l2={LIGHTS[light][2] ? cssLight(LIGHTS[light][2]) : null}
+				></div>
+			</div>
 		{/if}
 	{/key}
 	<div class="grain"></div>
@@ -17,6 +32,7 @@
 
 <style>
 	.room,
+	.glow,
 	.light,
 	.grain {
 		position: fixed;
@@ -28,6 +44,10 @@
 		z-index: 0;
 	}
 
+	.glow {
+		transition: opacity 900ms var(--ease);
+	}
+
 	.grain {
 		opacity: 0.045;
 		mix-blend-mode: overlay;
@@ -37,48 +57,43 @@
 
 	.dawn {
 		background:
-			linear-gradient(to top, oklch(0.86 0.09 40 / 0.3), transparent 55%),
-			linear-gradient(to bottom, oklch(0.76 0.06 250 / 0.2), transparent 50%);
+			linear-gradient(to top, var(--l0), transparent 55%),
+			linear-gradient(to bottom, var(--l1), transparent 50%);
 	}
 
 	.golden-hour {
-		background: radial-gradient(90% 75% at 12% 100%, oklch(0.82 0.15 70 / 0.42), transparent 72%);
+		background: radial-gradient(90% 75% at 12% 100%, var(--l0), transparent 72%);
 	}
 
 	.overcast {
-		background: linear-gradient(oklch(0.82 0.02 240 / 0.24), oklch(0.72 0.025 240 / 0.24));
+		background: linear-gradient(var(--l0), var(--l1));
 	}
 
 	.neon {
 		background:
-			radial-gradient(45% 95% at 0% 50%, oklch(0.66 0.26 340 / 0.36), transparent 66%),
-			radial-gradient(45% 95% at 100% 50%, oklch(0.82 0.14 200 / 0.36), transparent 66%);
+			radial-gradient(45% 95% at 0% 50%, var(--l0), transparent 66%),
+			radial-gradient(45% 95% at 100% 50%, var(--l1), transparent 66%);
 	}
 
 	.candle {
-		background: radial-gradient(40% 38% at 50% 88%, oklch(0.82 0.15 62 / 0.45), transparent 100%);
+		background: radial-gradient(40% 38% at 50% 88%, var(--l0), transparent 100%);
 		animation: flicker 3.6s ease-in-out infinite;
 	}
 
 	.moonlight {
-		background: radial-gradient(75% 60% at 50% -12%, oklch(0.86 0.045 240 / 0.32), transparent 72%);
+		background: radial-gradient(75% 60% at 50% -12%, var(--l0), transparent 72%);
 	}
 
 	.desk-lamp {
 		background:
-			radial-gradient(48% 52% at 93% 3%, oklch(0.9 0.11 76 / 0.5), transparent 72%),
-			radial-gradient(130% 130% at 93% 3%, transparent 42%, oklch(0 0 0 / 0.14));
+			radial-gradient(48% 52% at 93% 3%, var(--l0), transparent 72%),
+			radial-gradient(130% 130% at 93% 3%, transparent 42%, var(--l1));
 	}
 
 	.fluorescent {
 		background:
-			repeating-linear-gradient(to bottom, oklch(1 0 0 / 0.025) 0 2px, transparent 2px 5px),
-			linear-gradient(
-				to bottom,
-				oklch(0.96 0.035 150 / 0.4),
-				oklch(0.9 0.02 150 / 0.14) 28%,
-				transparent 62%
-			);
+			repeating-linear-gradient(to bottom, var(--l0) 0 2px, transparent 2px 5px),
+			linear-gradient(to bottom, var(--l1), var(--l2) 28%, transparent 62%);
 	}
 
 	@keyframes flicker {

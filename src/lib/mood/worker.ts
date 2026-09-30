@@ -1,4 +1,4 @@
-// Web Worker: loads the bundle, runs the encoder, and answers infer requests.
+// Web Worker: loads the bundle, runs the encoder, and answers infer and world requests.
 
 import * as ort from 'onnxruntime-web';
 import { createMoodEngine, type MoodEngine } from './engine';
@@ -39,12 +39,13 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
 		engine ??= load(msg.base);
 		return;
 	}
-	const { id, text } = msg;
+	const { id } = msg;
 	try {
 		if (!engine) throw new Error('worker was not initialized');
 		const ready = await engine;
-		const mood = await ready.infer(text);
-		post({ type: 'result', id, mood });
+		const result =
+			msg.type === 'infer' ? await ready.infer(msg.text) : await ready.world(msg.item, msg.exclude);
+		post({ type: 'result', id, result });
 	} catch (err) {
 		post({ type: 'error', id, message: err instanceof Error ? err.message : String(err) });
 	}

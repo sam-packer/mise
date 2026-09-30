@@ -36,7 +36,7 @@ from mise_ml.inference import encode_batches
 from mise_ml.log import elapsed, get, num, progress
 from mise_ml.student import OUTPUT_NAMES, STUDENT_DIR, Student, load_student
 from mise_ml.util import make_deterministic, sha256_file, write_json
-from mise_ml.vocab import load_vocab
+from mise_ml.vocab import Vocab, load_vocab
 
 log = get(__name__)
 INPUT_NAMES = ("input_ids", "attention_mask", "token_type_ids")
@@ -275,6 +275,55 @@ def bundle_item(item: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def calibrate_heads(
+    session: ort.InferenceSession,
+    tokenizer: PreTrainedTokenizerBase,
+    catalog: Catalog,
+    vocab: Vocab,
+    cfg: StudentConfig,
+) -> dict[str, dict[str, Any]]:
+    """Fit training-label priors and choose each correction on validation feelings."""
+    qs = load_queries(catalog, vocab, TeacherConfig())
+    names = ("light", "typeface", "scent")
+    train = qs.where("train")
+    val = qs.where("val")
+    val = val[np.any([getattr(qs, name)[val] >= 0 for name in names], axis=0)]
+    if not len(val):
+        raise ValueError("no labeled validation feelings for room correction")
+    # Match browser inference: dynamic int8 ranges depend on the other rows in a batch.
+    outputs = [
+        onnx_run(session, tokenizer, [qs.texts[i]], cfg.max_length)
+        for i in progress(val, desc="room correction", unit="feeling")
+    ]
+    corrections = {}
+    for name, size in zip(names, vocab.sizes(), strict=True):
+        labels = getattr(qs, name)
+        training = labels[train]
+        training = training[training >= 0]
+        labeled = labels[val] >= 0
+        if not len(training) or not labeled.any():
+            raise ValueError(f"no training or validation labels for {name}")
+        # Add one count per class so an unused label has a finite log prior.
+        counts = np.bincount(training, minlength=size).astype(np.float64) + 1
+        prior = counts / counts.sum()
+        logits = np.concatenate([out[name] for out in outputs])[labeled].astype(np.float64)
+        target = labels[val][labeled]
+        accuracy = {
+            tau: float(((logits - tau * np.log(prior)).argmax(axis=1) == target).mean())
+            for tau in (0, 0.25, 0.5, 0.75)
+        }
+        tau = max(tau for tau, score in accuracy.items() if score >= accuracy[0] - 0.02)
+        corrections[name] = {"prior": prior.tolist(), "tau": tau}
+        log.info(
+            "%s correction: tau %.2f, val choice accuracy %.4f -> %.4f",
+            name,
+            tau,
+            accuracy[0],
+            accuracy[tau],
+        )
+    return corrections
+
+
 def validate_items(items: list[dict[str, Any]]) -> list[str]:
     problems = []
     for it in items:
@@ -390,7 +439,10 @@ def write_bundle(
             "names": {"path": "search-index.json", "format": "json"},
             "vocab": {"path": "vocab.json", "format": "json"},
         },
-        "heads": {"kind": "onnx"},
+        "heads": {
+            "kind": "onnx",
+            "corrections": calibrate_heads(session, tokenizer, catalog, load_vocab(), student_cfg),
+        },
         "counts": {"items": len(items)},
     }
     write_json(BUNDLE / "manifest.json", manifest)
