@@ -15,7 +15,7 @@
 		leaving,
 		face,
 		note,
-		heading = $bindable(null),
+		heading = $bindable(),
 		onstep,
 		onclose,
 		ontravel
