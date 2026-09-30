@@ -23,12 +23,15 @@ You can describe that feeling in a sentence, and mise gives you a place to start
 2. Press Enter. A soft pulse shows while the model loads. The page fades to the new palette, five
    tiles rise in (an artwork, a film, a song, a poem, and a book), and a scent writes itself out
    below them.
-3. Click a tile to see it large. A song plays a 30-second preview. Each tile links to its source,
-   such as IMDb, Hardcover, a music service, or the museum page.
-4. You can also type the name of a work or an artist, like "blade runner" or "pride and prejudice by
+3. Click a tile to travel into that work's world. The page takes on the work's own palette, light,
+   and typeface, and the works nearest to it fill the wall. A song plays a 30-second preview, and
+   each work links to its source, such as IMDb, Hardcover, a music service, or the museum page.
+4. Keep going: click any nearby work to travel again. A trail at the top shows your path. Click a
+   step, press Escape, or use the browser's back button to retrace it.
+5. You can also type the name of a work or an artist, like "blade runner" or "pride and prejudice by
    jane austen". Then a line reads "in the key of" that work, and the picks lean toward it.
-5. Copy the URL to share the feeling. Each feeling gets a short link like `mise.art/k3x9Q2a`.
-6. Edit the sentence to try again, or click the mise logo to start over.
+6. Copy the URL to share the feeling. Each feeling gets a short link like `mise.art/k3x9Q2a`.
+7. Edit the sentence to try again, or click the mise logo to start over.
 
 The page also covers the other states. The first visit shows a breathing background while the
 model downloads. A failed load or a failed search shows a short note under the text box. A shared
@@ -52,7 +55,7 @@ The code is small and split by job:
 | Path                  | What it holds                                                             |
 | --------------------- | ------------------------------------------------------------------------- |
 | `src/routes/`         | the pages (the main page and attribution) and the three small API routes  |
-| `src/lib/components/` | the UI: the text box, the wall, a tile, the full view, the room light     |
+| `src/lib/components/` | the UI: the text box, the wall, a tile, a work's world, the room light    |
 | `src/lib/mood/`       | the search engine: the web worker, the model call, and the catalog search |
 | `src/lib/color/`      | OKLab color math and the palette fade                                     |
 | `scripts/`            | a small sample bundle for local work, and a command line search           |
