@@ -126,8 +126,8 @@ to the screen width, and the small controls keep a touch target of at least 44 p
 - An AI model labeled the catalog. A local language model wrote the mood descriptions and palettes
   that the small model learned from, so the app's taste is partly that model's taste.
 - The poems and the art are public domain only. Modern poetry and art aren't in the catalog.
-- Names must be exact. An anchor needs the full title or artist name, and the name must be most
-  of the sentence. "blade runner" anchors, but "a rainy night like blade runner" does not.
+- Names must be exact. An anchor needs the full title or artist name, and the name must be the
+  whole sentence (words like "movie" or "song" are fine). "blade runner" anchors, but "a rainy night like blade runner" does not.
 - It only understands English.
 - Share links are public. Anyone with a link can read its sentence.
 

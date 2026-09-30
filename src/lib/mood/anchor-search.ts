@@ -3,8 +3,11 @@ import type { Category, Item } from './types';
 
 type AnchorItem = Pick<Item, 'category' | 'title' | 'creator' | 'album'>;
 
-/** Share of the query's content words that a named entity must cover. */
-const ANCHOR_COVERAGE = 0.75;
+/**
+ * Share of the query's content words that a named entity must cover. A name must be the whole query,
+ * because a partial cover makes a feeling such as "angry and i don't know why" name a song.
+ */
+const ANCHOR_COVERAGE = 1;
 const STOP_WORDS = new Set(
 	(
 		'the a an of and or by in on at to for with from feat ft i im me my mine you your we our us ' +
