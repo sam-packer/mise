@@ -31,13 +31,9 @@ __pycache__/
 !.env.example
 !.env.test
 
-# Local design notes (not part of the repo)
-/docs/
-
 # Editors and tools
 .idea/
 .claude/settings.local.json
-.superpowers/
 
 # OS
 .DS_Store

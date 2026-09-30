@@ -1,83 +1,155 @@
 # mise
 
-Describe a feeling in a sentence. The page takes its colors, light, and typeface, and shows a small wall
-to match: an artwork, a film, a song, a poem, a book, and a scent. The model runs in the browser.
-Search runs in the browser worker. It loads the public catalog once and scans every item locally.
+Live at [mise.art](https://mise.art).
 
-## Run the app
+Type how you feel in one sentence, like "a snowy december and i just made warm hot chocolate". mise
+answers with a small wall of things that match it: an artwork, a film, a song, a poem, and a book.
+The whole page takes on the feeling too. Its colors, its light, and its typeface change, and a line
+at the bottom names a scent.
+
+## Who it is for
+
+mise is for anyone who knows how they feel but not what to watch, read, or listen to next.
+
+## The problem
+
+Recommendation apps ask what you liked before. Search boxes want a title, a genre, or a name.
+Neither one helps when all you have is a mood, like "the last warm night before school starts".
+You can describe that feeling in a sentence, and mise gives you a place to start from it.
+
+## How it works for the user
+
+1. Open the site. A sample feeling rotates in the text box. Press Tab to use it, or type your own.
+2. Press Enter. A soft pulse shows while the model loads. The page fades to the new palette, five
+   tiles rise in (an artwork, a film, a song, a poem, and a book), and a scent writes itself out
+   below them.
+3. Click a tile to see it large. A song plays a 30-second preview. Each tile links to its source,
+   such as IMDb, Hardcover, a music service, or the museum page.
+4. You can also type the name of a work or an artist, like "blade runner" or "pride and prejudice by
+   jane austen". Then a line reads "in the key of" that work, and the picks lean toward it.
+5. Copy the URL to share the feeling. Each feeling gets a short link like `mise.art/k3x9Q2a`.
+6. Edit the sentence to try again, or click the mise logo to start over.
+
+The page also covers the other states. The first visit shows a breathing background while the
+model downloads. A failed load or a failed search shows a short note under the text box. A shared
+link that no longer exists says "that feeling has faded". A song without a preview hides the play
+button.
+
+## Tech stack
+
+| Part             | What I used                                                                                     |
+| ---------------- | ----------------------------------------------------------------------------------------------- |
+| Front end        | SvelteKit 2 and Svelte 5 (runes), TypeScript, Tailwind CSS 4                                    |
+| In-browser model | ONNX Runtime Web and Hugging Face tokenizers, in a web worker                                   |
+| Hosting          | Cloudflare Workers, with Workers KV for share links and R2 for the model and images             |
+| Model training   | Python with uv, PyTorch, Hugging Face Transformers, and ONNX (see [ml/README.md](ml/README.md)) |
+| Tooling          | Bun, Vite, ESLint, Prettier, svelte-check                                                       |
+
+The course default is React and Next.js. The instructor approved Svelte and a free choice of host.
+
+The code is small and split by job:
+
+| Path                  | What it holds                                                             |
+| --------------------- | ------------------------------------------------------------------------- |
+| `src/routes/`         | the pages (the main page and attribution) and the three small API routes  |
+| `src/lib/components/` | the UI: the text box, the wall, a tile, the full view, the room light     |
+| `src/lib/mood/`       | the search engine: the web worker, the model call, and the catalog search |
+| `src/lib/color/`      | OKLab color math and the palette fade                                     |
+| `scripts/`            | a small sample bundle for local work, and a command line search           |
+| `ml/`                 | the pipeline that builds the catalog and trains the model                 |
+
+## APIs
+
+At run time the app calls three services:
+
+- Deezer. Its preview links expire after about 15 minutes, so the catalog can't store
+  them. When you open a song, the route `/api/preview/deezer/<id>` asks Deezer for a fresh link and
+  redirects the audio player to it.
+- Google Fonts. Each mood picks a typeface. The page downloads only the letters it needs.
+- Cloudflare Workers KV. It stores the sentence behind each share link.
+
+The catalog itself comes from APIs too. I built it ahead of time, because a live query to a dozen
+services for each feeling would be slow and would hit rate limits. The pipeline reads TMDB (films),
+Hardcover and Open Library (books), ListenBrainz, MusicBrainz, Last.fm and Deezer (songs),
+PoetryDB (poems), and open-access collections from the Met, the Art Institute of Chicago, and the
+Cleveland Museum of Art (artworks). Their data is everything the wall shows: the titles, the
+posters and covers, the song tags, and the links.
+
+The search runs in your browser. A small language model (23 MB) turns your sentence into a list of
+numbers and compares it with the numbers for about 11,000 works. The same model also picks the
+palette, the light, the typeface, and the scent. After the first load, a search takes a fraction of
+a second. The server only stores the sentence for the share link.
+
+## Run it locally
+
+You need [Bun](https://bun.sh).
+
+```sh
+bun install
+bun run dev
+```
+
+Open http://localhost:5173. The local site loads the published model from `cdn.mise.art`, so you
+don't need to train anything. Share links work locally too: Wrangler gives the dev server an
+empty local copy of the KV store.
+
+To work offline with a small hand-made sample instead of the real catalog:
 
 ```powershell
-bun install
 bun run stub
 $env:PUBLIC_BUNDLE_URL = '/bundle/'
 bun run dev
 ```
 
-Run `bun run stub` for a local sample. It needs Bun and network access, but no Python.
-The stub writes to `ml/out/stub/bundle/` and copies the bundle to `static/bundle/`.
-It keeps the trained export in `ml/out/bundle/`.
-For a trained export, run `uv run train` from `ml/`.
-Use `PUBLIC_BUNDLE_URL=/bundle/` to select local files. Without an override, the app uses
-`src/lib/bundle.ts` to select the published bundle.
+You can also search from the terminal: `bun run query "a dark and stormy night"`.
 
-Try a feeling in the terminal: `bun run query "a dark and stormy night"`.
-The command uses the same engine as the browser with the installed local bundle.
+The app has no secrets. The API keys are only for the training pipeline and live in `ml/.env`,
+which git ignores. [ml/.env.example](ml/.env.example) lists them.
 
-## Train the real model
+To deploy, run `bun run deploy`. It builds the site and publishes it to Cloudflare Workers.
 
-You need an NVIDIA GPU with about 32 GB (an RTX 5090), about 60 GB of free disk, and keys for TMDB,
-Hardcover, ListenBrainz, and Last.fm in `ml/.env` (see `ml/.env.example`).
+## Viewing context
 
-```sh
-cd ml
-uv sync
-uv run download
-uv run label
-uv run train
-uv run publish
-```
+I designed for desktop and mobile equally. The layout, the tile sizes, and the type scale adapt
+to the screen width, and the small controls keep a touch target of at least 44 px.
 
-Run `download` to fetch and resolve the catalog. Run `label` for the local LLM pass.
-Run `train` to train, export, evaluate, and install only when the ship gate passes.
-Run `publish` separately to upload the installed public bundle to R2. It updates
-`src/lib/bundle.ts` to select the release.
-The full pipeline can run overnight. Stop at any time; a rerun skips finished work.
-Use `--help` with any command. See [ml/README.md](ml/README.md) for details.
+## Known limitations
 
-Before the first run, add about 300 feelings to `ml/eval_feelings.jsonl`, one sentence per line. The eval
-step measures the model against them.
+- The first visit is heavy. The model, the vectors, and the catalog are about 40 MB before
+  compression. On a slow phone connection the first search can take a while. Later visits use the
+  browser cache.
+- The catalog is fixed. It holds about 11,000 works, chosen in September 2026. A new album or
+  film doesn't show up until I rebuild the catalog. Popular works are easy to name as an anchor, but
+  plenty of good ones are missing.
+- An AI model labeled the training data. A local language model wrote the mood descriptions,
+  palettes, and example feelings that the model learns from. Its taste becomes the app's taste.
+  The test set of 290 feelings was also AI-drafted. I accepted it without edits, so the scores
+  measure how well the small model copies the big one, not what people think.
+- The poems and the art are public domain only. Modern poetry and art aren't in the catalog.
+- Names must be exact. An anchor needs the full title or artist name, and the name must be most
+  of the sentence. "blade runner" anchors, but "a rainy night like blade runner" does not.
+- It only understands English.
+- Share links are public. Anyone with a link can read its sentence.
 
-After publish, commit `src/lib/bundle.ts`. Then run
-`bun run deploy`. Keep this release order.
+## What I would improve next
 
-## Deploy
+- Write 50 to 100 test feelings by hand, so the scores reflect real people.
+- Show the model the album art as well as the song tags. Many songs have few tags, and the cover
+  says a lot about the mood. I want to try this on a few hundred songs first and compare.
+- Grow the catalog, especially recent music.
+- Shrink the first download with a smaller model.
+- Apply what I learn in the design half of the course: the layout of the wall, the empty state,
+  and how the anchor line reads.
 
-```sh
-bun run deploy
-```
+## AI assistance
 
-It builds the site and deploys the app to Cloudflare Workers. The public bundle lives in the
-`mise` R2 bucket, served at `cdn.mise.art`. See [ml/README.md](ml/README.md#publish).
-
-The bundle contains the ONNX model, tokenizer, vocab, images, item records, fp16 item vectors,
-and compact name data. Its manifest lists all files and formats. The worker decodes vectors
-once to float32. Each search runs the encoder, heads, name matching, and an exact catalog scan.
-Named works use a 70% item / 30% query blend and exclude the same title and creator from picks.
-The stub also includes palette and label anchors for its heads.
-
-A link to a feeling looks like `mise.art/<code>`. The Worker keeps each code's feeling in the KV
-namespace `MOODS`. To make a new one, run `bunx wrangler kv namespace create moods` and put its id in
-`wrangler.jsonc`.
-
-## Layout
-
-| Path       | Contents                                         |
-| ---------- | ------------------------------------------------ |
-| `src/`     | the SvelteKit app                                |
-| `scripts/` | the stub bundle build, from hand-curated sources |
-| `ml/`      | the training pipeline                            |
+I used Claude Code and OpenAI Codex as coding partners. They wrote most of the code from my
+direction. Every change went through a branch and a pull request. I decided what the product is, who it's
+for, and how it should look and feel. I rejected ideas that made it more complex than it needed to
+be: a server-side search, a request rate limit, and a private catalog.
 
 ## Credit
 
-The idea of turning a described feeling into picks across media was sparked by
-[Wave](https://github.com/SophiaYifei/wave-recsys). mise shares no code or design with it.
+[Wave](https://github.com/SophiaYifei/wave-recsys) sparked the idea of turning a described feeling
+into picks across media. mise shares no code or design with it. The [attribution page](https://mise.art/attribution)
+credits every data source.
