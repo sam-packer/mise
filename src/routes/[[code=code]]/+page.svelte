@@ -58,6 +58,11 @@
 	let pending = $state<string | null>(null);
 	/** The item whose world the user left last, so that its tile takes the transition name back. */
 	let left = $state<string | null>(null);
+	/**
+	 * The path to keep on screen while the browser's own Back or Forward starts a view transition. The
+	 * router sets the new state before the transition captures the old view, so the page holds it.
+	 */
+	let hold = $state<string[] | null>(null);
 	/** The worlds that stay on screen while they fade out, after the mark starts over. */
 	let held = $state<{ layers: Layer[]; feeling: string } | null>(null);
 
@@ -82,13 +87,15 @@
 	let reduced = false;
 	/** The world that the color tokens show now. */
 	let tinted: World | null = null;
+	/** back() moves through history inside its own view transition. */
+	let ownMove = false;
 	/** The path before the last history move. Navigation, travel, and the popstate listener set it. */
 	let shownTrail: string[] = [];
 
 	const pathKey = (ids: string[]) => ids.join('\n');
 	const urlMood = $derived(data.text);
 	/** The path that the URL names. A history entry that the page pushed keeps it in its state. */
-	const target = $derived(page.state.trail ?? data.trail);
+	const target = $derived(hold ?? page.state.trail ?? data.trail);
 	/** The shortest path that Back in history reaches from this entry. */
 	const floor = $derived(page.state.floor ?? data.trail.length);
 	const trail = $derived(mood ? target : []);
@@ -429,7 +436,15 @@
 		}
 		await viewTransition(() =>
 			new Promise<void>((resolve) => {
-				addEventListener('popstate', () => resolve(), { once: true });
+				ownMove = true;
+				addEventListener(
+					'popstate',
+					() => {
+						ownMove = false;
+						resolve();
+					},
+					{ once: true }
+				);
 				history.go(-count);
 			}).then(async () => {
 				await tick();
@@ -461,22 +476,53 @@
 		const onscroll = () => scrolls.set(key, scrollY);
 		const onpopstate = async () => {
 			// For another feeling the router navigates later, and afterNavigate takes over. Every path
-			// of this feeling in history has its code in the session cache.
-			if (shared.get(location.pathname.slice(1))?.text !== urlMood) return;
-			// This listener can run before the router's, which sets page.state for a step on the path.
-			// Wait for the rest of the event. Copy the scroll positions first: the router scrolls, and
-			// the scroll event that follows would record its position for the new path.
+			// of this feeling in history has its code in the session cache, with the path it names.
+			const entry = shared.get(location.pathname.slice(1));
+			if (entry?.text !== urlMood) return;
+			// This listener runs before the router's, which sets page.state and scrolls. Copy the scroll
+			// positions first: the scroll event that follows would record the router's position.
 			const saved = new Map(scrolls);
-			await new Promise((resolve) => setTimeout(resolve));
+			const own = ownMove;
 			const before = shownTrail;
-			const after = trail;
-			shownTrail = after;
-			const y = saved.get(pathKey(after)) ?? 0;
-			const shorter = after.length < before.length;
-			if (shorter) left = before[before.length - 1];
-			else if (after.length > before.length) left = null;
-			await tick();
-			scrollTo(0, y);
+			const next = entry.trail;
+			const settle = async () => {
+				hold = null;
+				const after = trail;
+				shownTrail = after;
+				if (after.length < before.length) left = before[before.length - 1];
+				pending = null;
+				await tick();
+				scrollTo(0, saved.get(pathKey(after)) ?? 0);
+				return after;
+			};
+			let after: string[];
+			if (own || reduced || !document.startViewTransition) {
+				// Wait for the rest of the event, so the router has set page.state.
+				await new Promise((resolve) => setTimeout(resolve));
+				if (!own && next.length > before.length) left = null;
+				after = await settle();
+			} else {
+				// The browser's own Back or Forward: hold the path on screen until the transition captures
+				// it, and name the tile that the morph joins: the one to return to, or the one to enter.
+				const y = scrollY;
+				hold = before;
+				if (next.length < before.length) left = before[before.length - 1];
+				else if (next.length > before.length) {
+					left = null;
+					pending = next[before.length] ?? null;
+				}
+				// The router scrolls at once. Show the old view again in the frame that captures it.
+				requestAnimationFrame(() => {
+					if (hold) scrollTo(0, y);
+				});
+				let done: string[] = [];
+				const vt = document.startViewTransition(async () => {
+					done = await settle();
+				});
+				vt.ready.catch(() => {});
+				await vt.updateCallbackDone.catch(() => {});
+				after = done;
+			}
 			refocus(before, after);
 		};
 		addEventListener('scroll', onscroll, { passive: true });
