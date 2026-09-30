@@ -1,8 +1,7 @@
-"""The local labeling LLM: Qwen3.5 in-process with transformers, JSON forced by a grammar.
+"""Run local Qwen3.5 labeling jobs with transformers and resumable caches.
 
-xgrammar compiles each JSON schema (with the vocab-id enums) into a grammar. A logits
-processor masks every token that would break the schema, so each finished answer is valid
-JSON. jsonschema checks it again, because a hit on max_new_tokens can still cut an answer.
+xgrammar restricts generation to the requested JSON schema.
+jsonschema checks each answer because the token limit can cut generation short.
 """
 
 import gc
@@ -161,12 +160,10 @@ class LocalLLM:
     def generate(
         self, requests: list[Request], max_new_tokens: int, sample: bool = False
     ) -> tuple[list[str], int]:
-        """The answers and the number of new tokens generated.
+        """Return answers and the number of generated tokens.
 
-        A batch that runs out of GPU memory lowers the batch limit for its token limit to
-        three quarters of its size and runs again, down to one request, so the longest batches
-        at the end of a job slow down instead of stopping the run. Later batches start at the
-        lower limit and do not repeat the failed attempt.
+        On a GPU memory failure, retry with three quarters of the batch size, down to one request.
+        Reuse that lower batch limit for later requests with the same token limit.
         """
         limit = self.batch_size(max_new_tokens, len(requests))
         if len(requests) > limit:
@@ -214,9 +211,9 @@ class LocalLLM:
         grammars = [self.grammar(r.generation_schema or r.schema) for r in requests]
         prefill: dict[str, Any] = {}
         if all(r.image is None for r in requests):
-            # Chunked prefill keeps prefill memory flat as the prompt grows. Qwen builds 3D
-            # mrope positions, and the chunk loop slices them on the batch axis; plain 2D text
-            # positions are exact for text-only input, and Qwen expands them itself.
+            # Chunked prefill bounds memory use as the prompt grows.
+            # The chunk loop slices Qwen's 3D mrope positions on the batch axis.
+            # Supply exact 2D text positions; Qwen expands them to the required shape.
             positions = (inputs["attention_mask"].long().cumsum(-1) - 1).clamp(min=0)
             prefill = {"position_ids": positions, "prefill_chunk_size": PREFILL_CHUNK}
         out = self.model.generate(
@@ -237,6 +234,7 @@ class LocalLLM:
 
 
 def parse_answer(text: str, unit: Unit, parse: Parse) -> tuple[dict[str, Any] | None, str | None]:
+    """Validate an answer and retain accepted rows when other rows need a retry."""
     try:
         data = json.loads(text)
         jsonschema.validate(data, unit.request.schema)
@@ -266,13 +264,11 @@ def cached_records(keys: list[str], data: dict[str, Any], parse: Parse) -> list[
 class Job:
     """A resumable labeling job.
 
-    The cache holds one line per answered request, with the job signature (model,
-    revision, system prompt, schema, token limit) and one fingerprint per key (the hash
-    of that key's own prompt content). A key is done when an accepted record with the current
-    signature and fingerprint covers it. Keys without an accepted record remain pending; a
-    partly rejected numbered answer keeps its accepted rows. A new model, revision, or prompt
-    therefore
-    redoes exactly the affected keys, and a rerun never redoes finished work.
+    Store one cache line per answered request.
+    The signature identifies the model, revision, system prompt, schema, and token limit.
+    Each key has a fingerprint of its own prompt content.
+    Reuse accepted records only when both the signature and fingerprint match.
+    Keep accepted rows from a partly rejected numbered answer and retry the remaining keys.
     """
 
     def __init__(self, name: str, output: Path, cfg: ProfileConfig) -> None:
@@ -364,8 +360,7 @@ class Job:
             )
 
     def records(self, sig: str, prints: dict[str, str], parse: Parse) -> dict[str, Record]:
-        # Keep each parsed record on its own merits: a cached answer can cover keys that are
-        # no longer wanted, and its other keys must not be lost with them.
+        # Retain valid records even when the same cached answer also contains unwanted keys.
         records: dict[str, Record] = {}
         for e in iter_jsonl(self.cache):
             if e["sig"] != sig or e.get("data") is None:

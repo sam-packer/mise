@@ -1,3 +1,5 @@
+"""Share prediction heads and loss functions between the teacher and student models."""
+
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -15,7 +17,7 @@ class Mlp(nn.Sequential):
 
 
 def decode_palette(raw: torch.Tensor) -> torch.Tensor:
-    """(B, 15) raw head output to (B, 5, 3) OKLab: L in [0, 1], a and b in [-0.4, 0.4]."""
+    """Convert (B, 15) values to (B, 5, 3) OKLab. Limit L to [0, 1] and a/b to [-0.4, 0.4]."""
     x = raw.view(-1, 5, 3)
     lightness = torch.sigmoid(x[..., :1])
     ab = 0.4 * torch.tanh(x[..., 1:])

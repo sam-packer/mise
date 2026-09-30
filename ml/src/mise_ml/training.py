@@ -1,4 +1,4 @@
-"""Shared training schedule."""
+"""Build the warmup and cosine learning-rate schedule for teacher and student training."""
 
 import math
 

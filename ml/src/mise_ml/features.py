@@ -1,8 +1,7 @@
-"""Frozen Qwen3-Embedding features, computed once and cached on disk by text.
+"""Cache frozen Qwen3-Embedding features on disk for teacher training.
 
-The encoding follows the Qwen3-Embedding model card: queries get a one-sentence
-instruction, documents (items) get none, the tokenizer appends <|endoftext|>, padding is on
-the left, the feature is the last-token hidden state, and it is L2-normalized.
+Queries receive an instruction; items do not.
+Use left padding and normalize the last token's hidden state, as the model card specifies.
 """
 
 import functools
@@ -39,6 +38,7 @@ class QwenEncoder:
         self.tokenizer = AutoTokenizer.from_pretrained(
             cfg.backbone, revision=cfg.revision, padding_side="left"
         )
+        # The model's tokenizer appends <|endoftext|>, whose hidden state represents the text.
         self.model = AutoModel.from_pretrained(
             cfg.backbone, revision=cfg.revision, dtype=torch.bfloat16
         )
@@ -74,8 +74,8 @@ def shared_encoder(cfg: TeacherConfig) -> QwenEncoder:
 class FeatureStore:
     """One array file plus a text list per template. Missing texts are encoded on demand.
 
-    The file name holds the model id and revision, so features of another backbone are
-    never reused. Labeled and distillation feelings share the queries store and template.
+    Put the model ID and revision in the file name to separate features from different backbones.
+    Labeled and distillation feelings share the queries store and template.
     """
 
     def __init__(self, name: str, template: str, cfg: TeacherConfig) -> None:
