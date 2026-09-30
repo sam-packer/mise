@@ -129,8 +129,8 @@ TAG_JUNK = re.compile(r"seen live|favou?rites?|\bmy\b|\bbest\b|spotify|albums? i
 # Title clues supplement Deezer's record_type and Various Artists album credit.
 COMPILATION_TITLE = re.compile(
     # "gold" only as the last word of a hits album (ABBA Gold), not After the Gold Rush.
-    r"\b(greatest (?:hitz?|recordings|songs)|best of|hits|collection|anthology|essentials?|"
-    r"ultimate|gold$|sessions|"
+    r"\b(greatest (?:hitz?|recordings|songs)|best of|hits|collection|collected|anthology|"
+    r"essentials?|ultimate|gold$|sessions|"
     r"singles|classics|remixes|complete|season\s+\d+|playlist|music from around|original series|"
     r"soundtrack|motion picture|compilation|coffret|awards|radio \d+|"
     # A volume number after a series name; a studio album can start with it (Vol. 3 The...).
@@ -209,6 +209,40 @@ class Resolver:
         self.met_images: dict[str, str] = {}
         self.aic_images: dict[str, str] = {}
         self.song_tags: dict[tuple[str, str], list[tuple[int, str]]] = {}
+        # Official release years of each recording, from batched searches (prefetch_song_years).
+        # An empty list marks a recording with no official release, such as a bootleg.
+        self.official_years: dict[str, list[int]] = {}
+
+    def prefetch_song_years(self, rows: list[Record]) -> None:
+        """Read the official release years of many recordings, 100 recordings per request.
+
+        MusicBrainz allows one request per second, so a lookup per song would take over an hour
+        for a few thousand songs. Only a recording with no official release needs its own lookup.
+        """
+        ids = sorted(
+            {
+                mbid
+                for r in rows
+                if r["category"] == "song"
+                and (mbid := r["source"].get("mbid"))
+                and mbid not in self.official_years
+            }
+        )
+        for i in progress(range(0, len(ids), 100), desc="song years", unit="batch"):
+            query = "rid:(" + " OR ".join(ids[i : i + 100]) + ")"
+            params = urlencode({"query": query, "fmt": "json", "limit": 100})
+            try:
+                body = self.http.get_json(f"https://musicbrainz.org/ws/2/recording?{params}") or {}
+            except FetchError as e:
+                log.warning("song years: a batch failed; its songs use one lookup each: %s", e)
+                continue
+            for rec in body.get("recordings", []):
+                self.official_years[rec["id"]] = sorted(
+                    year
+                    for release in rec.get("releases", [])
+                    if release.get("status") == "Official"
+                    and (year := year_or_none((release.get("date") or "")[:4])) is not None
+                )
 
     def image(
         self, url: str, item_id: str, *, min_edge: int = 64, refresh: bool = False
@@ -420,6 +454,13 @@ class Resolver:
 
     def _song_facts(self, r: Record) -> Record:
         original_mbid = r["source"].get("mbid")
+        batched = self.official_years.get(original_mbid) if original_mbid else None
+        if batched:
+            # The batched search already has this recording's official releases.
+            years = list(batched)
+            if r.get("year") is not None:
+                years.append(r["year"])
+            return {**r, "year": min(years)}
         groups = self.release_groups(r)
         if not groups and r["source"].get("artist_mbid"):
             # ListenBrainz can choose a bootleg recording of a familiar song. Its
@@ -1083,6 +1124,7 @@ def run() -> None:
     )
 
     resolver = Resolver(cfg)
+    resolver.prefetch_song_years((resolved if refresh_facts else []) + by_cat.get("song", []))
     repair_songs(resolver, resolved, facts=refresh_facts)
     if refresh_facts:
         for r in progress(
