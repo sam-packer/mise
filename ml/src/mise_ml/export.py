@@ -203,7 +203,8 @@ def quantization_recipes(fp32: Path) -> dict[str, tuple[bool, list[str]]]:
 
 def retrieval_measurement(
     path: Path, tokenizer, catalog: Catalog, qs, cfg: StudentConfig, split: str = "val"
-) -> float:
+) -> tuple[float, np.ndarray]:
+    """Validation recall@10 of a graph, and its item vectors for the bundle."""
     rows = qs.where(split)
     rows = rows[qs.pos[rows] >= 0]
     if not len(rows):
@@ -214,7 +215,7 @@ def retrieval_measurement(
     queries = np.concatenate(
         [onnx_run(session, tokenizer, [qs.texts[i]], cfg.max_length)["embedding"] for i in rows]
     )
-    return recall_at_k(queries, qs.pos[rows], items, catalog.categories)
+    return recall_at_k(queries, qs.pos[rows], items, catalog.categories), items
 
 
 def select_quantization(
@@ -224,13 +225,15 @@ def select_quantization(
     catalog: Catalog,
     cfg: StudentConfig,
     export_cfg: ExportConfig,
-) -> dict:
+) -> tuple[dict, np.ndarray]:
+    """Pick the int8 recipe by validation recall. Return the measurements and the chosen graph's
+    item vectors, so the bundle does not encode the catalog again."""
     qs = load_queries(catalog, load_vocab(), TeacherConfig())
-    reference = retrieval_measurement(fp32, tokenizer, catalog, qs, cfg)
+    reference, _ = retrieval_measurement(fp32, tokenizer, catalog, qs, cfg)
     log.info("fp32 val recall@10 %.6f", reference)
     measurements = {"fp32": {"val_recall@10": reference, "bytes": fp32.stat().st_size}}
     best = None
-    scores: dict[str, float] = {}
+    scores: dict[str, tuple[float, np.ndarray]] = {}
     for name, (per_channel, exclude) in quantization_recipes(fp32).items():
         path = target.with_name(f"{name}.onnx")
         quantize(fp32, path, per_channel=per_channel, exclude=exclude)
@@ -246,7 +249,7 @@ def select_quantization(
             scores[digest] = retrieval_measurement(path, tokenizer, catalog, qs, cfg)
         else:
             log.info("%s produces an identical graph; reuse its measured recall", name)
-        recall = scores[digest]
+        recall, vectors = scores[digest]
         row["val_recall@10"] = recall
         log.info(
             "%s: %.2f MiB, val recall@10 %.6f, fp32 gap %.2f points",
@@ -257,14 +260,14 @@ def select_quantization(
         )
         rank = (recall, -size)
         if best is None or rank > best[0]:
-            best = (rank, name, path)
+            best = (rank, name, path, vectors)
     if best is None:
         raise RuntimeError("no quantization recipe fits the model size cap")
     shutil.copyfile(best[2], target)
     measurements["selected"] = best[1]
     write_json(target.with_suffix(".json"), measurements)
     log.info("selected %s by validation recall@10", best[1])
-    return measurements
+    return measurements, best[3]
 
 
 def bundle_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -382,7 +385,9 @@ def write_bundle(
     encoder_dir: Path,
     catalog: Catalog,
     student_cfg: StudentConfig,
+    vectors: np.ndarray,
 ) -> None:
+    """Write the public bundle. `vectors` are the catalog's item vectors from the int8 graph."""
     if BUNDLE.exists():
         shutil.rmtree(BUNDLE)
     model_dir = BUNDLE / "model"
@@ -404,10 +409,6 @@ def write_bundle(
         raise SystemExit(1)
 
     session = onnx_session(model_path)
-    log.info(f"item vectors: encoding {num(len(catalog.texts))} items with the int8 graph")
-    vectors = onnx_embed(
-        session, tokenizer, catalog.texts, student_cfg.item_max_length, desc="item vectors"
-    )
     (BUNDLE / "vectors.bin").write_bytes(vectors.astype("<f2").tobytes())
     (BUNDLE / "items.json").write_text(
         json.dumps(items, ensure_ascii=False, separators=(",", ":")), encoding="utf-8", newline="\n"
@@ -499,7 +500,7 @@ def run() -> None:
     export_onnx(model, fp32, cfg.opset)
     log.info("dynamic int8 quantization")
     student_cfg = StudentConfig(**meta["cfg"])
-    select_quantization(fp32, int8, tokenizer, catalog, student_cfg, cfg)
+    _, vectors = select_quantization(fp32, int8, tokenizer, catalog, student_cfg, cfg)
     size = int8.stat().st_size
     log.info(f"int8 model: {size / 2**20:.2f} MiB (fp32 {fp32.stat().st_size / 2**20:.1f} MiB)")
     if size > cfg.max_model_bytes:
@@ -521,5 +522,5 @@ def run() -> None:
     if cosine.min() < 0.9:
         log.warning("some int8 embeddings differ a lot from fp32 (cosine below 0.9)")
 
-    write_bundle(int8, tokenizer, STUDENT_DIR / "encoder", catalog, student_cfg)
+    write_bundle(int8, tokenizer, STUDENT_DIR / "encoder", catalog, student_cfg, vectors)
     log.info(f"done in {elapsed(start)}")

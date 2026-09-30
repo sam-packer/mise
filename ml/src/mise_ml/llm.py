@@ -163,7 +163,10 @@ class LocalLLM:
         self.compiler = xgr.GrammarCompiler(info)
         self.grammars: dict[str, xgr.CompiledGrammar] = {}
         # The largest batch that fits, by token limit, learned from out-of-memory errors.
+        # Image batches use it; text batches use the token budget, lowered the same way.
         self.batch_limits: dict[int, int] = {}
+        self.token_budget = cfg.batch_token_budget
+        self.prompt_lengths: dict[tuple[str, str], int] = {}
         used = torch.cuda.memory_allocated() / 2**30
         log.info(f"model ready in {elapsed(start)}, {used:.1f} GiB on the GPU")
 
@@ -190,10 +193,11 @@ class LocalLLM:
     ) -> tuple[list[str], int]:
         """Return answers and the number of generated tokens.
 
-        On a GPU memory failure, retry with three quarters of the batch size, down to one request.
-        Reuse that lower batch limit for later requests with the same token limit.
+        On a GPU memory failure, retry with three quarters of the batch, down to one request.
+        Reuse that lower limit for later batches: the token budget for text, the row limit for
+        images.
         """
-        limit = self.batch_size(max_new_tokens, len(requests))
+        limit = self.batch_size(requests, max_new_tokens)
         if len(requests) > limit:
             texts: list[str] = []
             tokens = 0
@@ -211,16 +215,42 @@ class LocalLLM:
         gc.collect()
         torch.cuda.empty_cache()
         # A small step keeps batches large: a failed attempt costs seconds, in prefill.
-        self.batch_limits[max_new_tokens] = max(1, len(requests) * 3 // 4)
-        log.warning(
-            f"out of GPU memory on a batch of {len(requests)}; batches with up to "
-            f"{max_new_tokens} new tokens now hold at most "
-            f"{self.batch_limits[max_new_tokens]} requests"
-        )
+        if all(r.image is None for r in requests):
+            self.token_budget = max(1, self.cells(requests, max_new_tokens) * 3 // 4)
+            log.warning(
+                f"out of GPU memory on a batch of {len(requests)}; text batches now hold at "
+                f"most {self.token_budget:,} tokens"
+            )
+        else:
+            self.batch_limits[max_new_tokens] = max(1, len(requests) * 3 // 4)
+            log.warning(
+                f"out of GPU memory on a batch of {len(requests)}; batches with up to "
+                f"{max_new_tokens} new tokens now hold at most "
+                f"{self.batch_limits[max_new_tokens]} requests"
+            )
         return self.generate(requests, max_new_tokens, sample)
 
-    def batch_size(self, max_new_tokens: int, size: int) -> int:
-        return min(size, self.batch_limits.get(max_new_tokens, size))
+    def prompt_tokens(self, r: Request) -> int:
+        """Tokens of the system and user text; the chat template adds a few more."""
+        key = (r.system, r.user)
+        if key not in self.prompt_lengths:
+            ids = self.processor.tokenizer(r.system + r.user, add_special_tokens=False)
+            self.prompt_lengths[key] = len(ids["input_ids"]) + 32
+        return self.prompt_lengths[key]
+
+    def cells(self, requests: list[Request], max_new_tokens: int) -> int:
+        """Rows times the padded length a batch of these requests reaches."""
+        return len(requests) * (max(map(self.prompt_tokens, requests)) + max_new_tokens)
+
+    def batch_size(self, requests: list[Request], max_new_tokens: int) -> int:
+        """How many of `requests`, from the front, one batch holds."""
+        size = len(requests)
+        if any(r.image is not None for r in requests):
+            return min(size, self.batch_limits.get(max_new_tokens, size))
+        rows = 1
+        while rows < size and self.cells(requests[: rows + 1], max_new_tokens) <= self.token_budget:
+            rows += 1
+        return rows
 
     @torch.inference_mode()
     def _generate(
@@ -428,8 +458,9 @@ class Job:
                 i = 0
                 while i < len(group):
                     # Size each batch to the limit learned from out-of-memory errors.
-                    tokens = max(u.request.max_new_tokens for u in group[i : i + size])
-                    batch = group[i : i + llm.batch_size(tokens, size)]
+                    window = [u.request for u in group[i : i + size]]
+                    tokens = max(r.max_new_tokens for r in window)
+                    batch = group[i : i + llm.batch_size(window, tokens)]
                     i += len(batch)
                     for _ in self._run_batch(batch, sig, prints, llm, stats, parse):
                         group_stats = stats - starting_stats

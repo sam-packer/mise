@@ -158,6 +158,9 @@ class ProfileConfig:
     # After a memory failure, generation lowers the batch limit for the rest of the job.
     batch_size: int = 40
     image_batch_size: int = 8
+    # Text batches also hold at most this many tokens: rows x (longest prompt + new tokens).
+    # Long judge prompts then get fewer rows, and short ones keep the full batch.
+    batch_token_budget: int = 100_000
     synthetic_moods: int = 6000
     moods_per_request: int = 25
     label_queries: int = 30000
