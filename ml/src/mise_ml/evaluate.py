@@ -55,6 +55,7 @@ log = get(__name__)
 SHIP_MARGIN = 0.05
 SEP = "\x1f"
 JUDGED_K = 10
+JUDGE_FACTS_CHARS = 700
 
 JUDGE_SYSTEM = """You judge picks for mise, a mood app. A user typed a feeling, and the app \
 shows works that should feel like it.
@@ -241,7 +242,12 @@ def judge_job(keys: list[str]) -> JobSpec:
             **resolved,
             "signal": {**source.get("signal", {}), **resolved.get("signal", {})},
         }
-        return f"Source facts:\n{item_prompt(facts)}\nGenerated profile: {catalog.texts[index]}"
+        # Cap the facts: a pool holds about 100 works per feeling, and full overviews and poems
+        # would multiply the judge's prompt tokens several times over.
+        source = item_prompt(facts)
+        if len(source) > JUDGE_FACTS_CHARS:
+            source = source[:JUDGE_FACTS_CHARS].rsplit(" ", 1)[0] + " ..."
+        return f"Source facts:\n{source}\nGenerated profile: {catalog.texts[index]}"
 
     def prompt_for(text: str, group: list[str]) -> str:
         return (

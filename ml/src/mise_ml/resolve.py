@@ -408,7 +408,17 @@ class Resolver:
         )
 
     def song_facts(self, r: Record) -> Record:
-        """Use official recording dates, and replace a bootleg-only recording identity."""
+        """Use official recording dates, and replace a bootleg-only recording identity.
+
+        A network failure keeps the record as it is, so one slow host cannot stop the run.
+        """
+        try:
+            return self._song_facts(r)
+        except FetchError as e:
+            log.warning("%s: song facts lookup failed, kept the record: %s", r["id"], e)
+            return r
+
+    def _song_facts(self, r: Record) -> Record:
         original_mbid = r["source"].get("mbid")
         groups = self.release_groups(r)
         if not groups and r["source"].get("artist_mbid"):
@@ -808,8 +818,23 @@ class Resolver:
             "links": links,
         }, "ok"
 
-    def book_facts(self, r: Record) -> tuple[Record, dict]:
-        """Replace a missing or truncated year (1 to 999) with the work's first publication year."""
+    def book_facts(self, r: Record) -> Record:
+        """Replace a missing or truncated year (1 to 999) with the work's first publication year.
+
+        A network failure keeps the record as it is, so one slow host cannot stop the run.
+        """
+        original_year = r.get("year")
+        if original_year is not None and not 1 <= original_year <= 999:
+            # Keep a plausible source year. Open Library can match another work with the same
+            # title, or date a late edition ("1984" as 2021).
+            return r
+        try:
+            return self._book_year(r, original_year)
+        except FetchError as e:
+            log.warning("%s: book year lookup failed, kept %s: %s", r["id"], original_year, e)
+            return r
+
+    def _book_year(self, r: Record, original_year: int | None) -> Record:
         q = f"title={quote_plus(r['title'])}&author={quote_plus(r['creator'])}"
         found = self.http.get_json(
             f"{OPENLIBRARY}/search.json?{q}&limit=5"
@@ -827,11 +852,6 @@ class Resolver:
             ),
             {},
         )
-        original_year = r.get("year")
-        if original_year is not None and not 1 <= original_year <= 999:
-            # Keep a plausible source year. Open Library can match another work with the same
-            # title, or date a late edition ("1984" as 2021).
-            return r, work
         year = year_or_none(work.get("first_publish_year"))
         if year is None:
             year = original_year
@@ -845,16 +865,18 @@ class Resolver:
                 )
             if not ancient:
                 year = None
-        return {**r, "year": year}, work
+        return {**r, "year": year}
 
     def book(self, r: Record) -> Result:
-        r, work = self.book_facts(r)
+        r = self.book_facts(r)
         image = None
         if r["source"].get("image"):
             image = self.image(r["source"]["image"], r["id"])
         if image is None:
             # Open Library has a cover for many books that Hardcover lacks one for.
-            cover = work.get("cover_i")
+            q = f"title={quote_plus(r['title'])}&author={quote_plus(r['creator'])}"
+            found = self.http.get_json(f"{OPENLIBRARY}/search.json?{q}&limit=1&fields=cover_i")
+            cover = next(iter((found or {}).get("docs", [])), {}).get("cover_i")
             if cover:
                 url = f"https://covers.openlibrary.org/b/id/{cover}-L.jpg"
                 image = self.image(url, r["id"])
@@ -1054,7 +1076,7 @@ def run() -> None:
         for r in progress(
             [r for r in resolved if r["category"] == "book"], desc="check book dates", unit="book"
         ):
-            corrected, _ = resolver.book_facts(r)
+            corrected = resolver.book_facts(r)
             if corrected["year"] != r.get("year"):
                 log.info("%s: year %s -> %s", r["id"], r.get("year"), corrected["year"])
                 r.update(corrected)

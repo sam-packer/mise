@@ -472,27 +472,33 @@ class Job:
                     f"(up to {2 * unit.request.max_new_tokens} tokens)"
                 )
                 log.debug(f"{self.name}: retry {unit.keys[0]!r}: {text[-200:]!r}")
-                retry_request = replace(
-                    unit.request,
-                    seed=(
-                        int(sha("retry:" + unit.keys[0])[:8], 16)
-                        if unit.request.seed is not None
-                        else None
-                    ),
-                    user=unit.request.user + f"\n\nThe previous answer failed validation: {error}. "
-                    "Return complete JSON. Keep text concise and follow the requested counts "
-                    "and word limits. Ignore unrelated source text; use the relevant facts "
-                    "and mood hints. Do not copy lists of metadata into the answer.",
-                )
-                # Sample the retry: greedy decoding often repeats the failed answer. A seed
-                # from the key keeps each retry repeatable.
-                torch.manual_seed(int(sha(unit.keys[0])[:8], 16))
-                retry, tokens = llm.generate(
-                    [retry_request], 2 * unit.request.max_new_tokens, sample=True
-                )
-                stats["tokens"] += tokens
-                text = retry[0]
-                data, error = parse_answer(text, unit, parse)
+                # Two sampled retries, each with its own seed: one key that fails every attempt
+                # stops the whole command, so a second try is cheap insurance on long jobs.
+                for attempt in ("retry:", "retry2:"):
+                    retry_request = replace(
+                        unit.request,
+                        seed=(
+                            int(sha(attempt + unit.keys[0])[:8], 16)
+                            if unit.request.seed is not None
+                            else None
+                        ),
+                        user=unit.request.user
+                        + f"\n\nThe previous answer failed validation: {error}. "
+                        "Return complete JSON. Keep text concise and follow the requested counts "
+                        "and word limits. Ignore unrelated source text; use the relevant facts "
+                        "and mood hints. Do not copy lists of metadata into the answer.",
+                    )
+                    # Sample the retry: greedy decoding often repeats the failed answer. A seed
+                    # from the key keeps each retry repeatable.
+                    torch.manual_seed(int(sha(attempt + unit.keys[0])[:8], 16))
+                    retry, tokens = llm.generate(
+                        [retry_request], 2 * unit.request.max_new_tokens, sample=True
+                    )
+                    stats["tokens"] += tokens
+                    text = retry[0]
+                    data, error = parse_answer(text, unit, parse)
+                    if not error:
+                        break
                 if error:
                     stats["skipped"] += 1
                     log.warning(f"{self.name}: failed {unit.keys}: {error}")

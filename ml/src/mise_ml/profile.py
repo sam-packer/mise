@@ -309,7 +309,8 @@ ITEM_SCHEMA = obj({k: {"type": "string"} for k in ("vibe", "description", "q1", 
 MAX_WORD = 14
 WORD = rf"[A-Za-z0-9'-]{{1,{MAX_WORD}}}"
 PLAIN_WORD = re.compile(WORD)
-PROSE_WORD = rf"{WORD}[,.!?;:]?"
+# Prose allows longer words ("misunderstandings", "black-and-white"); only the vibe line is capped.
+PROSE_WORD = r"[A-Za-z0-9'-]{1,24}[,.!?;:]?"
 APOSTROPHE_ENDINGS = {"s", "t", "d", "m", "re", "ve", "ll", "clock", "am", "all", "mon"}
 FUNCTION_WORDS = frozenset(
     [
@@ -382,7 +383,13 @@ ITEM_GENERATION_SCHEMA = obj(
     {
         "vibe": {"type": "string", "pattern": f"^{WORD}( {WORD}){{0,11}}$"},
         "description": {"type": "string", "pattern": f"^{PROSE_WORD}( {PROSE_WORD}){{0,89}}$"},
-        **{q: FEELING_TEXT for q in ("q1", "q2", "q3")},
+        "q1": FEELING_TEXT,
+        # The parser requires a first-person q2, so the grammar starts it in the first person.
+        "q2": {
+            "type": "string",
+            "pattern": rf"^(?:[Ii]|[Mm]y|[Ii]'(?:m|ve|ll|d))( {PROSE_WORD}){{5,29}}$",
+        },
+        "q3": FEELING_TEXT,
     }
 )
 
@@ -393,6 +400,12 @@ def parse_item(keys: list[str], data: dict[str, Any]) -> list[Record]:
     vibe = normalized(data["vibe"]).rstrip(".")
     if not 1 <= word_count(vibe) <= 12:
         raise ValueError("vibe must contain 1 to 12 words")
+    # The grammar cannot forbid a dangling last word, so trim it ("a secret kept for a" becomes
+    # "a secret kept") rather than fail the key.
+    words = vibe.rstrip(",").split()
+    while len(words) > 1 and words[-1].rstrip(",") in FUNCTION_WORDS:
+        words.pop()
+    vibe = " ".join(words).rstrip(",")
     if vibe.endswith(",") or vibe.split()[-1] in FUNCTION_WORDS:
         raise ValueError("vibe must finish a thought, not end with a function word or comma")
     for word in vibe.split():
