@@ -13,7 +13,8 @@ import {
 	type Vocab,
 	type Anchor,
 	type Item,
-	type MatchResult
+	type MatchResult,
+	type World
 } from './types';
 
 export type EncoderIO = {
@@ -27,6 +28,8 @@ export type EngineIO = EncoderIO;
 
 export type MoodEngine = {
 	infer(query: string): Promise<Mood>;
+	/** Build the world of one catalog item. `exclude` holds item ids to keep off its wall. */
+	world(id: string, exclude: string[]): Promise<World>;
 };
 
 type Encoder = {
@@ -160,18 +163,14 @@ export async function createMoodEngine(io: EngineIO): Promise<MoodEngine> {
 		};
 	}
 
-	function toMood(
-		query: string,
-		heads: NonNullable<MatchResult['heads']>,
-		start: number
-	): Omit<Mood, 'picks' | 'anchor'> {
+	function toRoom(
+		heads: NonNullable<MatchResult['heads']>
+	): Pick<World, 'palette' | 'light' | 'typeface' | 'scent'> {
 		return {
-			query,
 			palette: heads.palette,
 			light: heads.light as Light,
 			typeface: typefaces.get(heads.typeface)!,
-			scent: scents.get(heads.scent)!,
-			ms: performance.now() - start
+			scent: scents.get(heads.scent)!
 		};
 	}
 
@@ -184,7 +183,16 @@ export async function createMoodEngine(io: EngineIO): Promise<MoodEngine> {
 				manifest.heads.kind === 'anchors'
 					? heads!
 					: onnxHeads(anchor ? (await encoder.run(anchor.vibe)).outputs : outputs);
-			return { ...toMood(query, selectedHeads, start), picks, anchor };
+			return { query, ...toRoom(selectedHeads), ms: performance.now() - start, picks, anchor };
+		},
+
+		async world(id, exclude) {
+			const { item, neighbors } = search.world(id, exclude);
+			// The vibe line carries the work's feeling, as it does for a named anchor in infer.
+			const { embedding, outputs } = await encoder.run(item.vibe);
+			const heads =
+				manifest.heads.kind === 'anchors' ? search.heads(embedding) : onnxHeads(outputs);
+			return { ...toRoom(heads), item, neighbors };
 		}
 	};
 }

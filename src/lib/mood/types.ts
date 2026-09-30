@@ -94,6 +94,13 @@ export type Mood = {
 	anchor: Item | null;
 };
 
+/** One work as a place of its own: the mood of its vibe line, and the works closest to it. */
+export type World = Pick<Mood, 'palette' | 'light' | 'typeface' | 'scent'> & {
+	item: Item;
+	/** Nearest works in category order. They exclude the work, its creator, and the path so far. */
+	neighbors: Item[];
+};
+
 export type MatchResult = {
 	picks: Record<Category, Item>;
 	anchor: Item | null;
