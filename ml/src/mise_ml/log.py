@@ -1,8 +1,7 @@
-"""One logging setup for every step.
+"""Share logging and progress displays across all command steps.
 
-The console gets short lines (`12:04:31 resolve  INFO  message`) at INFO and above. A file in
-out/logs/ gets every DEBUG line of the run. tqdm bars and log lines share the terminal through
-logging_redirect_tqdm, so a log line never breaks a bar.
+Send INFO and higher levels to the console, and include DEBUG lines in out/logs/.
+Use logging_redirect_tqdm to keep log output from breaking progress bars.
 """
 
 import contextlib
@@ -87,9 +86,8 @@ def log_environment(log: logging.Logger) -> None:
 def route_libraries(console: logging.Handler, file: logging.Handler) -> None:
     """Send transformers and huggingface_hub logs through the same handlers.
 
-    transformers installs its own stderr handler, which would bypass the tqdm redirect and
-    the log file. Their INFO lines go to the file only; WARNING and above also reach the
-    console.
+    Replace the transformers stderr handler to reach the file and respect the tqdm redirect.
+    Send library INFO lines to the file only, and WARNING or higher levels to both outputs.
     """
     import transformers.utils.logging as tf_logging
 
@@ -154,8 +152,8 @@ def session(step: str) -> Iterator[logging.Logger]:
             log.warning("stopping; finished work is saved, and a rerun continues from there")
             log.info("full log: %s", path.relative_to(ML_ROOT).as_posix())
             logging.shutdown()
-            # Pool threads can sit in a network call or a backoff sleep for a minute, and
-            # the interpreter would wait for them at exit. Every write is safe to cut.
+            # Pool threads can block in network calls or retry delays for a minute.
+            # End the process without waiting; file writes tolerate interruption.
             os._exit(130)
         except SystemExit:
             raise

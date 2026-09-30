@@ -1,4 +1,7 @@
-"""API keys from ml/.env. Only "set" or "missing" is ever logged, never a value."""
+"""Read service credentials for catalog downloads and publication.
+
+The CLI loads ml/.env. Log only whether credentials are set, never their values.
+"""
 
 import os
 
@@ -30,7 +33,7 @@ def env(name: str) -> str:
 
 
 def r2() -> dict[str, str]:
-    """The R2 settings. Names each missing variable and stops if one is missing."""
+    """Return R2 settings, or report every missing required variable and stop."""
     for name in (*R2, "R2_BUCKET"):
         log.debug("%s: %s", name, "set" if env(name) else "missing")
     problems = [
@@ -50,7 +53,7 @@ def r2() -> dict[str, str]:
 
 
 def missing_r2() -> list[str]:
-    """The R2 variables that are not set, without stopping. Empty once all of them are set."""
+    """Return missing R2 variable names without stopping."""
     return [name for name in R2 if not env(name)]
 
 

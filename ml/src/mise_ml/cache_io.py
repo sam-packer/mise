@@ -7,6 +7,7 @@ from pathlib import Path
 
 @contextmanager
 def cache_lock(path: Path):
+    """Lock a cache for one writer, or fail immediately if another writer holds the lock."""
     lock = path.with_suffix(path.suffix + ".lock")
     lock.parent.mkdir(parents=True, exist_ok=True)
     with lock.open("a+b") as stream:
