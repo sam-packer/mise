@@ -128,10 +128,17 @@ TAG_JUNK = re.compile(r"seen live|favou?rites?|\bmy\b|\bbest\b|spotify|albums? i
 
 # Title clues supplement Deezer's record_type and Various Artists album credit.
 COMPILATION_TITLE = re.compile(
-    r"\b(greatest|best of|hits|collection|anthology|essentials?|ultimate|gold|live|sessions|"
-    r"singles|classics|remixes|complete|season\s+\d+|playlist|music from|original series|"
-    r"soundtrack|motion picture|compilation|coffret|awards|radio \d+|vol(?:ume)?\.?\s*\d+|"
-    r"now that'?s)\b",
+    # "gold" only as the last word of a hits album (ABBA Gold), not After the Gold Rush.
+    r"\b(greatest (?:hitz?|recordings|songs)|best of|hits|collection|anthology|essentials?|"
+    r"ultimate|gold$|sessions|"
+    r"singles|classics|remixes|complete|season\s+\d+|playlist|music from around|original series|"
+    r"soundtrack|motion picture|compilation|coffret|awards|radio \d+|"
+    # A volume number after a series name; a studio album can start with it (Vol. 3 The...).
+    r"(?<=\w )vol(?:ume)?\.?\s*\d+|"
+    r"now that'?s|top \d+|(?:19)?\d0'?s|sixties|seventies|eighties|nineties|"
+    r"hit(?:dossier|parade|box|mix)\w*|"
+    # A live recording, not a studio album whose title starts with "Live" (Live Through This).
+    r"live (?:at|in|from|on)|live\))(?=\W|$)",
     re.IGNORECASE,
 )
 
