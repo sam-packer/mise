@@ -1050,9 +1050,8 @@ def select_si(http: CachedClient, cfg: CurateConfig) -> list[Record]:
                         "category": "art",
                         "group": "art:si",
                         "title": clip(a.get("title"), 300) or "Untitled",
-                        "creator": ", ".join(n for n in names if n)
-                        or detail.get("data_source")
-                        or "Smithsonian",
+                        # The holding museum is in source.unit and the credit line, not the creator.
+                        "creator": ", ".join(n for n in names if n) or "Unknown artist",
                         # The first year in the object's dates: the date it was made.
                         "year": years[0] if years else None,
                         "signal": {
