@@ -899,6 +899,7 @@ SI_TOPICS = (
     "Abstraction",
 )
 SI_PEOPLE = re.compile(r"\b(portraits?|self.portraits?|sitters?|group photograph)\b", re.I)
+SI_BIOGRAPHY = re.compile(r",?\s+\(?(?:born|active|died|b\.|d\.|ca\.)\s", re.I)
 
 
 def topic_sample(pools: list[list[Record]], n: int) -> list[Record]:
@@ -1030,11 +1031,15 @@ def select_si(http: CachedClient, cfg: CurateConfig) -> list[Record]:
                 if not media or SI_PEOPLE.search(json.dumps(content)):
                     continue
                 oid = detail.get("record_ID") or a["id"]
+                # Names carry biography ("William H. Rau, born Philadelphia, PA 1855-died ...").
+                # Keep the name itself.
                 names = [
-                    v["content"]
+                    SI_BIOGRAPHY.split(v["content"], maxsplit=1)[0].strip(" ,;")
                     for v in free.get("name", [])
                     if v.get("label", "").lower() in ("artist", "photographer", "maker")
                 ]
+                dates = " ".join(v["content"] for v in free.get("date", []))
+                years = [int(y) for y in re.findall(r"\b(1[0-9]{3}|20[0-2][0-9])\b", dates)]
                 description = " ".join(
                     v["content"] for v in free.get("notes", []) if v.get("label") == "Description"
                 )
@@ -1045,8 +1050,11 @@ def select_si(http: CachedClient, cfg: CurateConfig) -> list[Record]:
                         "category": "art",
                         "group": "art:si",
                         "title": clip(a.get("title"), 300) or "Untitled",
-                        "creator": ", ".join(names) or detail.get("data_source") or "Smithsonian",
-                        "year": None,
+                        "creator": ", ".join(n for n in names if n)
+                        or detail.get("data_source")
+                        or "Smithsonian",
+                        # The first year in the object's dates: the date it was made.
+                        "year": years[0] if years else None,
                         "signal": {
                             "subjects": indexed.get("topic") or [],
                             "topic": topic,
