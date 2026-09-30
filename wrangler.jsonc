@@ -1,3 +1,4 @@
+// Configure the Cloudflare app worker, static assets, and saved feelings.
 {
 	"$schema": "./node_modules/wrangler/config-schema.json",
 	"name": "mise",
@@ -8,7 +9,7 @@
 		"binding": "ASSETS",
 		"directory": ".svelte-kit/cloudflare"
 	},
-	// Short links: code → feeling. Made with `bunx wrangler kv namespace create moods`.
+	// Store each short link's code and feeling in the MOODS namespace.
 	"kv_namespaces": [{ "binding": "MOODS", "id": "73941fa8ddb9434f8ceddc6edbf3bc78" }],
 	"workers_dev": true,
 	"preview_urls": true
