@@ -1,6 +1,7 @@
+// Match names in a feeling to catalog items before vector search.
 import type { Category, Item } from './types';
 
-export type AnchorItem = Pick<Item, 'category' | 'title' | 'creator' | 'album'>;
+type AnchorItem = Pick<Item, 'category' | 'title' | 'creator' | 'album'>;
 
 /** Share of the query's content words that a named entity must cover. */
 const ANCHOR_COVERAGE = 0.75;
@@ -19,6 +20,7 @@ const FILLER_WORDS = new Set(
 );
 const ANCHOR_CATEGORY_ORDER: Category[] = ['film', 'song', 'book', 'art', 'poem'];
 
+/** Split lowercase text into words after removing accents and apostrophes. */
 export function allWords(text: string): string[] {
 	return text
 		.normalize('NFD')
@@ -51,6 +53,7 @@ function findPhrase(words: string[], phrase: string[]): number {
 	return -1;
 }
 
+/** Build a matcher that returns an item row, or -1 when the query names no item. */
 export function createAnchorMatcher(
 	items: AnchorItem[],
 	words: string[],
@@ -66,12 +69,11 @@ export function createAnchorMatcher(
 	}));
 
 	/**
-	 * Finds the catalog item the query names, or -1. A name is a title, an album, or a creator, and
-	 * a title or an album may come with its creator ("essex honey by blood orange"). Each name must
-	 * appear in the query as a whole run of words, and together the matched names must cover at
-	 * least ANCHOR_COVERAGE of the query's content words. A match of one common word ("rain",
-	 * "blonde") is too weak and is ignored. Ties go to the larger coverage, then title before album
-	 * before creator, then the order film, song, book, art, poem, then catalog order.
+	 * Match titles, albums, and creators as complete word sequences.
+	 * Together, the names must cover at least ANCHOR_COVERAGE of the query's content words.
+	 * Reject a match that contains only one common word, such as "rain".
+	 * Prefer greater coverage, then title, album, and creator matches, in that order.
+	 * Break remaining ties by category order, then catalog order.
 	 */
 	function findAnchor(query: string): number {
 		const words = contentWords(query);
@@ -112,9 +114,8 @@ export function createAnchorMatcher(
 					}
 					if (!ok) continue;
 					const matched = used.flat();
-					// A name made only of common words ("lovely day", "rain") reads as a feeling. Without
-					// its creator it anchors only when the query is exactly that name. One common word
-					// never anchors.
+					// Common words can describe a feeling. Require an exact name match when the creator is absent.
+					// Never anchor on one common word.
 					if (matched.every((w) => commonWords.has(w))) {
 						if (matched.length === 1) continue;
 						if (!withCreator && exactQuery !== (kind === 0 ? n.exactTitle : n.exactAlbum)) continue;

@@ -4,7 +4,7 @@ import * as ort from 'onnxruntime-web';
 import { createMoodEngine, type MoodEngine } from './engine';
 import type { WorkerRequest, WorkerResponse } from './client';
 
-// Version of the installed onnxruntime-web; the WASM is larger than the asset limit, so it comes from the CDN.
+// Match the installed onnxruntime-web version. Load WASM from the CDN because it exceeds the asset size limit.
 const ORT_VERSION = '1.30.0';
 
 ort.env.wasm.wasmPaths = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist/`;

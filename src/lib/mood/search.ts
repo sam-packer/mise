@@ -1,3 +1,4 @@
+// Combine name matching and vector search to choose catalog items and mood attributes.
 import { createAnchorMatcher } from './anchor-search';
 import {
 	CATEGORIES,
@@ -8,7 +9,7 @@ import {
 	type Palette,
 	type MatchResult
 } from './types';
-export type CatalogInfo = {
+type CatalogInfo = {
 	dims: number;
 	counts: { items: number };
 	heads: { kind: 'onnx' | 'anchors' };
@@ -21,8 +22,7 @@ const PALETTE_TEMPERATURE = 0.03;
 /** Above this weight the best anchor's palette is returned as it is. */
 const PALETTE_DOMINANT = 0.7;
 
-/** Blends palettes slot by slot in OKLCH. Averaging a/b directly cancels distinct hues and leaves
- * grey, so the hue is a circular mean (the shortest arc) and the chroma is the mean chroma. */
+/** Average hue on a circle and chroma separately to prevent distinct hues from producing grey. */
 function blendPalettes(palettes: Palette[], weights: number[]): Palette {
 	return Array.from({ length: 5 }, (_, slot) => {
 		let L = 0;
@@ -52,12 +52,13 @@ function l2normalize(v: Float32Array): Float32Array {
 	return v;
 }
 
-export function dot(a: Float32Array, b: Float32Array, offset = 0): number {
+function dot(a: Float32Array, b: Float32Array, offset = 0): number {
 	let s = 0;
 	for (let i = 0; i < a.length; i++) s += a[i] * b[offset + i];
 	return s;
 }
 
+/** Build a search over catalog vectors, with optional anchors for mood attributes. */
 export function createSearch(
 	info: CatalogInfo,
 	items: Item[],
@@ -117,8 +118,7 @@ export function createSearch(
 	};
 }
 
-/** The item whose vector is closest to the mean vector of `rows`: an album's or artist's most
- * representative piece. */
+/** Return the item row closest to its group's mean vector. */
 export function representative(vectors: Float32Array, dims: number, rows: number[]): number {
 	const mean = new Float32Array(dims);
 	for (const i of rows) for (let d = 0; d < dims; d++) mean[d] += vectors[i * dims + d];
@@ -128,7 +128,7 @@ export function representative(vectors: Float32Array, dims: number, rows: number
 	return best;
 }
 
-export function createAnchorHeads(anchors: Anchor[], anchorVectors: Float32Array, dims: number) {
+function createAnchorHeads(anchors: Anchor[], anchorVectors: Float32Array, dims: number) {
 	return (q: Float32Array) => {
 		const scored = anchors.map((anchor, i) => ({ anchor, score: dot(q, anchorVectors, i * dims) }));
 		const top = scored
@@ -160,7 +160,7 @@ export function createAnchorHeads(anchors: Anchor[], anchorVectors: Float32Array
 	};
 }
 
-export function blendAnchor(embedding: Float32Array, vector: Float32Array) {
+function blendAnchor(embedding: Float32Array, vector: Float32Array) {
 	const q = new Float32Array(embedding.length);
 	for (let d = 0; d < q.length; d++)
 		q[d] = ANCHOR_ITEM_WEIGHT * vector[d] + (1 - ANCHOR_ITEM_WEIGHT) * embedding[d];

@@ -1,4 +1,4 @@
-// The mood bundle contract. See docs/superpowers/specs/2026-09-27-moodboard-design.md §4.
+// Define the bundle format shared by export scripts, inference, and the interface.
 
 export type OKLab = [L: number, a: number, b: number];
 
@@ -63,7 +63,7 @@ export const LIGHTS = [
 export type Light = (typeof LIGHTS)[number];
 
 export type Typeface = { id: string; family: string; axes: string };
-export type Scent = { id: string; text: string };
+type Scent = { id: string; text: string };
 
 export type Vocab = {
 	lights: Light[];
@@ -89,8 +89,7 @@ export type Mood = {
 
 	picks: Record<Category, Item>;
 	/**
-	 * The catalog item the feeling names ("blood orange essex honey"), or null. When set, the wall takes that
-	 * item's vibe, and the item itself is not one of the picks.
+	 * The catalog item named in the query, or null. Its vector guides the picks, which exclude the item itself.
 	 */
 	anchor: Item | null;
 };
