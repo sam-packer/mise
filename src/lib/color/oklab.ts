@@ -193,8 +193,6 @@ export type Tokens = {
 	mids: [OKLab, OKLab, OKLab];
 	/** Ink for text set on `mids[0]` paper. */
 	paperInk: OKLab;
-	/** The color of a veil panel. At VEIL_ALPHA both inks keep TEXT_TARGET on it over any backdrop. */
-	veil: OKLab;
 };
 
 /** Ink contrast on the plain ground (WCAG AAA) where the ground allows it. */
@@ -203,33 +201,6 @@ const INK_TARGET = 7;
 const TEXT_TARGET = 4.6;
 /** How far the soft ink moves from the ink toward the ground before the floor pulls it back. */
 const SOFT_MIX = 0.4;
-/** The opacity of a veil panel. The CSS uses the same value: 80% of --veil. */
-const VEIL_ALPHA = 0.8;
-
-/**
- * Find the veil color nearest to the ground that keeps both inks at TEXT_TARGET when the veil
- * lets VEIL_ALPHA of it through over the worst backdrop: white under light ink, black under dark ink.
- */
-function veilFor(ground: OKLab, ink: OKLab, inkSoft: OKLab): { veil: OKLab; seen: OKLab } {
-	const lightInk = luminance(ink) > luminance(ground);
-	const backdrop = toSrgb(lightInk ? [1, 0, 0] : [0, 0, 0]);
-	const seen = (veil: OKLab) =>
-		fromSrgb(toSrgb(veil).map((v, i) => v * VEIL_ALPHA + backdrop[i] * (1 - VEIL_ALPHA)) as RGB);
-	const holds = (veil: OKLab) => worst(seen(veil), [ink, inkSoft]) >= TEXT_TARGET;
-	if (holds(ground)) return { veil: ground, seen: seen(ground) };
-	const [L, C, H] = labToLch(ground);
-	// Move away from the ink: darker under light ink, lighter under dark ink.
-	let lo = L;
-	let hi = lightInk ? 0 : 1;
-	for (let i = 0; i < 24; i++) {
-		const mid = (lo + hi) / 2;
-		if (holds(lchToLab(toGamut([mid, C, H])))) hi = mid;
-		else lo = mid;
-	}
-	const veil = lchToLab(toGamut([hi, C, H]));
-	return { veil, seen: seen(veil) };
-}
-
 const NEUTRAL_LIGHT: OKLab = [1, 0, 0];
 const NEUTRAL_DARK: OKLab = linearToLab([0.0027, 0.0027, 0.0036]); // #09090b
 
@@ -238,8 +209,7 @@ export function neutralTokens(dark: boolean): Tokens {
 	const ink: OKLab = dark ? [0.86, 0, 0] : [0.32, 0, 0];
 	const inkSoft: OKLab = dark ? [0.7, 0, 0] : [0.48, 0, 0];
 	const mid: OKLab = dark ? [0.25, 0, 0] : [0.94, 0, 0];
-	const { veil } = veilFor(ground, ink, inkSoft);
-	return { ground, ink, inkSoft, mids: [mid, mid, mid], paperInk: ink, veil };
+	return { ground, ink, inkSoft, mids: [mid, mid, mid], paperInk: ink };
 }
 
 /**
@@ -260,17 +230,13 @@ export function paletteToTokens(palette: Palette, light: Light | null = null): T
 		const lit = clampContrast(c, grounds, TEXT_TARGET);
 		return worst(lit, grounds) >= TEXT_TARGET ? lit : clampContrast(c, [ground], INK_TARGET);
 	};
-	let ink = floor(clampContrast(rest[best], [ground], INK_TARGET));
-	let inkSoft = floor(ink.map((v, i) => v + (ground[i] - v) * SOFT_MIX) as OKLab);
-	// Where no veil color is enough on its own (a near-white or near-black ground), move the inks.
-	const { veil, seen } = veilFor(ground, ink, inkSoft);
-	ink = clampContrast(ink, [seen], TEXT_TARGET);
-	inkSoft = clampContrast(inkSoft, [seen], TEXT_TARGET);
+	const ink = floor(clampContrast(rest[best], [ground], INK_TARGET));
+	const inkSoft = floor(ink.map((v, i) => v + (ground[i] - v) * SOFT_MIX) as OKLab);
 	const mids = rest.filter((_, i) => i !== best) as [OKLab, OKLab, OKLab];
 	const paper = mids[0];
 	const candidate = contrast(ink, paper) >= contrast(ground, paper) ? ink : ground;
 	const paperInk = clampContrast(candidate, [paper]);
-	return { ground, ink, inkSoft, mids, paperInk, veil };
+	return { ground, ink, inkSoft, mids, paperInk };
 }
 
 /**

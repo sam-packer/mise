@@ -10,12 +10,11 @@ const KEYS = [
 	'--mid-1',
 	'--mid-2',
 	'--mid-3',
-	'--paper-ink',
-	'--veil'
+	'--paper-ink'
 ] as const;
 
 function flat(t: Tokens): OKLab[] {
-	return [t.ground, t.ink, t.inkSoft, ...t.mids, t.paperInk, t.veil];
+	return [t.ground, t.ink, t.inkSoft, ...t.mids, t.paperInk];
 }
 
 function mixLch(a: OKLCH, b: OKLCH, t: number): OKLCH {
