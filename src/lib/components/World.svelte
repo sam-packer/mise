@@ -212,6 +212,12 @@
 		padding: 0 calc(var(--gutter) + 9rem);
 		box-sizing: border-box;
 		animation: appear 500ms var(--ease) both;
+		/* The row spans the page above the mark. Only the trail takes clicks, so the mark stays usable. */
+		pointer-events: none;
+	}
+
+	.top > :global(*) {
+		pointer-events: auto;
 	}
 
 	/* Solid ink with ground-colored text: a clear control, readable over the wall that scrolls under it. */
