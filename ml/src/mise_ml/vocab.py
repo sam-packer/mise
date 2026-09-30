@@ -1,3 +1,5 @@
+"""Load the shared browser vocabulary and identify its matching label cache."""
+
 import hashlib
 import json
 from dataclasses import dataclass

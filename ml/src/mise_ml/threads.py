@@ -1,9 +1,7 @@
-"""Thread pools that stop on Ctrl+C, on Windows too.
+"""Run catalog work in thread pools with interruptible waits on Windows.
 
-On Windows, a main thread that blocks in a pool join or in `pool.map` never sees Ctrl+C.
-Here the waiting thread polls every half second. Ctrl+C in the main thread sets STOP, so
-pools in other threads stop too, and log.session ends the process at once. Finished work
-is on disk already: every append and every file write is safe against a kill.
+Poll every half second because blocking pool waits prevent the main thread from receiving signals.
+Share a stop event so log.session can end the process without waiting for network calls.
 """
 
 import threading

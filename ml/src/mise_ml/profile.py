@@ -1,3 +1,5 @@
+"""Define resumable LLM jobs for item profiles, mood queries, and visual labels."""
+
 import functools
 import random
 import re
@@ -139,6 +141,7 @@ HEX = {"type": "string", "pattern": "^#[0-9a-f]{6}$"}
 
 
 def obj(properties: dict[str, Any]) -> dict[str, Any]:
+    """Require every property and forbid extra properties in a JSON object schema."""
     return {
         "type": "object",
         "properties": properties,
@@ -195,6 +198,7 @@ def numbered(texts: list[str]) -> str:
 
 
 def parse_numbered(keys: list[str], rows: list[dict[str, Any]], make: Any) -> list[Record]:
+    """Map numbered rows to keys, rejecting duplicate numbers and records that make() rejects."""
     out: dict[str, Record] = {}
     repeated = {n for n, count in Counter(row["n"] for row in rows).items() if count > 1}
     for row in rows:
@@ -281,9 +285,8 @@ def item_image(r: Record):
 
 
 ITEM_SCHEMA = obj({k: {"type": "string"} for k in ("vibe", "description", "q1", "q2", "q3")})
-# Exclude Python's whitespace characters so the grammar agrees with word_count(). A word has
-# a length limit and no comma inside, so the model cannot glue words to pass the word limit
-# or repeat inside one word until the token limit.
+# Exclude Python whitespace so the grammar agrees with word_count().
+# Bound word length and exclude commas to prevent joined or repeated words from bypassing the limit.
 MAX_WORD = 20
 WORD = (
     r"[^\u0000-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000,;]"
@@ -397,8 +400,8 @@ def moods_job() -> JobSpec:
         return [Unit([k], Request(MOODS_SYSTEM, prompt(k), schema, 40 * n)) for k in pending]
 
     def parse(keys: list[str], data: dict[str, Any]) -> list[Record]:
-        # Drop a bad or repeated feeling and keep the others: one repeat in 25 feelings
-        # must not reject the whole answer. Too few good feelings means a bad answer.
+        # Keep valid feelings when one feeling is invalid or repeated.
+        # Reject the answer only when too few valid feelings remain.
         feelings = list(dict.fromkeys(normalized(f) for f in data["feelings"] if is_feeling(f)))
         if len(feelings) < n * 4 // 5:
             raise ValueError(

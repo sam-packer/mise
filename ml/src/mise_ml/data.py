@@ -1,3 +1,5 @@
+"""Join catalog items and labels into deterministic query splits for training and evaluation."""
+
 import unicodedata
 from dataclasses import dataclass
 from typing import Any
@@ -19,7 +21,6 @@ from mise_ml.log import get as get_logger
 from mise_ml.util import hash_fraction, iter_jsonl
 from mise_ml.vocab import Vocab, labels_path
 
-SPLITS = ("train", "val", "heldout", "eval")
 log = get_logger(__name__)
 
 # Mirror src/lib/code.ts. JavaScript counts UTF-16 code units.
@@ -27,6 +28,7 @@ MAX_FEELING = 500
 
 
 def normalize_feeling(text: str) -> str:
+    """Normalize case and spacing, then remove punctuation at the edges for duplicate checks."""
     text = " ".join(text.lower().split())
     start, end = 0, len(text)
     while start < end and (text[start].isspace() or unicodedata.category(text[start])[0] == "P"):
@@ -86,6 +88,7 @@ class Catalog:
 
 
 def load_catalog() -> Catalog:
+    """Join resolved items with profiles and sort by category and ID to align all model arrays."""
     profiles = {r["key"]: r for r in iter_jsonl(PROFILES)}
     items = []
     for r in iter_jsonl(RESOLVED):
@@ -135,6 +138,7 @@ class QuerySet:
 def load_queries(
     catalog: Catalog, vocab: Vocab, cfg: TeacherConfig, *, include_distill: bool = False
 ) -> QuerySet:
+    """Combine labels and queries with stable splits that keep evaluation text out of training."""
     evals = set(load_eval_texts())
     queries: dict[str, Query] = {}
 
@@ -201,8 +205,8 @@ def load_queries(
             len(queries) - len(rows),
         )
     if include_distill:
-        # Append only after assigning the existing splits. Exclude even punctuation variants
-        # of existing queries, so held-out and validation text cannot enter training here.
+        # Assign splits before adding distillation queries to prevent leakage into training.
+        # Exclude punctuation variants of those queries too.
         rows.extend(Query(text, split="distill") for text in load_distill_texts(list(queries)))
     zero = np.zeros((5, 3))
     return QuerySet(

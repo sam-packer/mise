@@ -1,3 +1,5 @@
+"""Cache catalog API responses and control retries and request rates for each host."""
+
 import json
 import threading
 import time
@@ -73,9 +75,9 @@ class RateLimiter:
 class CachedClient:
     """GET and POST with an on-disk response cache and per-host rate limits.
 
-    A cached response never touches the network, so reruns are fast and free. Auth headers
-    and `secret` query parameters go to the server but never into the cache key or the
-    cache file, so a key never lands on disk and a new key reuses the cached answers.
+    Reuse cached responses without network requests.
+    Send authentication headers and `secret` query parameters only to the server.
+    Exclude credentials from cache keys and files so credential changes do not invalidate responses.
     """
 
     def __init__(self, cfg: ResolveConfig, cache_dir: Path = CACHE / "http") -> None:
@@ -158,11 +160,11 @@ class CachedClient:
     ) -> Any | None:
         """The JSON body, or None for a 404. Anything else raises FetchError.
 
-        Only real answers (JSON with 200, or 404) are cached. A block page, a non-JSON 200,
-        or any other status raises, so the caller counts an error and a rerun retries it.
-        Deezer and Last.fm answer 200 with {"error": ...}. API_ERRORS names the codes to
-        retry with backoff and the codes that mean "not found" (cached as None). Any other
-        error body raises FetchError and is never cached.
+        Cache JSON from HTTP 200 responses and cache HTTP 404 responses as None.
+        Reject block pages, non-JSON responses, and other status codes so a rerun can retry them.
+        Deezer and Last.fm can return errors with HTTP 200.
+        Use API_ERRORS to retry temporary errors and cache missing records as None.
+        Raise FetchError for other API errors without caching them.
         """
         return self._json(url, url, headers, secret, None)
 
@@ -185,8 +187,8 @@ class CachedClient:
         secret: dict[str, str] | None,
         post: Any,
     ) -> Any | None:
-        # Songs often share an album. Fetch it once, and do not replace a cache
-        # file while another worker has it open (Windows denies that replacement).
+        # Songs often share an album. Fetch it once under a shared lock.
+        # Windows blocks replacement while another worker has the cache file open.
         with self.guard:
             lock = self.cache_locks.setdefault(key, threading.Lock())
         with lock:
