@@ -28,7 +28,7 @@ RESOLVED = CURATED / "resolved.jsonl"
 RESOLVE_DROPPED = CURATED / "resolve_dropped.jsonl"
 # A format mismatch lets resolve retry songs and Chicago art that it can match.
 RESOLVE_META = CURATED / "resolve.meta.json"
-RESOLVE_VERSION = 2
+RESOLVE_VERSION = 3
 PROFILES = CURATED / "profiles.jsonl"
 MOODS = CURATED / "moods.jsonl"
 DISTILL = CURATED / "distill.jsonl"

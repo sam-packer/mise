@@ -40,6 +40,7 @@ from mise_ml.curate import (
     targets,
     tmdb_get,
     unique,
+    year_or_none,
 )
 from mise_ml.http import CachedClient, FetchError
 from mise_ml.log import elapsed, get, num, progress
@@ -127,7 +128,8 @@ TAG_JUNK = re.compile(r"seen live|favou?rites?|\bmy\b|\bbest\b|spotify|albums? i
 
 # Title clues supplement Deezer's record_type and Various Artists album credit.
 COMPILATION_TITLE = re.compile(
-    r"\b(greatest hits|best of|hits|collection|anthology|essentials?|ultimate|solid gold|"
+    r"\b(greatest|best of|hits|collection|anthology|essentials?|ultimate|gold|live|sessions|"
+    r"singles|classics|remixes|complete|season\s+\d+|playlist|music from|original series|"
     r"soundtrack|motion picture|compilation|coffret|awards|radio \d+|vol(?:ume)?\.?\s*\d+|"
     r"now that'?s)\b",
     re.IGNORECASE,
@@ -384,7 +386,11 @@ class Resolver:
             for release in releases:
                 group = release.get("release-group") or {}
                 if release.get("status") == "Official" and group.get("id"):
-                    entry = groups.setdefault(group["id"], {**group, "release_titles": []})
+                    entry = groups.setdefault(
+                        group["id"], {**group, "release_titles": [], "release_dates": []}
+                    )
+                    if release.get("date"):
+                        entry["release_dates"].append(release["date"])
                     if release.get("title") not in entry["release_titles"]:
                         entry["release_titles"].append(release.get("title") or group["title"])
             offset += len(releases)
@@ -393,6 +399,74 @@ class Resolver:
         return sorted(
             groups.values(), key=lambda g: (g.get("first-release-date") or "9999", g["id"])
         )
+
+    def song_facts(self, r: Record) -> Record:
+        """Use official recording dates, and replace a bootleg-only recording identity."""
+        original_mbid = r["source"].get("mbid")
+        groups = self.release_groups(r)
+        if not groups and r["source"].get("artist_mbid"):
+            # ListenBrainz can choose a bootleg recording of a familiar song. Its
+            # first-release date belongs to that bootleg, not the original song.
+            title = base_title(r["title"])
+            escaped = re.sub(r'([\\"])', r"\\\1", title)
+            query = f'recording:"{escaped}" AND arid:{r["source"]["artist_mbid"]}'
+            recordings = []
+            offset = 0
+            while True:
+                params = urlencode({"query": query, "fmt": "json", "limit": 100, "offset": offset})
+                body = self.http.get_json(f"https://musicbrainz.org/ws/2/recording?{params}") or {}
+                page = body.get("recordings", [])
+                recordings.extend(page)
+                offset += len(page)
+                if not page or offset >= body.get("count", 0):
+                    break
+            candidates = [
+                rec
+                for rec in recordings
+                if norm(base_title(rec.get("title", ""))) == norm(title)
+                and (
+                    bool(VERSION.search(r["title"]))
+                    or not VERSION.search(
+                        rec.get("title", "")
+                        + " "
+                        + re.sub(
+                            r"\boriginal (?:stereo|mono)(?: studio)? mix\b",
+                            "",
+                            rec.get("disambiguation", ""),
+                            flags=re.I,
+                        )
+                    )
+                )
+                and any(
+                    credit.get("artist", {}).get("id") == r["source"]["artist_mbid"]
+                    for credit in rec.get("artist-credit", [])
+                )
+            ]
+            for rec in sorted(
+                candidates, key=lambda rec: (rec.get("first-release-date") or "9999", rec["id"])
+            ):
+                source = {
+                    **r["source"],
+                    "mbid": rec["id"],
+                    "isrc": next(iter(sorted(rec.get("isrcs") or [])), None),
+                }
+                candidate = {**r, "source": source}
+                groups = self.release_groups(candidate)
+                if groups:
+                    log.info("%s: recording %s -> %s", r["id"], r["source"]["mbid"], rec["id"])
+                    r = candidate
+                    break
+        years = [
+            year
+            for group in groups
+            for date in group["release_dates"]
+            if (year := year_or_none(date[:4])) is not None
+        ]
+        if years:
+            if original_mbid == r["source"].get("mbid") and r.get("year") is not None:
+                years.append(r["year"])
+            r = {**r, "year": min(years)}
+        return r
 
     def compilation_song(self, r: Record, album: dict) -> bool:
         if compilation(album) or compilation({"title": r.get("album", "")}):
@@ -701,6 +775,7 @@ class Resolver:
         return None
 
     def song(self, r: Record) -> Result:
+        r = self.song_facts(r)
         track, reason = self.deezer_track(r)
         if track is None:
             return None, reason
@@ -726,15 +801,52 @@ class Resolver:
             "links": links,
         }, "ok"
 
+    def book_facts(self, r: Record) -> tuple[Record, dict]:
+        """Prefer the work's first publication year over an edition date."""
+        q = f"title={quote_plus(r['title'])}&author={quote_plus(r['creator'])}"
+        found = self.http.get_json(
+            f"{OPENLIBRARY}/search.json?{q}&limit=5"
+            "&fields=key,title,author_name,cover_i,first_publish_year"
+        )
+        title, author = norm(r["title"]), norm(r["creator"])
+        work = next(
+            (
+                doc
+                for doc in (found or {}).get("docs", [])
+                if title
+                and author
+                and norm(doc.get("title", "")) == title
+                and author in {norm(name) for name in doc.get("author_name", [])}
+            ),
+            {},
+        )
+        year = year_or_none(work.get("first_publish_year"))
+        original_year = r.get("year")
+        if year is None:
+            year = original_year
+        elif original_year is not None and original_year < 0:
+            # Open Library can date a translation, even when the source work is BCE.
+            year = min(year, original_year)
+        if year is not None and 1 <= year <= 999:
+            ancient = r["source"].get("ancient") is True
+            if not ancient and work.get("key"):
+                detail = self.http.get_json(f"{OPENLIBRARY}{work['key']}.json") or {}
+                ancient = any(
+                    subject.casefold() in {"ancient literature", "literature, ancient"}
+                    for subject in detail.get("subjects", [])
+                )
+            if not ancient:
+                year = None
+        return {**r, "year": year}, work
+
     def book(self, r: Record) -> Result:
+        r, work = self.book_facts(r)
         image = None
         if r["source"].get("image"):
             image = self.image(r["source"]["image"], r["id"])
         if image is None:
             # Open Library has a cover for many books that Hardcover lacks one for.
-            q = f"title={quote_plus(r['title'])}&author={quote_plus(r['creator'])}"
-            found = self.http.get_json(f"{OPENLIBRARY}/search.json?{q}&limit=1&fields=cover_i")
-            cover = next(iter((found or {}).get("docs", [])), {}).get("cover_i")
+            cover = work.get("cover_i")
             if cover:
                 url = f"https://covers.openlibrary.org/b/id/{cover}-L.jpg"
                 image = self.image(url, r["id"])
@@ -815,18 +927,18 @@ def log_targets(category: str, catalog: list[Record], group_targets: dict[str, i
             )
 
 
-def retry_fixable_drops() -> None:
-    """On format mismatch, retry dropped songs and Chicago images that the resolver can recover."""
+def retry_fixable_drops() -> bool:
+    """On format mismatch, retry only drops that the changed resolver can recover."""
     version = 1
     if RESOLVE_META.exists():
         version = json.loads(RESOLVE_META.read_text(encoding="utf-8")).get("version", 1)
     if version >= RESOLVE_VERSION:
-        return
+        return False
     drops = list(iter_jsonl(RESOLVE_DROPPED))
 
     def fixable(d: Record) -> bool:
         song = d["id"].startswith("song:") and d["reason"] == "no_deezer_match"
-        return song or (d["id"].startswith("art:") and "-aic" in d["id"])
+        return song or (version < 2 and d["id"].startswith("art:") and "-aic" in d["id"])
 
     kept = [d for d in drops if not fixable(d)]
     if len(kept) < len(drops):
@@ -835,14 +947,19 @@ def retry_fixable_drops() -> None:
         f"resolve format {version} -> {RESOLVE_VERSION}: {num(len(drops) - len(kept))} drop "
         "records (songs without a Deezer match, Chicago art) removed; they resolve again"
     )
-    write_json(RESOLVE_META, {"version": RESOLVE_VERSION})
+    return True
 
 
-def repair_songs(resolver: Resolver, rows: list[Record]) -> None:
+def repair_songs(resolver: Resolver, rows: list[Record], *, facts: bool = False) -> None:
     """Inspect cached album types; change only compilations and inadequate artwork."""
     for r in progress(
         [r for r in rows if r["category"] == "song"], desc="check song albums", unit="song"
     ):
+        old_year = r.get("year")
+        old_mbid = r["source"].get("mbid")
+        if facts:
+            r.update(resolver.song_facts(r))
+        facts_changed = old_year != r.get("year") or old_mbid != r["source"].get("mbid")
         track = resolver.current_track(r)
         album = resolver.deezer_album(track) if track else {"title": r.get("album", "")}
         old_image = r.get("image")
@@ -862,11 +979,19 @@ def repair_songs(resolver: Resolver, rows: list[Record]) -> None:
             bad_image = bad_image or placeholder_url(old_image.get("url", ""))
         chosen = track
         reason = "artwork repair"
-        suspect = resolver.compilation_song(r, album)
+        suspect = old_mbid != r["source"].get("mbid") or resolver.compilation_song(r, album)
         if suspect:
             chosen, reason = resolver.deezer_track(r, track)
-        changed = suspect and chosen and chosen["album"]["title"] != r.get("album")
+        changed = (
+            suspect
+            and chosen
+            and (
+                chosen["album"]["title"] != r.get("album") or chosen["id"] != r["source"]["deezer"]
+            )
+        )
         if not changed and not bad_image:
+            if facts_changed:
+                write_jsonl(RESOLVED, rows)
             if suspect:
                 log.info("%s: kept %r: %s", r["id"], r.get("album"), reason)
             continue
@@ -898,7 +1023,7 @@ def run() -> None:
     catalog = list(iter_jsonl(CATALOG))
     wanted = CATEGORIES
     keys.require([s for c, s in (("film", "tmdb"), ("song", "lastfm")) if c in wanted])
-    retry_fixable_drops()
+    refresh_facts = retry_fixable_drops()
     resolved = list(iter_jsonl(RESOLVED))
     dropped_before = list(iter_jsonl(RESOLVE_DROPPED))
     done = {r["id"] for r in resolved} | {r["id"] for r in dropped_before}
@@ -916,7 +1041,16 @@ def run() -> None:
     )
 
     resolver = Resolver(cfg)
-    repair_songs(resolver, resolved)
+    repair_songs(resolver, resolved, facts=refresh_facts)
+    if refresh_facts:
+        for r in progress(
+            [r for r in resolved if r["category"] == "book"], desc="check book dates", unit="book"
+        ):
+            corrected, _ = resolver.book_facts(r)
+            if corrected["year"] != r.get("year"):
+                log.info("%s: year %s -> %s", r["id"], r.get("year"), corrected["year"])
+                r.update(corrected)
+                write_jsonl(RESOLVED, resolved)
     lock = threading.Lock()
     stats: dict[str, Counter[str]] = {c: Counter() for c in wanted}
     group_targets = targets(CurateConfig())
@@ -1018,3 +1152,4 @@ def run() -> None:
     )
     if errors:
         raise RuntimeError(f"{errors} unresolved requests failed; rerun download to retry them")
+    write_json(RESOLVE_META, {"version": RESOLVE_VERSION})
