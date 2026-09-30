@@ -12,8 +12,13 @@
 	const feeling = $derived(typeof page.data.text === 'string' ? page.data.text.trim() : '');
 	const title = $derived(feeling ? `“${feeling}”` : 'mise');
 	const url = $derived(new URL(page.url.pathname, SITE).href);
-	/** A share link shows its own feeling in its own colors. Every other page shows the brand card. */
-	const code = $derived(feeling ? page.params.code : undefined);
+	/**
+	 * A share link shows its feeling in the feeling's own colors, also for a path through its worlds.
+	 * Every other page shows the brand card.
+	 */
+	const code = $derived(
+		feeling && typeof page.data.feeling === 'string' ? page.data.feeling : undefined
+	);
 	const image = $derived(code ? `${SITE}/og/${code}.png` : `${SITE}/brand/og.png`);
 	const alt = $derived(
 		code ? `${title} on mise: every feeling has a world.` : 'mise: every feeling has a world.'

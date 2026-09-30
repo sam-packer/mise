@@ -31,6 +31,7 @@ You can describe that feeling in a sentence, and mise gives you a place to start
 5. You can also type the name of a work or an artist, like "blade runner" or "pride and prejudice by
    jane austen". Then a line reads "in the key of" that work, and the picks lean toward it.
 6. Copy the URL to share the feeling. Each feeling gets a short link like `mise.art/k3x9Q2a`.
+   Each path through its worlds gets its own short link too, and that link opens the same world.
 7. Edit the sentence to try again, or click the mise logo to start over.
 
 The page also covers the other states. The first visit shows a breathing background while the
@@ -70,7 +71,8 @@ At run time the app calls three services:
   them. When you open a song, the route `/api/preview/deezer/<id>` asks Deezer for a fresh link and
   redirects the audio player to it.
 - Google Fonts. Each mood picks a typeface. The page downloads only the letters it needs.
-- Cloudflare Workers KV. It stores the sentence behind each share link, and the palette of its mood.
+- Cloudflare Workers KV. It stores the sentence behind each share link, the item ids of a shared
+  path, and the palette of the mood.
 
 Each share link also has its own preview image for chat apps and social sites. The route
 `/og/<code>.png` draws a 1200 by 630 PNG of the feeling in quotes, in the five colors of its mood,

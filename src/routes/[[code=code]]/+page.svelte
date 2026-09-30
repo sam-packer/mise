@@ -9,7 +9,7 @@
 	import { afterNavigate, goto, pushState, replaceState } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { BUNDLE_URL } from '$lib/bundle';
-	import { feelingCode, feelings, normalize } from '$lib/code';
+	import { feelingCode, normalize, pathCode, shared } from '$lib/code';
 	import {
 		CATEGORIES,
 		type Item,
@@ -82,7 +82,11 @@
 
 	const pathKey = (ids: string[]) => ids.join('\n');
 	const urlMood = $derived(data.text);
-	const trail = $derived(mood ? (page.state.trail ?? []) : []);
+	/** The path that the URL names. A history entry that the page pushed keeps it in its state. */
+	const target = $derived(page.state.trail ?? data.trail);
+	/** The shortest path that Back in history reaches from this entry. */
+	const floor = $derived(page.state.floor ?? data.trail.length);
+	const trail = $derived(mood ? target : []);
 	const key = $derived(pathKey(trail));
 	const steps = $derived(trail.map((_, i) => worlds.get(pathKey(trail.slice(0, i + 1))) ?? null));
 	const world = $derived(
@@ -91,6 +95,8 @@
 	const shown = $derived(
 		world ? { world, path: steps.slice(0, -1).map((s) => s!.item), feeling: urlMood } : held
 	);
+	/** A link to a path opens: the page waits for its worlds, and keeps the mood wall out of view. */
+	const arriving = $derived(target.length > 0 && !world && !error);
 	const scene = $derived(shown?.world ?? mood);
 	const focus = $derived(pending ?? left);
 	const picks = $derived.by(() => {
@@ -112,6 +118,8 @@
 	const glyphs = (w: World) => w.item.title + (w.item.text ?? '');
 	const message = (cause: unknown) =>
 		cause instanceof Error ? cause.message : 'the moods are out — try again soon';
+	/** The worker's message for an item id that the catalog no longer has, for example after a retrain. */
+	const MISSING = 'that work is not in the catalog';
 	/** For a song, the album carries the feeling better than the single track. */
 	const work = (item: Item) => (item.category === 'song' ? (item.album ?? item.title) : item.title);
 
@@ -145,10 +153,10 @@
 	// Run inference after full navigation, including the initial page load.
 	afterNavigate((nav) => {
 		// The router does not apply a history entry's state on the first page load, so the page shows
-		// the mood wall. Clear a path left in the entry, or Back would land on a copy of that world.
+		// the path of the URL. Clear the state left in the entry, which may name another floor.
 		// The router accepts replaceState only after it starts, just after this callback.
 		if (nav.type === 'enter') queueMicrotask(() => replaceState('', {}));
-		shownTrail = page.state.trail ?? [];
+		shownTrail = page.state.trail ?? data.trail;
 		void show(data.text);
 		if (data.note) error = data.note;
 	});
@@ -236,7 +244,7 @@
 		}
 		// Derive the code locally so navigation does not wait for storage.
 		const code = await feelingCode(q);
-		feelings.set(code, q);
+		shared.set(code, { text: q, trail: [] });
 		saving.set(
 			code,
 			fetch('/api/feeling', {
@@ -262,8 +270,8 @@
 		return vt.finished.catch(() => {});
 	}
 
-	// Load every world on the path that is not in memory, for example after the browser returns to
-	// a page whose history holds a path.
+	// Load every world on the path that is not in memory, in order, for example after a link to a path
+	// opens or the browser returns to a page whose history holds a path.
 	$effect(() => {
 		trail.forEach((_, i) => {
 			const ids = trail.slice(0, i + 1);
@@ -273,11 +281,44 @@
 			requestWorld(ids[i], ids)
 				.then(
 					(w) => worlds.set(k, w),
-					(cause) => (error = message(cause))
+					(cause) => {
+						if (cause instanceof Error && cause.message === MISSING) void cut(ids.slice(0, i));
+						else error = message(cause);
+					}
 				)
 				.finally(() => loading.delete(k));
 		});
 	});
+
+	/** The share code of a path of this feeling. The empty path is the feeling itself. */
+	async function share(ids: string[]): Promise<string> {
+		const text = urlMood;
+		const code = ids.length ? await pathCode(text, ids) : await feelingCode(text);
+		if (!shared.has(code)) {
+			shared.set(code, { text, trail: ids });
+			// Store the path in the background, as submit does for a feeling. The feeling is stored.
+			if (ids.length)
+				fetch('/api/feeling', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ text, trail: ids })
+				}).catch(() => {});
+		}
+		return code;
+	}
+
+	/** Stop the path of the URL before a work that the catalog no longer has. */
+	async function cut(ids: string[]) {
+		const before = target;
+		const code = await share(ids);
+		// Another cut or a history move changed the path meanwhile.
+		if (target !== before || !ids.every((id, i) => before[i] === id)) return;
+		shownTrail = ids;
+		replaceState(resolve('/[[code=code]]', { code }), {
+			trail: ids,
+			floor: Math.min(floor, ids.length)
+		});
+	}
 
 	// Retint the page when a world opens or closes. show() tints the page for a new mood.
 	$effect(() => {
@@ -306,10 +347,12 @@
 		const k = pathKey(ids);
 		error = null;
 		traveling = true;
+		const base = floor;
+		let code: string;
 		let w: World;
 		let f: LoadedFace | null;
 		try {
-			w = worlds.get(k) ?? (await requestWorld(item.id, ids));
+			[code, w] = await Promise.all([share(ids), worlds.get(k) ?? requestWorld(item.id, ids)]);
 			// Give the typeface a moment, so the title does not change font during the transition.
 			f = await Promise.race([
 				loadTypeface(w.typeface, glyphs(w)).catch(() => null),
@@ -330,7 +373,7 @@
 		pending = item.id;
 		await tick();
 		await viewTransition(() => {
-			pushState('', { trail: ids });
+			pushState(resolve('/[[code=code]]', { code }), { trail: ids, floor: base });
 			shownTrail = ids;
 			pending = null;
 			scrollTo(0, 0);
@@ -338,13 +381,31 @@
 		heading?.focus({ preventScroll: true });
 	}
 
-	/** Go back the given number of steps on the path. The popstate listener restores focus. */
+	/**
+	 * Go back the given number of steps on the path. The popstate listener restores focus. History
+	 * holds no entry for a path shorter than the floor, for example after a link to a path opens, so
+	 * then the page pushes a new entry.
+	 */
 	async function back(count: number) {
 		if (!world || count <= 0) return;
+		const before = trail;
+		const ids = trail.slice(0, trail.length - count);
 		scrolls.set(key, scrollY);
-		const y = scrolls.get(pathKey(trail.slice(0, trail.length - count))) ?? 0;
+		const y = scrolls.get(pathKey(ids)) ?? 0;
 		left = world.item.id;
 		pending = null;
+		if (ids.length < floor) {
+			const code = await share(ids);
+			if (trail !== before) return;
+			await viewTransition(async () => {
+				pushState(resolve('/[[code=code]]', { code }), { trail: ids, floor: ids.length });
+				shownTrail = ids;
+				await tick();
+				scrollTo(0, y);
+			});
+			refocus(before, ids);
+			return;
+		}
 		await viewTransition(() =>
 			new Promise<void>((resolve) => {
 				addEventListener('popstate', () => resolve(), { once: true });
@@ -354,6 +415,18 @@
 				scrollTo(0, y);
 			})
 		);
+	}
+
+	/** After a step back on the path, focus the work on this wall that the path went on through. */
+	function refocus(before: string[], after: string[]) {
+		const next = after.length < before.length ? before[after.length] : null;
+		const tile = next
+			? [...document.querySelectorAll<HTMLElement>(`[data-item="${CSS.escape(next)}"]`)].find(
+					(el) => !el.closest('[inert]')
+				)
+			: null;
+		if (tile) tile.focus({ preventScroll: true });
+		else if (world) heading?.focus({ preventScroll: true });
 	}
 
 	function startOver(e: MouseEvent) {
@@ -366,8 +439,9 @@
 	onMount(() => {
 		const onscroll = () => scrolls.set(key, scrollY);
 		const onpopstate = async () => {
-			// For another page the router navigates later, and afterNavigate takes over.
-			if (location.pathname !== page.url.pathname) return;
+			// For another feeling the router navigates later, and afterNavigate takes over. Every path
+			// of this feeling in history has its code in the session cache.
+			if (shared.get(location.pathname.slice(1))?.text !== urlMood) return;
 			// This listener can run before the router's, which sets page.state for a step on the path.
 			// Wait for the rest of the event. Copy the scroll positions first: the router scrolls, and
 			// the scroll event that follows would record its position for the new path.
@@ -382,15 +456,7 @@
 			else if (after.length > before.length) left = null;
 			await tick();
 			scrollTo(0, y);
-			// Focus the work on this wall that the path went on through.
-			const next = shorter ? before[after.length] : null;
-			const tile = next
-				? [...document.querySelectorAll<HTMLElement>(`[data-item="${CSS.escape(next)}"]`)].find(
-						(el) => !el.closest('[inert]')
-					)
-				: null;
-			if (tile) tile.focus({ preventScroll: true });
-			else if (world) heading?.focus({ preventScroll: true });
+			refocus(before, after);
 		};
 		addEventListener('scroll', onscroll, { passive: true });
 		addEventListener('popstate', onpopstate);
@@ -414,7 +480,7 @@
 	style:--mood-style={face?.style ?? null}
 >
 	<!-- The mood stays in the page under a world, so a return shows it as the user left it. -->
-	<div class="scene" class:away={shown !== null} inert={shown !== null}>
+	<div class="scene" class:away={shown !== null || arriving} inert={shown !== null || arriving}>
 		<header class="line">
 			<MoodLine
 				bind:value={text}
@@ -509,7 +575,7 @@
 <svelte:window onkeydown={typeAnywhere} />
 
 <!-- While a world loads, the page breathes. -->
-{#if traveling}
+{#if traveling || arriving}
 	<div class="breath" aria-hidden="true" transition:fade={{ duration: 600 }}></div>
 {/if}
 
