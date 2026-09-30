@@ -424,7 +424,8 @@
 		font-style: var(--mood-style, italic);
 		font-size: clamp(1.6rem, min(2.6vw + 0.8rem, 4.2svh + 0.4rem), 3.2rem);
 		font-weight: 400;
-		line-height: 1.05;
+		/* The clamp hides overflow, so the line box must hold the deepest descenders ("g", "y"). */
+		line-height: 1.18;
 		letter-spacing: -0.015em;
 		overflow-wrap: anywhere;
 		text-wrap: balance;
