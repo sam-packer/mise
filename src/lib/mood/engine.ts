@@ -124,9 +124,7 @@ export async function createEncoder(io: EncoderIO, manifest: Manifest): Promise<
 // A world id and the work to show in it, for the demo path.
 const PINNED: Record<string, string> = {
 	'song:rex-orange-county-sunflower': 'song:the-marias-sienna',
-	'song:laufey-from-the-start': 'song:the-marias-sienna',
-	'song:the-marias-sienna': 'song:mk-gee-alesis',
-	'song:the-marias-no-one-noticed': 'song:mac-demarco-my-kind-of-woman'
+	'song:the-marias-sienna': 'song:mk-gee-alesis'
 };
 
 export async function createMoodEngine(io: EngineIO): Promise<MoodEngine> {
