@@ -1,6 +1,6 @@
 # The mise model pipeline
 
-This folder builds everything the app loads from the CDN: the catalog of about 11,000 works, their
+This folder builds everything the app loads from the CDN: the catalog of about 16,000 works, their
 images, and the small model that runs in the browser. It runs on one local NVIDIA GPU.
 
 The pipeline has four commands. Run them from `ml/`, in this order:
@@ -29,6 +29,10 @@ Add `--help` to any command for its details. Add `--plan` to see what it would d
 | `HARDCOVER_TOKEN`              | hardcover.app/account/api       | books                                 |
 | `LISTENBRAINZ_TOKEN`           | listenbrainz.org/settings       | songs: the top recordings per artist  |
 | `LASTFM_API_KEY`               | last.fm/api/account/create      | songs: older artists and mood tags    |
+| `SMITHSONIAN_API_KEY`          | api.data.gov/signup             | optional: Smithsonian CC0 art         |
+
+NASA needs no key. Without a Smithsonian key, the Met, Chicago, and Cleveland fill its 500 slots
+in a 60/25/15 split. Set the optional key to include Smithsonian works on the next download.
 
 `publish` also needs the R2 variables in `.env.example`.
 
@@ -55,14 +59,64 @@ for a browser (15 GB), so the student learns to copy the teacher's rankings in 2
 
 1. **fetch** downloads the fixed source files in `sources.toml` (the Met collection and a palette
    data set) and checks each checksum. PoetryDB is an API, so fetch reads it poem by poem.
-2. **curate** chooses the catalog: 2,000 films (TMDB), 2,000 books (Hardcover), 3,000 songs
-   (ListenBrainz, Last.fm, MusicBrainz), 2,000 artworks (the Met, the Art Institute of Chicago, and
-   the Cleveland Museum of Art), and about 2,000 public-domain poems. Films, books, and songs are
+2. **curate** chooses the catalog: 3,000 films (TMDB), 3,000 books (Hardcover), 5,000 songs
+   (ListenBrainz, Last.fm, MusicBrainz), 3,000 artworks (the Met, the Art Institute of Chicago,
+   Cleveland, NASA, and Smithsonian), and all eligible public-domain poems. PoetryDB currently
+   yields 1,993 poems with 8 to 40 lines, for a target of 15,993 works. Films, books, and songs are
    split into eras, and each era gets a fixed share, so the catalog is not only recent hits. Songs
    rank by the number of listeners, not the number of plays.
 3. **resolve** finds an image and links for each work. Posters come from TMDB, covers from
    Hardcover or Open Library, album art and previews from Deezer, and museum images from Wikimedia
    Commons or the museum. Each image becomes an 800 px WebP file.
+
+### Song breadth and scene balance
+
+The artist pool combines ListenBrainz sitewide recordings and artist lists with up to 200 artists
+per Last.fm tag (two pages of 100). The 14 older tags stay. Another 29 distinct tags cover indie,
+alternative R&B, neo-soul, bedroom pop, dream pop, art pop, shoegaze, post-punk, singer-songwriter,
+lo-fi, alternative rock, electronic, ambient, trip-hop, hip-hop, K-pop, J-pop, city pop,
+afrobeats, Latin, bossa nova, reggae, country, Americana, classical, soundtrack, indie rock,
+synthpop, and indie pop. Jazz is already in the older tags.
+
+Each artist keeps the first Last.fm tag that found it, in the fixed tag and page order. Match by
+artist ID, then by normalized name when the services use different IDs. Artists with no such tag
+use `sitewide`. This is a discovery group, not a claim about an artist's whole
+genre. Each artist supplies at most three songs. The cap applies to both artist IDs and display
+names, so duplicate service IDs cannot double the allowance. Name matching preserves non-Latin
+characters. Title deduplication also keeps non-Latin letters instead of merging those titles
+into an empty key. Alternate versions are excluded as before.
+When titles share a slug, each record gets its recording ID as a suffix. This keeps distinct
+works separate and prevents a later selection from reusing another work's saved media.
+
+Within each era, selection reserves 14 candidates per discovery group for a floor of 10 songs
+(the song candidate factor is 1.4). If the era is too small, the reserve shrinks to its even
+share. Each reserve uses listener rank. The rest use listener rank with the existing year cap.
+Resolve keeps this selection order, including when it reuses saved images and repaired facts.
+An unavailable scene releases its slots to the rest. Failed media can reduce a scene's final
+count; the extra candidates provide replacements. There is no artist boost or personal list.
+
+The song eras separate the 2000s and 2010s. Selection logs each era's quota, pool size, candidate
+count, last candidate's listener count, and minimum including the scene reserves.
+Scene reserves can have fewer listeners than the main cutoff.
+The candidate factors stay at 1.05 for films, 1.1 for books, 1.4 for songs, and 1.25 for art.
+
+See [the expansion measurements](catalog-expansion.md) for the quota, scene-share, cutoff,
+image-download, size, and time tables from this change.
+
+### Art sources
+
+The Met keeps 1,200 slots, Chicago 500, and Cleveland 300. NASA and Smithsonian each add 500.
+NASA uses 18 nature and space topics. Smithsonian uses 12 topics across photographs and
+paintings from CHNDM, SAAM, NASM, EEPA, NMAAHC, and Smithsonian Gardens. Each selector sorts by
+ID, shuffles with the fixed seed, and takes turns across topics. A topic supplies at most twice
+its even share. Duplicate source IDs count once.
+
+NASA selection excludes explicit third-party copyright notices and technical, staff, ceremony,
+logo, and test metadata. Smithsonian selection requires CC0 on each selected image, excludes
+metadata-marked portraits, and retains the credit line in `source.credit`. Images come from
+NASA's medium rendition and Smithsonian IDS at 1,200 pixels. IDS gets a plain User-Agent.
+If a new source fails or supplies too few candidates, the other museums fill the missing slots
+in the same 60/25/15 split. Each art row records the effective group target for resolve.
 
 Every API answer goes into `data/cache/http/`, so a second run needs almost no network. After ten
 failures in a row, the pipeline stops calling that host for the rest of the run. The next run tries
@@ -236,6 +290,10 @@ list of lights, typefaces, and scents is `../scripts/stub/vocab.json`.
 ## Licenses
 
 The Met, Art Institute of Chicago, and Cleveland Museum of Art images are public domain or CC0.
+Smithsonian images are CC0. NASA images follow the
+[NASA media guidelines](https://www.nasa.gov/nasa-brand-center/images-and-media/).
+NASA is credited as the image source. Feelings and descriptions generated by mise are not NASA
+content. The app does not use NASA logos.
 ListenBrainz and MusicBrainz data is CC0. The PAT palettes come from Bahng et al., "Coloring with
 Words", ECCV 2018. TMDB posters, book covers, and Deezer album art and previews belong to their
 owners. The app shows them next to links to their sources and credits each one on its attribution

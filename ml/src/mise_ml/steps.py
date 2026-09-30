@@ -44,6 +44,14 @@ def publish_settings() -> Settings:
     )
 
 
+def curate_settings() -> Settings:
+    from mise_ml import keys
+
+    return settings(
+        c.CurateConfig, c.ResolveConfig, smithsonian_enabled=bool(keys.env("SMITHSONIAN_API_KEY"))
+    )
+
+
 def content(path: Path, value: Any, label: str = "") -> ContentInput:
     return ContentInput(
         path, hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest(), label
@@ -255,7 +263,7 @@ STEPS = {
             "curate",
             "download",
             lambda: [*raw_curate(), constants("SEED", "CATALOG_VERSION")],
-            lambda: settings(c.CurateConfig, c.ResolveConfig),
+            curate_settings,
             ("curate", "http", "util", "threads"),
             lambda: [c.CATALOG, c.CATALOG_META, c.PAT],
             "curate:run",

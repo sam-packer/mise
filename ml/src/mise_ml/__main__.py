@@ -28,7 +28,7 @@ def preflight(command: str) -> None:
     if command == "train" and not DISTILL.is_file():
         problems.append(f"missing {DISTILL}; run uv run label")
     if command == "download":
-        problems.extend(keys.missing(list(keys.KEYS)))
+        problems.extend(keys.missing(["tmdb", "hardcover", "listenbrainz", "lastfm"]))
     if command == "publish":
         problems.extend(f"missing {key}; set it in ml/.env" for key in keys.missing_r2())
     if command in ("label", "train"):

@@ -890,7 +890,7 @@ class Resolver:
             url = self.aic_images.get(str(s["aic"]))
             if url is None:
                 return None, "no_commons_image"
-        elif "cma" in s:
+        elif "nasa" in s or "si" in s or "cma" in s:
             url = s["image"]
         else:
             url = self.met_images.get(s.get("wikidata") or "")
@@ -911,8 +911,8 @@ class Resolver:
 
 
 def rank_key(r: Record) -> tuple[float, str]:
-    """Candidate order: the most popular first, ties by id."""
-    return (-r["rank"], r["id"])
+    """Keep song scene floors, then popularity; other categories keep their source rank."""
+    return (r.get("selection_order", -r["rank"]), r["id"])
 
 
 def trim_to_targets(group_targets: dict[str, int]) -> None:
@@ -1055,6 +1055,18 @@ def run() -> None:
     keys.require([s for c, s in (("film", "tmdb"), ("song", "lastfm")) if c in wanted])
     refresh_facts = retry_fixable_drops()
     resolved = list(iter_jsonl(RESOLVED))
+    # A changed selection can remove artists, split eras, and change scene priority.
+    # Retain repaired facts and images, but use the current candidate membership and order.
+    candidates = {r["id"]: r for r in catalog}
+    resolved = [r for r in resolved if r["id"] in candidates]
+    for r in resolved:
+        candidate = candidates[r["id"]]
+        for field in ("group", "rank", "selection_order", "group_target"):
+            if field in candidate:
+                r[field] = candidate[field]
+        if "scene" in candidate["signal"]:
+            r["signal"]["scene"] = candidate["signal"]["scene"]
+    write_jsonl(RESOLVED, resolved)
     dropped_before = list(iter_jsonl(RESOLVE_DROPPED))
     done = {r["id"] for r in resolved} | {r["id"] for r in dropped_before}
 
@@ -1083,7 +1095,7 @@ def run() -> None:
                 write_jsonl(RESOLVED, resolved)
     lock = threading.Lock()
     stats: dict[str, Counter[str]] = {c: Counter() for c in wanted}
-    group_targets = targets(CurateConfig())
+    group_targets = targets(CurateConfig(), catalog)
     kept_keys: dict[str, list[tuple[float, str]]] = defaultdict(list)
     for r in resolved:
         if r.get("group") in group_targets:

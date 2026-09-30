@@ -84,12 +84,12 @@ Cloudflare cache. The feeling is set in EB Garamond Italic, under the SIL Open F
 The catalog itself comes from APIs too. I built it ahead of time, because a live query to a dozen
 services for each feeling would be slow and would hit rate limits. The pipeline reads TMDB (films),
 Hardcover and Open Library (books), ListenBrainz, MusicBrainz, Last.fm and Deezer (songs),
-PoetryDB (poems), and open-access collections from the Met, the Art Institute of Chicago, and the
-Cleveland Museum of Art (artworks). Their data is everything the wall shows: the titles, the
-posters and covers, the song tags, and the links.
+PoetryDB (poems), and collections from the Met, the Art Institute of Chicago, Cleveland, NASA, and
+Smithsonian (artworks). It reads titles, posters and covers, song tags, and links from these
+sources. mise generates the feelings and mood descriptions.
 
 The search runs in your browser. A small language model (23 MB) turns your sentence into a list of
-numbers and compares it with the numbers for about 11,000 works. The same model also picks the
+numbers and compares it with the numbers for each work in the catalog. The same model also picks the
 palette, the light, the typeface, and the scent. After the first load, a search takes a fraction of
 a second. The server only stores the sentence and its palette for the share link.
 
@@ -128,14 +128,14 @@ to the screen width, and the small controls keep a touch target of at least 44 p
 
 ## Known limitations
 
-- The first visit is heavy. The model, the vectors, and the catalog are about 40 MB before
+- The first visit is heavy. The model, the vectors, and the catalog are about 40 to 50 MB before
   compression. On a slow phone connection the first search can take a while. Later visits use the
   browser cache.
-- The catalog is fixed at about 11,000 works, chosen in September 2026. Newer releases aren't in
-  it, and plenty of good older ones are missing too.
+- The catalog is a snapshot of the source collections. Run the [model pipeline](ml/README.md)
+  to select newer works. The next build targets 15,993 works; the published bundle can have fewer.
 - An AI model labeled the catalog. A local language model wrote the mood descriptions and palettes
   that the small model learned from, so the app's taste is partly that model's taste.
-- The poems and the art are public domain only. Modern poetry and art aren't in the catalog.
+- The poems are public domain only. Modern poetry isn't in the catalog.
 - Names must be exact. An anchor needs the full title or artist name, and the name must be the
   whole sentence (words like "movie" or "song" are fine). "blade runner" anchors, but "a rainy night like blade runner" does not.
 - It only understands English.

@@ -14,7 +14,8 @@ KEYS = {
     "tmdb": (("TMDB_TOKEN", "TMDB_API_KEY"), "films: selection and details"),
     "hardcover": (("HARDCOVER_TOKEN",), "books: selection, tags, and covers"),
     "listenbrainz": (("LISTENBRAINZ_TOKEN",), "songs: the top recordings of each artist"),
-    "lastfm": (("LASTFM_API_KEY",), "songs: older artists and listener tags"),
+    "lastfm": (("LASTFM_API_KEY",), "songs: scene artists and listener tags"),
+    "smithsonian": (("SMITHSONIAN_API_KEY",), "optional: Smithsonian Open Access art"),
 }
 
 

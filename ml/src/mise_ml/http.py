@@ -33,7 +33,11 @@ IDENTIFIED_HOSTS = {
     "commons.wikimedia.org",
 }
 # The Art Institute of Chicago asks for this header on its API.
-HOST_HEADERS = {"api.artic.edu": {"AIC-User-Agent": USER_AGENT}}
+HOST_HEADERS = {
+    "api.artic.edu": {"AIC-User-Agent": USER_AGENT},
+    # Smithsonian IDS rejects browser-like User-Agents.
+    "ids.si.edu": {"User-Agent": "mise-catalog/0.1"},
+}
 # After this many failed requests in a row, a host gets no more calls in this run.
 BREAKER_LIMIT = 10
 
