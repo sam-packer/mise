@@ -1,4 +1,4 @@
-"""Encode length-sorted token batches and restore the input order."""
+"""Batch encoder calls by token length for feature extraction, evaluation, and export."""
 
 import gc
 from collections.abc import Callable
@@ -21,6 +21,7 @@ def encode_batches(
     encode: Callable[[dict[str, torch.Tensor]], np.ndarray],
     device: str = "cpu",
 ) -> np.ndarray:
+    """Encode within a token budget, retry GPU memory failures, and restore the input order."""
     if not texts:
         raise ValueError("cannot encode an empty text list")
     tokens = tokenizer(texts, truncation=True, max_length=max_length, padding=False)

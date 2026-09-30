@@ -1,10 +1,9 @@
-"""Select the catalog: films (TMDB), books (Hardcover), songs (ListenBrainz and MusicBrainz),
-art (the Met CSV, the Art Institute of Chicago, the Cleveland Museum of Art), and poems
-(PoetryDB). Every API answer is cached in data/cache/http, so a rerun is fast.
+"""Select the catalog candidates: films (TMDB), books (Hardcover), songs (ListenBrainz, Last.fm,
+and MusicBrainz), art (the Met CSV, the Art Institute of Chicago, and the Cleveland Museum of Art),
+and poems (PoetryDB). data/cache/http caches every API answer, so a rerun is fast.
 
-Films, books, and songs are chosen by era: each era keeps its quota, spread over its years.
-Each era and each art source is a group. curate writes more candidates than a group keeps;
-resolve tries them in rank order and keeps the group's target.
+Spread candidates across years within each era and across art sources.
+Write extra candidates so resolve can fill each group's quota when media is missing.
 """
 
 import html
@@ -55,8 +54,8 @@ MUSICBRAINZ = "https://musicbrainz.org/ws/2/recording"
 AIC = "https://api.artic.edu/api/v1/artworks/search"
 CMA = "https://openaccess-api.clevelandart.org/api/artworks/"
 
-# Words that mark another version of a song. A catalog song never has one; resolve rejects
-# a Deezer match with one unless the catalog title has it too.
+# Exclude alternate song versions from the catalog.
+# Resolve accepts these words in a Deezer match only when the catalog title has them too.
 VERSION = re.compile(
     r"\b(remix|mix|live|instrumental|karaoke|acoustic|cover|sped up|slowed|a cappella|"
     r"acapella|originally performed|made popular|tribute|demo)\b",
@@ -121,8 +120,7 @@ def unique(values: Iterable[str], limit: int) -> list[str]:
 
 
 def parallel(fn: Callable[[Any], Any], items: list[Any], workers: int) -> list[Any]:
-    """fn over items with a thread pool, results in item order. The per-host rate limit
-    still holds; parallel calls hide the network latency."""
+    """Return concurrent results in input order; the HTTP client limits each host's request rate."""
     return run_all(fn, items, workers)
 
 
@@ -157,9 +155,9 @@ def wanted(category: str, quota: int, cfg: CurateConfig) -> int:
 def spread(rows: list[Record], n: int, cfg: CurateConfig) -> tuple[list[Record], int]:
     """The best n rows of an era, spread over its years.
 
-    rows must be in rank order. A year first gets at most year_cap_factor times its even
-    share; the free slots then go to the best rows left. Returns the rows and how many came
-    from the capped pass.
+    Supply rows in rank order. First cap each year at year_cap_factor times its even share.
+    Fill free slots with the best remaining rows.
+    Return the rows and the count from the capped pass.
     """
     years = {r["year"] for r in rows}
     cap = max(1, math.ceil(cfg.year_cap_factor * n / max(1, len(years))))
@@ -292,7 +290,7 @@ def hardcover(http: CachedClient, query: str, variables: dict[str, Any] | None =
 
 
 def check_hardcover_schema(http: CachedClient) -> None:
-    """Stop with the field names that Hardcover no longer has, before any selection."""
+    """Stop before selection if Hardcover lacks a required field, and report the missing names."""
     data = hardcover(http, '{ __type(name: "books") { fields { name } } }')
     have = {f["name"] for f in (data.get("__type") or {}).get("fields", [])}
     absent = [f for f in BOOK_FIELDS if f not in have]
@@ -641,8 +639,7 @@ def met_record(row: dict[str, Any], group: str, rank: int) -> Record:
 
 
 def select_met(cfg: CurateConfig) -> list[Record]:
-    """Public-domain objects of each class: highlights first, then objects with a Wikidata
-    item (a Commons image), then objects with subject tags, then a seeded shuffle."""
+    """Rank objects by highlights, Wikidata images, and subject tags before a seeded shuffle."""
     met = load_met()
     rng = random.Random(SEED)
     records = []
@@ -833,8 +830,7 @@ def catalog_version() -> int | None:
 
 
 def start_fresh_if_old() -> None:
-    """A catalog from an older format (MovieLens, goodbooks-10k, MuSe) cannot mix with this
-    one. Remove it, its resolve results, and its images. data/raw and the HTTP cache stay."""
+    """Clear catalog results and images on format mismatch; keep raw sources and the HTTP cache."""
     version = catalog_version()
     if version == CATALOG_VERSION:
         return

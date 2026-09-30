@@ -1,4 +1,5 @@
 <script lang="ts">
+	// Render one wall item and identify its image for the transition into the full view.
 	import type { Item } from '$lib/mood/types';
 
 	let {

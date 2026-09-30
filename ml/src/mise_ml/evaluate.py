@@ -1,3 +1,5 @@
+"""Compare trained models with the baseline and record the gate for bundle installation."""
+
 import gc
 import statistics
 import time
@@ -430,8 +432,8 @@ def run() -> dict[str, Any]:
     for name, scores in judged.items():
         report[name]["recall@10_judged"] = float(scores.mean()) if len(scores) else float("nan")
     known = {r["key"] for r in iter_jsonl(JUDGMENTS)}
-    # Check the depth the metric reads. The judge pools a deeper top list, so float noise that
-    # swaps near-tied items at the pool edge does not leave the metric unjudged.
+    # Check only the depth used by the metric.
+    # The deeper judge pool covers near-tied items that floating-point noise can reorder.
     complete = all(
         SEP.join((text, cat, catalog.items[i]["id"])) in known
         for out in systems.values()

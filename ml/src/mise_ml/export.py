@@ -1,3 +1,5 @@
+"""Export the student to ONNX and assemble its catalog, vectors, and metadata for the browser."""
+
 import json
 import logging
 import re
@@ -82,8 +84,8 @@ def export_onnx(model: Student, path: Path, opset: int) -> None:
 def rename_shadowed_values(path: Path) -> None:
     """Give internal values that reuse a graph output name their own name.
 
-    The dynamo exporter can name an internal value after an output, for example
-    the word-embedding Gather also becomes "embedding". ONNX needs each name once.
+    The dynamo exporter can assign "embedding" to both an internal Gather value and a graph output.
+    ONNX requires unique names.
     """
     model = onnx.load(str(path))
     producers = Counter(name for node in model.graph.node for name in node.output)
@@ -288,7 +290,7 @@ def validate_items(items: list[dict[str, Any]]) -> list[str]:
 
 
 def common_words(tokenizer: PreTrainedTokenizerBase, items: list[dict[str, Any]]) -> list[str]:
-    """Check vocabulary words and each name word with the exported tokenizer."""
+    """Return sorted vocabulary and item-name words that encode as one token."""
     candidates = {word for word in tokenizer.get_vocab() if re.fullmatch(r"[a-z0-9]+", word)}
     for item in items:
         for field in ("title", "creator", "album"):

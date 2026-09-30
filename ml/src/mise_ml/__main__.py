@@ -1,3 +1,5 @@
+"""Run command plans or execute their steps with shared logging and provenance."""
+
 import argparse
 import os
 import time

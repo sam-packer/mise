@@ -1,18 +1,18 @@
+// Configure the Svelte app build for Cloudflare and load the inference runtime from its CDN.
 import tailwindcss from '@tailwindcss/vite';
 import adapter from '@sveltejs/adapter-cloudflare';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defaultClientConditions, defineConfig } from 'vite';
 
 export default defineConfig({
-	// The ORT WASM loads from the CDN (see worker.ts). The extra condition keeps Vite from emitting the
-	// >25 MiB .wasm files. Setting `conditions` replaces Vite's defaults, so keep them: without
-	// `browser`, `svelte` resolves to its server build and `onMount` never runs.
+	// The worker loads ORT WASM from the CDN to exclude files larger than 25 MiB from the app build.
+	// Keep Vite's default conditions so Svelte resolves to its browser build and runs onMount.
 	resolve: { conditions: [...defaultClientConditions, 'onnxruntime-web-use-extern-wasm'] },
 	plugins: [
 		tailwindcss(),
 		sveltekit({
 			compilerOptions: {
-				// Force runes mode for the project, except for libraries. Can be removed in svelte 6.
+				// Use runes in app components and preserve each library's compiler mode.
 				runes: ({ filename }) =>
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},

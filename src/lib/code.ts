@@ -1,5 +1,5 @@
-// A feeling's short code: the first 48 bits of the SHA-256 of its text, as 7 base62 characters.
-// The browser and the Worker both run this, so the same feeling always gets the same link.
+// Derive share codes from feeling text in both the browser and the Cloudflare Worker.
+// Encode the first 48 hash bits as seven base62 characters.
 
 const ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 const LENGTH = 7;
@@ -8,8 +8,7 @@ const LENGTH = 7;
 export const MAX_FEELING = 500;
 
 /**
- * The feeling as the app submits it: trimmed, and nothing else. The text goes to the model and the
- * tab title as typed, so a code must name exactly one text.
+ * Trim only the outer whitespace. Preserve the same text for the model, the tab title, and the share code.
  */
 export const normalize = (text: string) => text.trim();
 
@@ -18,7 +17,7 @@ export const isCode = (value: string) => /^[0-9A-Za-z]{7}$/.test(value);
 export async function feelingCode(text: string): Promise<string> {
 	const bytes = new TextEncoder().encode(normalize(text));
 	const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
-	// 48 bits fit a double exactly, and 62^7 < 2^48, so 7 base62 digits take the value mod 62^7.
+	// A double holds 48 bits exactly. Seven base62 digits reduce the value modulo 62^7.
 	let n = 0;
 	for (let i = 0; i < 6; i++) n = n * 256 + digest[i];
 	let code = '';
@@ -29,5 +28,5 @@ export async function feelingCode(text: string): Promise<string> {
 	return code;
 }
 
-/** Browser only: the feelings of this session by code, so Enter and back/forward skip the network. */
+/** Cache feelings in the browser session to avoid a fetch after submission or history navigation. */
 export const feelings = new Map<string, string>();

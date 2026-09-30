@@ -1,4 +1,4 @@
-// Main-thread wrapper around the mood worker.
+// Send inference requests to the browser worker and pair responses with their callers.
 
 import type { Mood } from './types';
 
@@ -28,11 +28,10 @@ export const ready: Promise<void> = new Promise((res, rej) => {
 	rejectReady = rej;
 });
 
-/** Create the worker and start loading. Safe to call more than once.
- * `base` is the bundle root URL (same-origin path or a cross-origin URL); it must end in '/'. */
+/** Start loading once. The bundle root can use any origin and must end in '/'. */
 export function start(base = '/bundle/') {
 	if (worker || typeof Worker === 'undefined') return;
-	// Keep this exact `new Worker(new URL(...))` form: it is how Vite finds and bundles the worker.
+	// Vite requires this `new Worker(new URL(...))` form to find and bundle the worker.
 	worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
 	worker.postMessage({ type: 'init', base } satisfies WorkerRequest);
 	worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
@@ -54,7 +53,7 @@ export function start(base = '/bundle/') {
 	};
 }
 
-/** Run inference in the worker. */
+/** Wait for the bundle to load, then request a mood from the worker. */
 export async function infer(text: string): Promise<Mood> {
 	start();
 	await ready;

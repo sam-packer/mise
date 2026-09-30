@@ -1,3 +1,4 @@
+# Define the ML package, command entry points, CUDA dependencies, and lint settings.
 [project]
 name = "mise-ml"
 version = "0.1.0"

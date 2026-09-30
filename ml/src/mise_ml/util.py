@@ -1,3 +1,5 @@
+"""Share safe file writes, stable hashes, and deterministic setup across pipeline steps."""
+
 import hashlib
 import json
 import logging
@@ -14,7 +16,7 @@ log = logging.getLogger("mise_ml.util")
 
 
 def atomic_write(path: Path, data: bytes) -> None:
-    """Write a file so that a hard kill leaves the old file or the new one, never half."""
+    """Replace a file atomically so an interrupted write cannot leave a partial file."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
@@ -45,15 +47,12 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def read_jsonl(path: Path) -> list[dict[str, Any]]:
-    return list(iter_jsonl(path))
-
-
 def iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
-    """The rows of a JSONL file.
+    """Read JSONL rows, or yield nothing if the file is missing.
 
-    A hard kill during an append can cut the last line short. That line is skipped with a
-    warning, and a rerun redoes its work. A bad line anywhere else still raises.
+    An interrupted append can leave a partial final line.
+    Skip that line with a warning so a rerun can retry it.
+    Raise an error for an invalid line anywhere else.
     """
     if not path.exists():
         return

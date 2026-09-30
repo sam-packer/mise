@@ -1,4 +1,7 @@
-"""Command plans. No GPU preflight, model loads, logging files, or output writes."""
+"""Inspect command dependencies and caches without loading models.
+
+Plans report pending work without writes. An explicit prune request removes unused cache records.
+"""
 
 import json
 
@@ -11,6 +14,7 @@ from mise_ml.util import iter_jsonl, sha256_file
 
 
 def judge_plan() -> tuple[CachePlan, list[str], bool]:
+    """Inspect saved judge keys and report whether the pool matches current inputs."""
     from mise_ml.data import load_catalog, load_eval_texts
     from mise_ml.evaluate import SEP, judge_job
 

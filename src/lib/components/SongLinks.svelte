@@ -1,4 +1,5 @@
 <script lang="ts">
+	// Show song links and remember the user's preferred music service when storage is available.
 	import type { Item } from '$lib/mood/types';
 
 	type Platform = 'spotify' | 'apple' | 'deezer' | 'youtube';
@@ -18,7 +19,7 @@
 			const v = localStorage.getItem(KEY);
 			if (PLATFORMS.includes(v as Platform)) return v as Platform;
 		} catch {
-			// storage may be unavailable
+			// Storage can be unavailable during server rendering or blocked by the browser.
 		}
 		return 'spotify';
 	}
@@ -35,7 +36,7 @@
 		try {
 			localStorage.setItem(KEY, p);
 		} catch {
-			// storage may be unavailable
+			// Keep the selection for this view when the browser blocks storage.
 		}
 	}
 </script>

@@ -1,11 +1,12 @@
-# Package Managers
+# Exclude lock files and generated or separately formatted files from Prettier.
+# Package manager lock files
 package-lock.json
 pnpm-lock.yaml
 yarn.lock
 bun.lock
 bun.lockb
 
-# Miscellaneous
+# Static assets, Python files, and generated worker types
 /static/
 /ml/
 worker-configuration.d.ts

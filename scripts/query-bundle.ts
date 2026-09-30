@@ -1,4 +1,4 @@
-// Runs one feeling through static/bundle/ with the same engine the browser worker uses.
+// Run feelings through static/bundle/ with the browser worker's engine and print the selected items.
 // Run: bun scripts/query-bundle.ts "driving home at 2am with the windows down"
 import * as ortNode from 'onnxruntime-node';
 import { readFile } from 'node:fs/promises';

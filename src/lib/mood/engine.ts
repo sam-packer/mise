@@ -1,4 +1,4 @@
-// Environment-agnostic inference core. The browser worker and the Bun scripts both use it.
+// Load the encoder and search the bundle for the browser worker and Bun scripts.
 import type * as ORT from 'onnxruntime-web';
 import { Tokenizer } from '@huggingface/tokenizers';
 import { createSearch } from './search';
@@ -29,7 +29,7 @@ export type MoodEngine = {
 	infer(query: string): Promise<Mood>;
 };
 
-export type Encoder = {
+type Encoder = {
 	/** Runs the model on one text and returns every output tensor plus the pooled embedding. */
 	run(text: string): Promise<{ embedding: Float32Array; outputs: ORT.InferenceSession.ReturnType }>;
 	embed(texts: string[]): Promise<Float32Array[]>;
@@ -53,8 +53,7 @@ function argmax(values: ArrayLike<number>): number {
 	return best;
 }
 
-/** Loads the tokenizer and the ONNX session. Texts are encoded one at a time, so a text always gets
- * the same vector: batch padding would change the dynamic quantization ranges. */
+/** Load the tokenizer and ONNX session. Encode texts separately because batch padding changes dynamic quantization ranges. */
 export async function createEncoder(io: EncoderIO, manifest: Manifest): Promise<Encoder> {
 	const { encoder } = manifest;
 	const [tokenizerJson, tokenizerConfig, modelBytes] = await Promise.all([
@@ -118,6 +117,7 @@ export async function createEncoder(io: EncoderIO, manifest: Manifest): Promise<
 	};
 }
 
+/** Load bundle assets and combine encoder outputs with catalog matches. */
 export async function createMoodEngine(io: EngineIO): Promise<MoodEngine> {
 	const manifest = await io.fetchJson<Manifest>('manifest.json');
 	const { files } = manifest;

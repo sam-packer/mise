@@ -4,11 +4,12 @@ import type { Typeface } from '$lib/mood/types';
 
 export type LoadedFace = { family: string; style: 'italic' | 'normal' };
 
-// Always include the characters a user can type into the mood line, so an edit never falls back glyph by glyph.
+// Include common input characters so edits can use the loaded font immediately.
 const BASE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 .,;:!?\'"’“”‘—–-()&';
 
 const cache = new Map<string, Promise<LoadedFace>>();
 
+/** Load and cache a font subset for this text, with a timeout in milliseconds. */
 export function loadTypeface(face: Typeface, text: string, timeoutMs = 5000): Promise<LoadedFace> {
 	const glyphs = Array.from(new Set(BASE + text))
 		.sort()

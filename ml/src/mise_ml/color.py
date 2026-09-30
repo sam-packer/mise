@@ -1,3 +1,5 @@
+"""Convert image colors and palette labels to OKLab for training and export."""
+
 import re
 
 import numpy as np

@@ -1,4 +1,4 @@
-"""Read and hash the files in a public bundle."""
+"""Read and hash public bundle files for local installation and R2 publication."""
 
 import hashlib
 import json
@@ -17,6 +17,7 @@ def public_files(root: Path) -> dict[str, Path]:
 
 
 def content_hash(files: dict[str, Path | bytes]) -> str:
+    """Hash sorted file names and contents to identify a bundle independently of its folder."""
     digest = hashlib.sha256()
     for name, body in sorted(files.items()):
         data = body.read_bytes() if isinstance(body, Path) else body

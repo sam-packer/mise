@@ -1,8 +1,8 @@
+// Redirect audio playback to a fresh Deezer preview URL.
+// Preview URLs expire after about 15 minutes, so the bundle stores this route.
 import { error, redirect } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 
-// Deezer preview URLs expire after about 15 minutes, so the bundle stores this route instead of
-// the URL. The route asks Deezer for a fresh preview and redirects the audio element to it.
 export const GET: RequestHandler = async ({ params, fetch, setHeaders }) => {
 	if (!/^\d+$/.test(params.id)) error(400, 'bad track id');
 

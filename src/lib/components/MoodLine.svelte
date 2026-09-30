@@ -1,4 +1,5 @@
 <script lang="ts">
+	// Collect feeling text and offer rotating examples before the page requests a mood.
 	import { onMount } from 'svelte';
 	import { fade } from 'svelte/transition';
 	import { MAX_FEELING } from '$lib/code';
@@ -14,7 +15,7 @@
 	}: {
 		value?: string;
 		examples: string[];
-		/** A feeling is on the wall: the line becomes an outlined field, to show it can change. */
+		/** Outline the field once a mood is on the wall, to show that the feeling can change. */
 		boxed?: boolean;
 		/** The line holds the feeling on the wall, unedited. */
 		settled?: boolean;
@@ -32,7 +33,7 @@
 	const example = $derived(order.length ? order[index % order.length] : '');
 	const empty = $derived(value === '');
 
-	// Shuffle on mount, not during SSR, so every load starts somewhere new without a hydration mismatch.
+	// Shuffle after mounting to avoid a mismatch between server HTML and browser state.
 	onMount(() => {
 		coarse = matchMedia('(pointer: coarse)').matches;
 		const shuffled = [...examples];
@@ -43,7 +44,7 @@
 		order = shuffled;
 	});
 
-	// Rotate the ghost only while nobody is at the line, so Tab never takes a sentence mid-fade.
+	// Pause examples while the field has focus, so users can press Tab without selecting a fading sentence.
 	$effect(() => {
 		if (!empty || focused || !order.length) return;
 		const timer = setInterval(() => (index += 1), 4000);
@@ -69,8 +70,8 @@
 		ref?.focus({ preventScroll: true });
 	}
 
-	// Select the whole feeling on the way in, so typing replaces it. A click would move the caret after
-	// the focus event and drop the selection, so the first press focuses and selects by hand.
+	// Select the whole feeling so typing replaces it.
+	// Prevent the first click from moving the caret and clearing the selection after focus.
 	function onmousedown(e: MouseEvent) {
 		if (focused || !settled || !ref) return;
 		e.preventDefault();
@@ -83,7 +84,7 @@
 	}
 
 	function onkeydown(e: KeyboardEvent) {
-		// Tab stays in the field only while it has something to do. Shift+Tab always leaves.
+		// Keep Tab in the field to fill in the example, or while an edit is not submitted. Shift+Tab always leaves.
 		if (e.key === 'Tab' && !e.shiftKey) {
 			if (empty && example) {
 				e.preventDefault();
@@ -134,7 +135,7 @@
 			{onfocus}
 			{onkeydown}></textarea>
 		{#if empty && example}
-			<!-- A tap on the ghost keeps the keyboard up (no blur) and fills the line. -->
+			<!-- Prevent blur so users can select an example without closing the touch keyboard. -->
 			<div
 				class="ghost"
 				class:tappable={coarse && focused}

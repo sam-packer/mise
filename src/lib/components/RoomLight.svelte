@@ -1,4 +1,5 @@
 <script lang="ts">
+	// Layer the selected light and grain behind the mood wall.
 	import { fade } from 'svelte/transition';
 	import type { Light } from '$lib/mood/types';
 

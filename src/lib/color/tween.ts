@@ -27,10 +27,6 @@ const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
 let frame = 0;
 let current: Tokens | null = null;
 
-export function currentTokens(): Tokens | null {
-	return current;
-}
-
 export function applyTokens(t: Tokens) {
 	cancelAnimationFrame(frame);
 	current = t;
@@ -38,6 +34,7 @@ export function applyTokens(t: Tokens) {
 	flat(t).forEach((c, i) => root.setProperty(KEYS[i], cssLch(toGamut(labToLch(c)))));
 }
 
+/** Animate from the last target palette. The duration is in milliseconds. */
 export function tweenTokens(to: Tokens, duration = 900): Promise<void> {
 	if (!current || duration === 0) {
 		applyTokens(to);

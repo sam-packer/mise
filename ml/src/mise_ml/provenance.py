@@ -1,4 +1,4 @@
-"""Stamps that let commands skip finished steps, and the run.json provenance record."""
+"""Track step inputs and outputs in stamps, and record each command's provenance in run.json."""
 
 import dataclasses
 import importlib.metadata
@@ -27,6 +27,7 @@ def observe_read(path: Path) -> None:
 
 @contextmanager
 def capture_reads():
+    """Collect HTTP cache paths read by all worker threads during one pipeline step."""
     global _reads
     with _read_lock:
         if _reads is not None:
@@ -66,6 +67,7 @@ StampInput = Path | ContentInput
 
 
 def file_hashes(paths: list[StampInput]) -> dict[str, str | None]:
+    """Hash repository paths, or use ContentInput labels and digests for selected content."""
     return {
         str(p.relative_to(config.REPO_ROOT)).replace("\\", "/")
         + (f"#{entry.label}" if isinstance(entry, ContentInput) and entry.label else ""): (
@@ -99,6 +101,7 @@ def stamp_path(step: str) -> Path:
 
 
 def read_stamp(step: str) -> dict[str, Any] | None:
+    """Return a supported stamp, or None when it is missing, invalid, or from another format."""
     path = stamp_path(step)
     if not path.is_file():
         return None

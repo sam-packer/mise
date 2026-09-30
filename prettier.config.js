@@ -1,3 +1,4 @@
+// Format app source and sort Tailwind classes with the shared stylesheet.
 /** @type {import("prettier").Config} */
 const config = {
 	useTabs: true,

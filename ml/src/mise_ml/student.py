@@ -1,3 +1,5 @@
+"""Distill the teacher's predictions into a text encoder and heads for the browser."""
+
 import dataclasses
 import inspect
 import json
@@ -88,11 +90,10 @@ def load_student(path: Path = STUDENT_DIR) -> tuple[Student, PreTrainedTokenizer
 
 
 class Pretokenized:
-    """Texts tokenized once, padded to max_length, on the GPU.
+    """Keep tokenized texts on the GPU, padded to max_length.
 
-    rows(idx) returns the tokenizer IDs and masks for those texts,
-    padded to the longest row in the batch. It works because the tokenizer pads on the
-    right, so cutting the columns after that longest row changes nothing.
+    Return each batch with padding only up to its longest row.
+    Right padding lets rows() trim trailing columns without removing tokens.
     """
 
     def __init__(
@@ -142,7 +143,7 @@ def encode_texts(
 def item_candidates(
     top: torch.Tensor, positives: torch.Tensor, n_items: int, cfg: StudentConfig
 ) -> torch.Tensor:
-    """Keep teacher neighbors and positives within the existing item activation budget."""
+    """Keep teacher neighbors and positives within the memory budget for item activations."""
     required = torch.cat([top.flatten(), positives[positives >= 0]]).unique()
     rand = torch.randint(0, n_items, (cfg.random_items,), device=top.device)
     cand = torch.cat([required, rand]).unique()

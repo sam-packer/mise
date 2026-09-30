@@ -1,4 +1,4 @@
-// Run from the exporter before rounding the item vectors to fp16.
+// Build the name index for the exporter from item vectors before fp16 rounding.
 import { readFile, writeFile } from 'node:fs/promises';
 import { buildNameData } from '../src/lib/mood/name-data';
 import type { Item } from '../src/lib/mood/types';

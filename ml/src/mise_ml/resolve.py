@@ -1,3 +1,5 @@
+"""Resolve catalog candidates to media and links, then keep each group's highest-ranked items."""
+
 import hashlib
 import io
 import json
@@ -59,7 +61,7 @@ Result = tuple[Record | None, str]
 TMDB_IMAGES = "https://image.tmdb.org/t/p/w780"
 DEEZER = "https://api.deezer.com"
 # Deezer can return this JPEG even for a nonempty md5_image (track 185287).
-# Include the WebP produced by image() so old downloads are repaired too.
+# Include the WebP produced by image() to detect cached copies of the placeholder.
 PLACEHOLDER_HASHES = {
     "b1fad669172f6263a50ca6d519a91d8cd16488014c1cb1623d823d2106c8586a",
     "5a4c35e31281988c6dbdeb16c22ab43f9745cc79afce62c9fa0f8d14b9c40180",
@@ -118,7 +120,6 @@ LASTFM_TAGS = (
     # decades
     "50s", "60s", "70s", "80s", "90s", "00s", "2010s", "oldies",
 )  # fmt: skip
-LASTFM_TAG_SET = frozenset(LASTFM_TAGS)
 # A song with fewer tags than this from the bulk lists gets its own track.getTopTags call.
 SONG_MIN_TAGS = 3
 TAG_JUNK = re.compile(r"seen live|favou?rites?|\bmy\b|\bbest\b|spotify|albums? i own|^\d{4}$")
@@ -265,9 +266,10 @@ class Resolver:
         return files
 
     def load_art_images(self, art: list[Record]) -> None:
-        """Commons images for Met objects (by Wikidata item) and for Art Institute of
-        Chicago objects (by ARTIC artwork ID). Chicago's IIIF image server blocks this
-        pipeline with a Cloudflare 403, so Commons is its only image source."""
+        """Find Commons images by Wikidata item for the Met and by ARTIC artwork ID for Chicago.
+
+        Chicago's IIIF server returns Cloudflare 403 responses, so use Commons for its images.
+        """
         met = sorted({r["source"]["wikidata"] for r in art if r["source"].get("wikidata")})
         files = self.commons_files(P18_QUERY, [f"wd:{q}" for q in met])
         # Prefer the Met's own photograph: its Commons file name carries "MET".
@@ -774,8 +776,8 @@ def rank_key(r: Record) -> tuple[float, str]:
 def trim_to_targets(group_targets: dict[str, int]) -> None:
     """Keep exactly the `target` best-ranked resolved items of each group.
 
-    Parallel workers can resolve a few more than the target. Every candidate that ranks
-    above the kept ones was tried, so the result is the same as a one-by-one run.
+    Parallel workers can resolve more than the target.
+    The resolver tries every higher-ranked candidate, so trimming matches sequential resolution.
     """
     rows = list(iter_jsonl(RESOLVED))
     groups: dict[str, list[Record]] = defaultdict(list)
@@ -814,9 +816,7 @@ def log_targets(category: str, catalog: list[Record], group_targets: dict[str, i
 
 
 def retry_fixable_drops() -> None:
-    """Version 2 matches a song credit with featured artists ("Dave feat. Stormzy") and
-    takes Chicago images from Commons. Remove the drops that version 1 recorded for these
-    cases, once, so this run tries them again."""
+    """On format mismatch, retry dropped songs and Chicago images that the resolver can recover."""
     version = 1
     if RESOLVE_META.exists():
         version = json.loads(RESOLVE_META.read_text(encoding="utf-8")).get("version", 1)

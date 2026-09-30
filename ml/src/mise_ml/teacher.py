@@ -1,3 +1,5 @@
+"""Train heads over frozen Qwen features and write targets for student distillation."""
+
 import dataclasses
 import gc
 import time

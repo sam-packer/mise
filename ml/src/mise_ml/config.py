@@ -1,3 +1,5 @@
+"""Define paths and settings shared by catalog, labeling, training, and export steps."""
+
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -9,7 +11,6 @@ CACHE = DATA / "cache"
 IMG = DATA / "img"
 FEATURES = DATA / "features"
 MODELS = DATA / "models"
-BATCHES = DATA / "batches"
 CURATED = DATA / "curated"
 OUT = ML_ROOT / "out"
 BUNDLE = OUT / "bundle"
@@ -25,7 +26,7 @@ CATALOG_VERSION = 2
 PAT = CURATED / "pat.jsonl"
 RESOLVED = CURATED / "resolved.jsonl"
 RESOLVE_DROPPED = CURATED / "resolve_dropped.jsonl"
-# The resolve format. A newer version lets resolve retry drops that the new code can fix.
+# A format mismatch lets resolve retry songs and Chicago art that it can match.
 RESOLVE_META = CURATED / "resolve.meta.json"
 RESOLVE_VERSION = 2
 PROFILES = CURATED / "profiles.jsonl"
@@ -40,8 +41,8 @@ SEED = 1337
 CATEGORIES = ("art", "film", "song", "poem", "book")
 
 
-# An era is (first year, last year, items to keep). "Before 1950" starts at -5000, so
-# ancient works with a negative release year count too.
+# Each era contains the first year, last year, and item quota.
+# Start ancient eras at -5000 to include works with negative release years.
 Eras = tuple[tuple[int, int, int], ...]
 
 
@@ -58,8 +59,8 @@ class CurateConfig:
     song_eras: Eras = ((1900, 1979, 450), (1980, 1999, 750), (2000, 2019, 1050), (2020, 2026, 750))
     song_per_artist: int = 6
     song_tags: int = 10
-    # Candidates per kept item. resolve tries candidates in rank order and keeps the target
-    # of each group (an era, or an art source), so a drop is replaced by the next candidate.
+    # Candidates per kept item. Resolve fills each group's quota in rank order.
+    # Replace each drop with the next candidate.
     candidate_factor: dict[str, float] = field(
         default_factory=lambda: {"film": 1.05, "book": 1.1, "song": 1.4, "art": 1.25}
     )
@@ -133,10 +134,9 @@ class ResolveConfig:
 class ProfileConfig:
     model: str = "Qwen/Qwen3.5-9B"
     revision: str = "c202236235762e1c871ad0ccb60c8ee5ba337b9a"
-    # Generation pays a fixed per-step cost (grammar masks, reference conv1d, the generate loop),
-    # so larger batches raise throughput. With chunked prefill, 40 labels requests fit a 32 GB
-    # GPU (measured peak 24.9 GiB); 48 runs out of memory during decode. A batch that exceeds
-    # the GPU budget lowers the limit for the rest of the job.
+    # Larger batches share the cost of grammar masks and generation steps.
+    # With chunked prefill, 40 label requests peak at 24.9 GiB; 48 exceed a 32 GB GPU during decode.
+    # After a memory failure, generation lowers the batch limit for the rest of the job.
     batch_size: int = 40
     image_batch_size: int = 8
     synthetic_moods: int = 6000

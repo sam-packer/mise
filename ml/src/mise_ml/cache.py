@@ -1,4 +1,4 @@
-"""Read-only LLM cache inspection and explicit removal of unused request records."""
+"""Inspect LLM caches for command plans and prune unused request records on request."""
 
 import json
 from collections import defaultdict
@@ -69,6 +69,7 @@ def entries(path: Path, notes: list[str]):
 
 
 def inspect_job(spec: JobSpec) -> CachePlan:
+    """Compare job inputs with accepted cache records without generation or file changes."""
     job = spec.job
     keys = sorted(set(spec.keys))
     prints = {k: spec.fingerprint(k) for k in keys}
@@ -143,7 +144,7 @@ def inspect_job(spec: JobSpec) -> CachePlan:
 
 
 def unused_job(path: Path) -> CachePlan:
-    """An old job namespace (for example labels for a removed vocabulary)."""
+    """Identify request records in an inactive job cache."""
     result = CachePlan(path.stem, path, sha256_file(path))
     for i, line, entry in entries(path, result.notes):
         if not {"sig", "prints", "keys"} <= entry.keys():

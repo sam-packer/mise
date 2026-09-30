@@ -1,9 +1,11 @@
+// Build word lists and representative rows for name matching during bundle export.
 import type { Item } from './types';
 import { allWords } from './anchor-search';
 import { representative } from './search';
 
 export type NameData = { words: string[]; representatives: Record<string, number> };
 
+/** Keep common words present in names and select one item for each creator or album group. */
 export function buildNameData(
 	items: Item[],
 	vectors: Float32Array,
