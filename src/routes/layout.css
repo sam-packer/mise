@@ -1,3 +1,4 @@
+/* Set shared colors, typography, scrollbars, and view transitions for all routes. */
 @import 'tailwindcss';
 
 @layer base {
@@ -35,10 +36,8 @@
 	}
 
 	/*
-	 * Scrollbars: transparent track, thin rounded thumb from --ink.
-	 * Chromium and Safari ignore ::-webkit-scrollbar once scrollbar-color is set,
-	 * and scrollbar-color has no hover state. So Chromium and Safari use the
-	 * ::-webkit-scrollbar rules, and only Firefox gets the standard properties.
+	 * Chromium and Safari ignore ::-webkit-scrollbar when scrollbar-color is set.
+	 * Use their prefixed rules to support hover colors. Use standard properties only for Firefox.
 	 */
 	* {
 		--thumb: color-mix(in oklab, var(--ink) 28%, transparent);

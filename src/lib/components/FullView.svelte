@@ -1,4 +1,5 @@
 <script lang="ts">
+	// Show one selected item in a modal with focus control and optional audio playback.
 	import type { Item } from '$lib/mood/types';
 	import SongLinks from './SongLinks.svelte';
 

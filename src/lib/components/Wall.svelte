@@ -1,4 +1,5 @@
 <script lang="ts">
+	// Arrange category picks as tiles and coordinate their exit before the next mood appears.
 	import { CATEGORIES, type Category, type Item } from '$lib/mood/types';
 	import Tile from './Tile.svelte';
 
