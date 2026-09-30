@@ -118,13 +118,10 @@ to the screen width, and the small controls keep a touch target of at least 44 p
 - The first visit is heavy. The model, the vectors, and the catalog are about 40 MB before
   compression. On a slow phone connection the first search can take a while. Later visits use the
   browser cache.
-- The catalog is fixed. It holds about 11,000 works, chosen in September 2026. A new album or
-  film doesn't show up until I rebuild the catalog. Popular works are easy to name as an anchor, but
-  plenty of good ones are missing.
-- An AI model labeled the training data. A local language model wrote the mood descriptions,
-  palettes, and example feelings that the model learns from. Its taste becomes the app's taste.
-  The test set of 290 feelings was also AI-drafted. I accepted it without edits, so the scores
-  measure how well the small model copies the big one, not what people think.
+- The catalog is fixed at about 11,000 works, chosen in September 2026. Newer releases aren't in
+  it, and plenty of good older ones are missing too.
+- An AI model labeled the catalog. A local language model wrote the mood descriptions and palettes
+  that the small model learned from, so the app's taste is partly that model's taste.
 - The poems and the art are public domain only. Modern poetry and art aren't in the catalog.
 - Names must be exact. An anchor needs the full title or artist name, and the name must be most
   of the sentence. "blade runner" anchors, but "a rainy night like blade runner" does not.
@@ -133,19 +130,16 @@ to the screen width, and the small controls keep a touch target of at least 44 p
 
 ## What I would improve next
 
-- Write 50 to 100 test feelings by hand, so the scores reflect real people.
-- Show the model the album art as well as the song tags. Many songs have few tags, and the cover
-  says a lot about the mood. I want to try this on a few hundred songs first and compare.
-- Grow the catalog, especially recent music.
-- Shrink the first download with a smaller model.
 - Apply what I learn in the design half of the course: the layout of the wall, the empty state,
   and how the anchor line reads.
+- Make the first load feel shorter, so the wait for the model reads as part of the experience.
+- Make it clearer that you can name a film, song, or book, and show which names mise knows.
 
 ## AI assistance
 
 I used Claude Code and OpenAI Codex as coding partners. They wrote most of the code from my
-direction. Every change went through a branch and a pull request. I decided what the product is, who it's
-for, and how it should look and feel. I rejected ideas that made it more complex than it needed to
+direction. Every change went through a branch and a pull request. I decided what the product is,
+who it's for, and how it should look and feel. I rejected ideas that made it more complex than it needed to
 be: a server-side search, a request rate limit, and a private catalog.
 
 ## Credit
