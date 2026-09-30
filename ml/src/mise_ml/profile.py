@@ -31,8 +31,8 @@ from mise_ml.vocab import Vocab, labels_path, load_vocab
 
 log = get(__name__)
 
-FEELING_RULES = """A feeling is a sentence about a scene or a moment, 6 to 30 words, lower case, \
-casual, in the first person or as a scene. Examples:
+FEELING_RULES = """A feeling is a thought about an emotional state or a moment, 6 to 30 words, \
+lower case and casual. Use first person, a scene, or figurative everyday language. Examples:
 - a snowy december and i just made warm hot chocolate
 - rain on the window and nowhere to be
 - driving home at 2am with the windows down
@@ -48,14 +48,26 @@ The app answers with a film, a book, a song, a poem, and an artwork that fit it.
 The work comes with facts and crowd tags: film genres and keywords, reader moods and \
 genres for books, listener tags for songs, subjects and styles for art. Use them as hints \
 for the mood. Crowd tags can be noisy; ignore a tag that does not fit the rest.
+Use your knowledge of the work, not the title alone. When facts are sparse, do not invent \
+lyrics, instruments, or plot events. Describe the feeling without claiming unsupported facts.
+Still images and soft sounds do not always mean comfort. Use the work's context: satire \
+can feel mocking, a love song can feel frantic, and a peaceful setting can hold dread.
 
 For the work you get, write:
-- vibe: one quiet line about the mood, lower case, at most 12 words, no title, no names, \
-no final period.
-- description: two or three plain sentences about the mood of the work: the feeling, the \
-setting, the pace, and the colors and light it suggests. Do not retell the plot.
-- q1, q2, q3: three different feelings a person might type when this work is the right \
-answer. Follow the feeling rules. Use three different situations."""
+- vibe: one complete line about the emotional core, lower case, at most 10 words, no title, \
+no names, no final punctuation. Say what it feels like to be inside this work in plain words. \
+Use whole words separated by spaces, each at most 14 characters. Use only ASCII letters, \
+digits, apostrophes, and hyphens within words. Finish the thought. Name the specific \
+emotional tension, not just scenery. Avoid stock phrases about rooms, light, and weather.
+- description: two or three plain sentences about the emotional core of the work, what it \
+feels like to be inside it, and its pace. Use its setting, colors, and light only when they \
+explain the feeling. Do not retell the plot. Use ASCII English text. Choose short, complete \
+words; never shorten or join words to fit a limit.
+- q1: a plain scene a person might type when this work fits their feeling.
+- q2: a casual first-person thought using i, me, or my. Sound like a text to a friend.
+- q3: a figurative or slangy line. Use an idiom, metaphor, or slang for its emotional meaning.
+All three feelings must follow the feeling rules and use ASCII English text. Match the \
+emotional core rather than repeating objects in the work. Use three different situations."""
 
 MOODS_SYSTEM = f"""You write feelings that people type into mise, a mood app.
 
@@ -74,6 +86,9 @@ is the right answer. Keep the mood of the name, but write a moment, not a descri
 LABEL_SYSTEM = """You design the look of a page in mise, a mood app, for a feeling that a \
 user typed.
 
+Read idioms, slang, sarcasm, and mixed feelings for their intended emotion. Choose the \
+room for that emotional core, not for a matching surface word.
+
 For each numbered feeling, choose:
 - c1 to c5: a palette of five colors as #rrggbb, in dominance order. c1 is the page \
 ground and covers most of the page. c2 is the main ink or accent. c3 to c5 are supporting \
@@ -86,6 +101,7 @@ Use only ids from these lists.
 """
 
 FACETS = {
+    "voice": ["first-person confession", "casual first-person text", "a scene", "a wish"],
     "season": ["deep winter", "early spring", "high summer", "late autumn", "any season"],
     "time": ["before dawn", "morning", "noon", "late afternoon", "dusk", "night", "3am"],
     "place": [
@@ -133,6 +149,10 @@ FACETS = {
         "embarrassed",
         "awestruck",
         "sleepy",
+        "heartbroken",
+        "missing an ex",
+        "rejected love",
+        "healing after a breakup",
     ],
 }
 
@@ -171,8 +191,8 @@ INSTRUCTION_FRAGMENTS = (
     "three different feelings a person might type",
     "follow the feeling rules",
     "two or three plain sentences about the mood",
-    "one quiet line about the mood",
-    "at most 12 words",
+    "one complete line about the emotional core",
+    "at most 10 words",
     "never name a title",
     "never write a bare list of mood words",
     "6 to 30 words",
@@ -285,19 +305,83 @@ def item_image(r: Record):
 
 
 ITEM_SCHEMA = obj({k: {"type": "string"} for k in ("vibe", "description", "q1", "q2", "q3")})
-# Exclude Python whitespace so the grammar agrees with word_count().
-# Bound word length and exclude commas to prevent joined or repeated words from bypassing the limit.
-MAX_WORD = 20
-WORD = (
-    r"[^\u0000-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000,;]"
-    rf"{{1,{MAX_WORD}}}[,;]?"
+# Keep word boundaries explicit so a token budget cannot encourage glued words.
+MAX_WORD = 14
+WORD = rf"[A-Za-z0-9'-]{{1,{MAX_WORD}}}"
+PLAIN_WORD = re.compile(WORD)
+PROSE_WORD = rf"{WORD}[,.!?;:]?"
+APOSTROPHE_ENDINGS = {"s", "t", "d", "m", "re", "ve", "ll", "clock", "am", "all", "mon"}
+FUNCTION_WORDS = frozenset(
+    [
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "but",
+        "nor",
+        "for",
+        "so",
+        "yet",
+        "of",
+        "to",
+        "in",
+        "on",
+        "at",
+        "by",
+        "with",
+        "from",
+        "into",
+        "onto",
+        "upon",
+        "through",
+        "between",
+        "among",
+        "during",
+        "without",
+        "within",
+        "as",
+        "than",
+        "that",
+        "which",
+        "whose",
+        "my",
+        "your",
+        "his",
+        "her",
+        "its",
+        "our",
+        "their",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "because",
+        "although",
+        "though",
+        "if",
+        "unless",
+        "until",
+        "against",
+        "not",
+        "whether",
+        "while",
+        "since",
+        "toward",
+        "towards",
+        "despite",
+        "either",
+        "neither",
+    ]
 )
-PLAIN_WORD = re.compile(rf"[^\s,;]{{1,{MAX_WORD}}}[,;]?")
-FEELING_TEXT = {"type": "string", "pattern": f"^{WORD}( {WORD}){{5,29}}$"}
+FEELING_TEXT = {"type": "string", "pattern": f"^{PROSE_WORD}( {PROSE_WORD}){{5,29}}$"}
 ITEM_GENERATION_SCHEMA = obj(
     {
         "vibe": {"type": "string", "pattern": f"^{WORD}( {WORD}){{0,11}}$"},
-        "description": {"type": "string"},
+        "description": {"type": "string", "pattern": f"^{PROSE_WORD}( {PROSE_WORD}){{0,89}}$"},
         **{q: FEELING_TEXT for q in ("q1", "q2", "q3")},
     }
 )
@@ -309,9 +393,16 @@ def parse_item(keys: list[str], data: dict[str, Any]) -> list[Record]:
     vibe = normalized(data["vibe"]).rstrip(".")
     if not 1 <= word_count(vibe) <= 12:
         raise ValueError("vibe must contain 1 to 12 words")
+    if vibe.endswith(",") or vibe.split()[-1] in FUNCTION_WORDS:
+        raise ValueError("vibe must finish a thought, not end with a function word or comma")
+    for word in vibe.split():
+        if "'" in word.strip("'") and word.rsplit("'", 1)[1] not in APOSTROPHE_ENDINGS:
+            raise ValueError("put a space after a possessive or contraction; do not glue words")
     if not data["description"].strip():
         raise ValueError("description is empty")
     queries = [normalized(data[q]) for q in ("q1", "q2", "q3")]
+    if not re.search(r"\b(?:i|me|my|mine|myself)\b", queries[1]):
+        raise ValueError("q2 must be a casual first-person thought using i, me, or my")
     for name, query in zip(("q1", "q2", "q3"), queries, strict=True):
         # Name the copied example: a general reason lets the retry copy it again.
         if query in PROMPT_EXAMPLES:
@@ -320,10 +411,12 @@ def parse_item(keys: list[str], data: dict[str, Any]) -> list[Record]:
             )
         if not is_feeling(query):
             raise ValueError(f"{name} must use 6 to 30 words")
-    if not all(PLAIN_WORD.fullmatch(w) for t in (vibe, *queries) for w in t.split()):
+    if not all(PLAIN_WORD.fullmatch(w) for w in vibe.split()) or not all(
+        re.fullmatch(PROSE_WORD, w) for t in (data["description"], *queries) for w in t.split()
+    ):
         raise ValueError(
             f"put a space between words; a word has at most {MAX_WORD} characters "
-            "and no comma inside"
+            "using ASCII letters, digits, apostrophes, or hyphens, with prose punctuation only"
         )
     if len(set(queries)) != 3:
         raise ValueError("q1, q2, and q3 must be three different feelings")
@@ -356,6 +449,7 @@ def items_job() -> JobSpec:
                     400,
                     item_image(items[k]),
                     generation_schema=ITEM_GENERATION_SCHEMA,
+                    seed=int(sha(k)[:8], 16),
                 ),
             )
             for k in keys
@@ -525,10 +619,10 @@ DISTILL_SITUATIONS = (
 )
 DISTILL_STYLES = (
     "a short fragment",
-    "just one or two words",
+    "a very short mood in one to three words",
     "one full sentence",
     "a run-on thought",
-    "casual typing with a small typo",
+    "casual typing as a text to a close friend",
     "no capital letters and little punctuation",
     "second person, addressing yourself as you",
     "a question",
@@ -544,18 +638,35 @@ DISTILL_STYLES = (
     "a thought interrupted by an ellipsis",
     "a simple comparison using like",
     "a blunt everyday statement",
+    "sarcasm or irony where the intended feeling differs from the literal words",
+    "a common idiom in EVERY feeling, used for its emotional meaning, not a literal scene",
+    "gen-z and internet slang used naturally",
+    "heartbreak after losing or leaving a relationship",
+    "envy of someone who has what you want",
+    "spite and wanting someone to regret what they did",
+    "shame about something you said or did",
+    "dark humor about a difficult feeling",
+    "a second-person accusation or comfort addressed to another person",
+    "a mixed feeling with a contrast, such as sunny out and i can't get out of bed",
 )
 DISTILL_SYSTEM = """Write what people type into a mood-board app about how they feel right now.
 Follow the requested situation and writing style. Vary the length from 1 to about 25 words
 where the style allows it. Lower case is allowed. Use ordinary human language, including
 fragments and imperfect typing. Do not name real people or titles of works. Make each
-feeling distinct. Return the numbered feelings as JSON."""
+feeling distinct. Every line must use the requested style. The situation is background,
+not an instruction to describe scenery. For sarcasm, the intended feeling must differ
+from the literal claim. For idioms, use familiar expressions for their nonliteral meaning.
+For internet slang, write like a casual message, not a polished description.
+Return the numbered feelings as JSON."""
 
 
 def distill_seeds(cfg: ProfileConfig) -> dict[str, tuple[str, str, int]]:
     if cfg.distill_feelings < 1 or cfg.distill_per_request < 1:
         raise ValueError("distill counts must be positive")
-    grid = [(s, style) for s in DISTILL_SITUATIONS for style in DISTILL_STYLES]
+    # Cycle through all styles so counts differ by at most one request.
+    situations = list(DISTILL_SITUATIONS)
+    random.Random(SEED).shuffle(situations)
+    grid = [(s, style) for s in situations for style in DISTILL_STYLES]
     count = -(-cfg.distill_feelings // cfg.distill_per_request)
     if count > len(grid):
         raise ValueError("distill_feelings exceeds the seed grid capacity")

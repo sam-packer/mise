@@ -18,7 +18,13 @@ import jsonschema
 import torch
 import xgrammar as xgr
 from PIL import Image
-from transformers import AutoModelForImageTextToText, AutoProcessor, LogitsProcessor
+from transformers import (
+    AutoModelForImageTextToText,
+    AutoProcessor,
+    LogitsProcessor,
+    TemperatureLogitsWarper,
+    TopPLogitsWarper,
+)
 
 from mise_ml.cache_io import cache_lock
 from mise_ml.config import DATA, ML_ROOT, ProfileConfig
@@ -41,6 +47,7 @@ class Request:
     image: Path | None = None
     # Extra decoding constraints do not invalidate cached answers that pass the parser.
     generation_schema: dict[str, Any] | None = None
+    seed: int | None = None
 
 
 @dataclass
@@ -110,6 +117,27 @@ class GrammarProcessor(LogitsProcessor):
         shifts = torch.arange(32, device=scores.device, dtype=torch.int32)
         allowed = ((words.unsqueeze(-1) >> shifts) & 1).view(words.shape[0], -1).bool()
         return scores.masked_fill(~allowed[:, : scores.shape[-1]], float("-inf"))
+
+
+class SeededSamplingProcessor(LogitsProcessor):
+    """Sample each row with its own random stream, independent of other requests."""
+
+    def __init__(self, seeds: list[int]) -> None:
+        self.generators = [torch.Generator(device="cuda").manual_seed(seed) for seed in seeds]
+        self.temperature = TemperatureLogitsWarper(0.7)
+        self.top_p = TopPLogitsWarper(0.95)
+
+    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.Tensor:
+        scores = self.top_p(input_ids, self.temperature(input_ids, scores))
+        probabilities = scores.softmax(dim=-1)
+        tokens = torch.stack(
+            [
+                torch.multinomial(row, 1, generator=generator)
+                for row, generator in zip(probabilities, self.generators, strict=True)
+            ]
+        )
+        # Generation takes argmax after this processor; only the sampled token remains.
+        return torch.full_like(scores, float("-inf")).scatter_(1, tokens, 0.0)
 
 
 class LocalLLM:
@@ -216,17 +244,23 @@ class LocalLLM:
             # Supply exact 2D text positions; Qwen expands them to the required shape.
             positions = (inputs["attention_mask"].long().cumsum(-1) - 1).clamp(min=0)
             prefill = {"position_ids": positions, "prefill_chunk_size": PREFILL_CHUNK}
+        processors = [GrammarProcessor(grammars, self.vocab_size)]
+        seeded = any(r.seed is not None for r in requests)
+        if seeded:
+            if not all(r.seed is not None for r in requests):
+                raise ValueError("a batch must use either seeded or unseeded requests")
+            processors.append(SeededSamplingProcessor([r.seed for r in requests]))
         out = self.model.generate(
             **inputs,
             **prefill,
             max_new_tokens=max_new_tokens,
-            do_sample=sample,
-            temperature=0.7 if sample else None,
-            top_p=0.95 if sample else None,
+            do_sample=sample and not seeded,
+            temperature=0.7 if sample and not seeded else None,
+            top_p=0.95 if sample and not seeded else None,
             top_k=None,
             eos_token_id=self.eos,
             pad_token_id=self.processor.tokenizer.pad_token_id,
-            logits_processor=[GrammarProcessor(grammars, self.vocab_size)],
+            logits_processor=processors,
         )
         new = out[:, inputs["input_ids"].shape[1] :]
         tokens = int((new != self.processor.tokenizer.pad_token_id).sum())
@@ -278,9 +312,12 @@ class Job:
         self.cache = LLM_CACHE / f"{name}.jsonl"
 
     def signature(self, r: Request) -> str:
+        parts = [self.cfg.model, self.cfg.revision, r.system, r.schema, r.max_new_tokens]
+        if r.seed is not None:
+            parts.append("per-key-sampling:temperature=0.7,top_p=0.95")
         return sha(
             json.dumps(
-                [self.cfg.model, self.cfg.revision, r.system, r.schema, r.max_new_tokens],
+                parts,
                 sort_keys=True,
             )
         )
@@ -292,6 +329,7 @@ class Job:
             "prompt": sha(r.system),
             "schema": sha(json.dumps(r.schema, sort_keys=True)),
             "max_new_tokens": r.max_new_tokens,
+            **({"sampling": "per-key:temperature=0.7,top_p=0.95"} if r.seed is not None else {}),
         }
 
     def run(
@@ -436,6 +474,11 @@ class Job:
                 log.debug(f"{self.name}: retry {unit.keys[0]!r}: {text[-200:]!r}")
                 retry_request = replace(
                     unit.request,
+                    seed=(
+                        int(sha("retry:" + unit.keys[0])[:8], 16)
+                        if unit.request.seed is not None
+                        else None
+                    ),
                     user=unit.request.user + f"\n\nThe previous answer failed validation: {error}. "
                     "Return complete JSON. Keep text concise and follow the requested counts "
                     "and word limits. Ignore unrelated source text; use the relevant facts "
