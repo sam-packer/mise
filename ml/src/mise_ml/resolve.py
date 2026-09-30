@@ -802,7 +802,7 @@ class Resolver:
         }, "ok"
 
     def book_facts(self, r: Record) -> tuple[Record, dict]:
-        """Prefer the work's first publication year over an edition date."""
+        """Replace a missing or truncated year (1 to 999) with the work's first publication year."""
         q = f"title={quote_plus(r['title'])}&author={quote_plus(r['creator'])}"
         found = self.http.get_json(
             f"{OPENLIBRARY}/search.json?{q}&limit=5"
@@ -820,13 +820,14 @@ class Resolver:
             ),
             {},
         )
-        year = year_or_none(work.get("first_publish_year"))
         original_year = r.get("year")
+        if original_year is not None and not 1 <= original_year <= 999:
+            # Keep a plausible source year. Open Library can match another work with the same
+            # title, or date a late edition ("1984" as 2021).
+            return r, work
+        year = year_or_none(work.get("first_publish_year"))
         if year is None:
             year = original_year
-        elif original_year is not None and original_year < 0:
-            # Open Library can date a translation, even when the source work is BCE.
-            year = min(year, original_year)
         if year is not None and 1 <= year <= 999:
             ancient = r["source"].get("ancient") is True
             if not ancient and work.get("key"):
