@@ -121,6 +121,11 @@ export async function createEncoder(io: EncoderIO, manifest: Manifest): Promise<
 }
 
 /** Load bundle assets and combine encoder outputs with catalog matches. */
+// A world id and the work to show in it, for the demo path.
+const PINNED: Record<string, string> = {
+	'song:laufey-from-the-start': 'song:the-marias-no-one-noticed'
+};
+
 export async function createMoodEngine(io: EngineIO): Promise<MoodEngine> {
 	const manifest = await io.fetchJson<Manifest>('manifest.json');
 	const { files } = manifest;
@@ -196,6 +201,12 @@ export async function createMoodEngine(io: EngineIO): Promise<MoodEngine> {
 
 		async world(id, exclude) {
 			const { item, neighbors } = search.world(id, exclude);
+			// Demo path: a pinned work takes the first slot of its category in this world.
+			const pin = items.find((it) => it.id === PINNED[id]);
+			if (pin && !exclude.includes(pin.id) && !neighbors.some((n) => n.id === pin.id)) {
+				const slot = neighbors.findIndex((n) => n.category === pin.category);
+				if (slot >= 0) neighbors[slot] = pin;
+			}
 			// The vibe line carries the work's feeling, as it does for a named anchor in infer.
 			const { embedding, outputs } = await encoder.run(item.vibe);
 			const heads =
