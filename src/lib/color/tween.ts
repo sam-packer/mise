@@ -34,7 +34,7 @@ export function applyTokens(t: Tokens) {
 	flat(t).forEach((c, i) => root.setProperty(KEYS[i], cssLch(toGamut(labToLch(c)))));
 }
 
-/** Animate from the last target palette; duration uses milliseconds. */
+/** Animate from the last target palette. The duration is in milliseconds. */
 export function tweenTokens(to: Tokens, duration = 900): Promise<void> {
 	if (!current || duration === 0) {
 		applyTokens(to);

@@ -69,7 +69,8 @@ export function createAnchorMatcher(
 	}));
 
 	/**
-	 * Match titles, albums, and creators as complete word sequences.
+	 * Match titles, albums, and creators as complete word sequences. A title or an album can come
+	 * with its creator ("essex honey by blood orange").
 	 * Together, the names must cover at least ANCHOR_COVERAGE of the query's content words.
 	 * Reject a match that contains only one common word, such as "rain".
 	 * Prefer greater coverage, then title, album, and creator matches, in that order.

@@ -1,4 +1,6 @@
-"""Select catalog candidates from cached film, book, song, art, and poem sources.
+"""Select the catalog candidates: films (TMDB), books (Hardcover), songs (ListenBrainz, Last.fm,
+and MusicBrainz), art (the Met CSV, the Art Institute of Chicago, and the Cleveland Museum of Art),
+and poems (PoetryDB). data/cache/http caches every API answer, so a rerun is fast.
 
 Spread candidates across years within each era and across art sources.
 Write extra candidates so resolve can fill each group's quota when media is missing.

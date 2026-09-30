@@ -263,7 +263,8 @@ async function resolveBook(s: Source): Promise<Resolved | string> {
 	const url = `https://openlibrary.org/search.json?limit=10&lang=en&fields=key,title,author_name,cover_i,editions,editions.cover_i,editions.language&q=${encodeURIComponent(s.hint)}`;
 	const data = await getJson<{ docs: Doc[] }>(url);
 	const surname = norm(s.creator.split(' ').at(-1)!);
-	// Some works list the author in another script. Use an exact title as the fallback to exclude study guides.
+	// Match the author first. Some works list the author only in another script, so fall back to an
+	// exact title match. A title prefix match would also catch study guides ("... Notes").
 	const docs = (data?.docs ?? []).filter((d) => d.cover_i);
 	const doc =
 		docs.find((d) => (d.author_name ?? []).some((a) => norm(a).includes(surname))) ??

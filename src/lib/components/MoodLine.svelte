@@ -15,7 +15,7 @@
 	}: {
 		value?: string;
 		examples: string[];
-		/** Show an outline after a mood appears to make the field easier to find. */
+		/** Outline the field once a mood is on the wall, to show that the feeling can change. */
 		boxed?: boolean;
 		/** The line holds the feeling on the wall, unedited. */
 		settled?: boolean;
@@ -84,7 +84,7 @@
 	}
 
 	function onkeydown(e: KeyboardEvent) {
-		// Keep focus for completion or editing. Press Shift+Tab to leave at any time.
+		// Keep Tab in the field to fill in the example, or while an edit is not submitted. Shift+Tab always leaves.
 		if (e.key === 'Tab' && !e.shiftKey) {
 			if (empty && example) {
 				e.preventDefault();
