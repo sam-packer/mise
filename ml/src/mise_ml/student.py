@@ -147,21 +147,25 @@ def item_candidates(
     required = torch.cat([top.flatten(), positives[positives >= 0]]).unique()
     rand = torch.randint(0, n_items, (cfg.random_items,), device=top.device)
     cand = torch.cat([required, rand]).unique()
-    # Full batches with similar feelings can share many neighbors. Fill with random items;
-    # trim only random extras if unusually distinct neighbors exceed the usual count.
+    # Trim only random extras if unusually distinct neighbors exceed the step budget.
     upper = min(n_items, 1120)
-    lower = min(n_items, 1030) if len(top) == cfg.batch_size else 0
     if len(required) > upper:
         raise ValueError("teacher neighbors and positives exceed the 1120-item step budget")
     if len(cand) > upper:
         extras = rand[~torch.isin(rand, required)].unique()
         extras = extras[torch.randperm(len(extras), device=top.device)]
         cand = torch.cat([required, extras[: upper - len(required)]]).sort().values
-    elif len(cand) < lower:
-        extras = torch.randperm(n_items, device=top.device)
-        extras = extras[~torch.isin(extras, cand)]
-        cand = torch.cat([cand, extras[: lower - len(cand)]]).sort().values
     return cand
+
+
+def embed_items(model: "Student", tokens: Pretokenized, cand: torch.Tensor, chunks: int = 4):
+    """Item embeddings in `cand` order, encoded in length-sorted chunks so short texts are not
+    padded to the longest one in the step."""
+    order = tokens.lengths[cand].argsort()
+    parts = [model.embed(**tokens.rows(cand[idx])) for idx in order.chunk(chunks)]
+    back = torch.empty_like(order)
+    back[order] = torch.arange(len(order), device=order.device)
+    return torch.cat(parts)[back]
 
 
 def run() -> None:
@@ -217,8 +221,8 @@ def run() -> None:
     log.info(
         f"training: {cfg.epochs} epochs x {num(steps_per_epoch)} steps, batch {cfg.batch_size}, "
         f"encoder lr {cfg.encoder_lr}, head lr {cfg.head_lr}; items per step: teacher top "
-        f"{cfg.teacher_topk} per query + {cfg.random_items} random + positives; "
-        "full batches keep 1030-1120 unique items by adjusting random extras"
+        f"{cfg.teacher_topk} per query + {cfg.random_items} random + positives, "
+        "at most 1120 unique items"
     )
     log.info("one epoch = one pass over train + distill rows; validation uses val rows only")
     start_all = time.perf_counter()
@@ -237,10 +241,9 @@ def run() -> None:
             p = pos[b]
             cand = item_candidates(top, p, n_items, cfg)
             queries = query_tokens.rows(b)
-            items = item_tokens.rows(cand)
             with torch.autocast(dev, dtype=torch.bfloat16):
                 q_emb, palette, light, face, scent = model(**queries)
-                i_emb = model.embed(**items)
+                i_emb = embed_items(model, item_tokens, cand)
             s = q_emb.float() @ i_emb.float().T / tau
             teacher_sims = tq[b] @ ti[cand].T / tau
             loss_kl = cfg.kl_weight * kl_logits(s, teacher_sims, 1.0)

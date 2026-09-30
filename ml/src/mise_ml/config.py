@@ -56,13 +56,13 @@ class CurateConfig:
     book_page: int = 500
     book_max_pages: int = 8
     book_tags: int = 8
-    # Modern quotas give similar listener cutoffs; see ml/catalog-expansion.md.
+    # 2020-2026 keeps 750 songs: equal listener cutoffs across eras left it only 125.
     song_eras: Eras = (
         (1900, 1979, 800),
         (1980, 1999, 1200),
         (2000, 2009, 2050),
         (2010, 2019, 825),
-        (2020, 2026, 125),
+        (2020, 2026, 750),
     )
     song_per_artist: int = 3
     song_scene_floor: int = 10
@@ -199,14 +199,14 @@ class StudentConfig:
     dims: int = 384
     head_hidden: int = 256
     epochs: int = 12
-    patience: int = 3
+    patience: int = 2
     batch_size: int = 64
     encoder_lr: float = 3e-5
     head_lr: float = 1e-3
     weight_decay: float = 0.01
     warmup_ratio: float = 0.06
     temperature: float = 0.05
-    teacher_topk: int = 16
+    teacher_topk: int = 8
     random_items: int = 128
     kl_weight: float = 1.0
     infonce_weight: float = 1.0
