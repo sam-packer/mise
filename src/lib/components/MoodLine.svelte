@@ -299,7 +299,6 @@
 		position: absolute;
 		inset: -0.55rem -0.6rem 0;
 		border: 1px solid transparent;
-		border-radius: 0.6rem;
 		pointer-events: none;
 		transition: border-color 900ms var(--ease);
 	}

@@ -6,7 +6,7 @@
 	import { SvelteMap } from 'svelte/reactivity';
 	import { env } from '$env/dynamic/public';
 	import { page } from '$app/state';
-	import { afterNavigate, goto, pushState } from '$app/navigation';
+	import { afterNavigate, goto, pushState, replaceState } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { BUNDLE_URL } from '$lib/bundle';
 	import { feelingCode, feelings, normalize } from '$lib/code';
@@ -18,7 +18,6 @@
 	import { EXAMPLES } from '$lib/examples';
 	import MoodLine from '$lib/components/MoodLine.svelte';
 	import Wall from '$lib/components/Wall.svelte';
-	import Scent from '$lib/components/Scent.svelte';
 	import WorldView from '$lib/components/World.svelte';
 	import RoomLight from '$lib/components/RoomLight.svelte';
 
@@ -62,7 +61,7 @@
 	let reduced = false;
 	/** The world that the color tokens show now. */
 	let tinted: World | null = null;
-	/** The path on screen, read when the browser moves through history. */
+	/** The path before the last history move. Navigation, travel, and the popstate listener set it. */
 	let shownTrail: string[] = [];
 
 	const pathKey = (ids: string[]) => ids.join('\n');
@@ -89,7 +88,12 @@
 	const settled = $derived(mood !== null && text.trim() === mood.query);
 	const scentDelay = 1300;
 
-	const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+	/** How long a travel waits for the next world's typeface, in milliseconds. */
+	const FACE_WAIT = 400;
+
+	const sleep = (ms: number) => new Promise<null>((r) => setTimeout(() => r(null), ms));
+	/** The text that a world sets in its own typeface: the title, and a poem. */
+	const glyphs = (w: World) => w.item.title + (w.item.text ?? '');
 	const message = (cause: unknown) =>
 		cause instanceof Error ? cause.message : 'the moods are out — try again soon';
 	/** For a song, the album carries the feeling better than the single track. */
@@ -123,7 +127,12 @@
 	}
 
 	// Run inference after full navigation, including the initial page load.
-	afterNavigate(() => {
+	afterNavigate((nav) => {
+		// The router does not apply a history entry's state on the first page load, so the page shows
+		// the mood wall. Clear a path left in the entry, or Back would land on a copy of that world.
+		// The router accepts replaceState only after it starts, just after this callback.
+		if (nav.type === 'enter') queueMicrotask(() => replaceState('', {}));
+		shownTrail = page.state.trail ?? [];
 		void show(data.text);
 		if (data.note) error = data.note;
 	});
@@ -214,6 +223,8 @@
 			await update();
 			await tick();
 		});
+		// A hidden tab or a newer transition aborts this one. The update still runs.
+		vt.ready.catch(() => {});
 		return vt.finished.catch(() => {});
 	}
 
@@ -242,7 +253,7 @@
 		if (w) {
 			void tweenTokens(paletteToTokens(w.palette, w.light), 900);
 			const id = w.item.id;
-			loadTypeface(w.typeface, w.item.title + (w.item.text ?? '')).then(
+			loadTypeface(w.typeface, glyphs(w)).then(
 				(f) => {
 					if (world?.item.id === id) worldFace = { id, face: f };
 				},
@@ -260,26 +271,33 @@
 		const ids = [...trail, item.id];
 		const k = pathKey(ids);
 		error = null;
-		let w = worlds.get(k);
-		if (!w) {
-			traveling = true;
-			try {
-				w = await requestWorld(item.id, ids);
-			} catch (cause) {
-				error = message(cause);
-				return;
-			} finally {
-				traveling = false;
-			}
-			// The user left this wall while the world loaded.
-			if (key !== from) return;
-			worlds.set(k, w);
+		traveling = true;
+		let w: World;
+		let f: LoadedFace | null;
+		try {
+			w = worlds.get(k) ?? (await requestWorld(item.id, ids));
+			// Give the typeface a moment, so the title does not change font during the transition.
+			f = await Promise.race([
+				loadTypeface(w.typeface, glyphs(w)).catch(() => null),
+				sleep(FACE_WAIT)
+			]);
+		} catch (cause) {
+			error = message(cause);
+			return;
+		} finally {
+			traveling = false;
 		}
+		// The user left this wall while the world loaded.
+		if (key !== from) return;
+		worlds.set(k, w);
+		if (f) worldFace = { id: item.id, face: f };
+		scrolls.set(from, scrollY);
 		left = null;
 		pending = item.id;
 		await tick();
 		await viewTransition(() => {
 			pushState('', { trail: ids });
+			shownTrail = ids;
 			pending = null;
 			scrollTo(0, 0);
 		});
@@ -289,6 +307,7 @@
 	/** Go back the given number of steps on the path. The popstate listener restores focus. */
 	async function back(count: number) {
 		if (!world || count <= 0) return;
+		scrolls.set(key, scrollY);
 		const y = scrolls.get(pathKey(trail.slice(0, trail.length - count))) ?? 0;
 		left = world.item.id;
 		pending = null;
@@ -308,29 +327,31 @@
 		held = shown;
 	}
 
-	$effect(() => {
-		shownTrail = trail;
-	});
-
 	// Keep the scroll position of each path, and restore scroll and focus when the browser moves
 	// through the path's history.
 	onMount(() => {
 		const onscroll = () => scrolls.set(key, scrollY);
 		const onpopstate = async () => {
-			// The router's popstate listener runs first. For a step on the path it sets page.state at
-			// once; for another page it navigates later, and afterNavigate takes over.
+			// For another page the router navigates later, and afterNavigate takes over.
 			if (location.pathname !== page.url.pathname) return;
+			// This listener can run before the router's, which sets page.state for a step on the path.
+			// Wait for the rest of the event. Copy the scroll positions first: the router scrolls, and
+			// the scroll event that follows would record its position for the new path.
+			const saved = new Map(scrolls);
+			await new Promise((resolve) => setTimeout(resolve));
 			const before = shownTrail;
-			const after = mood ? (page.state.trail ?? []) : [];
-			const y = scrolls.get(pathKey(after)) ?? 0;
+			const after = trail;
+			shownTrail = after;
+			const y = saved.get(pathKey(after)) ?? 0;
 			const shorter = after.length < before.length;
 			if (shorter) left = before[before.length - 1];
 			else if (after.length > before.length) left = null;
-			await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 			await tick();
 			scrollTo(0, y);
-			const tile = shorter
-				? [...document.querySelectorAll<HTMLElement>(`[data-item="${CSS.escape(left!)}"]`)].find(
+			// Focus the work on this wall that the path went on through.
+			const next = shorter ? before[after.length] : null;
+			const tile = next
+				? [...document.querySelectorAll<HTMLElement>(`[data-item="${CSS.escape(next)}"]`)].find(
 						(el) => !el.closest('[inert]')
 					)
 				: null;
@@ -400,7 +421,14 @@
 				<Wall items={picks} label="picks" {leaving} active={shown ? null : focus} onopen={travel} />
 			{/key}
 			{#key `${mood.query}\n${mood.scent.id}`}
-				<Scent text={mood.scent.text} {leaving} delay={scentDelay} />
+				<div class="scent" class:leaving style:--delay="{scentDelay}ms">
+					<p class="label">scent</p>
+					<p class="note-text" aria-label={mood.scent.text}>
+						{#each mood.scent.text.split('') as ch, i (i)}
+							<span style:--i={i} aria-hidden="true">{ch}</span>
+						{/each}
+					</p>
+				</div>
 			{/key}
 		{/if}
 	</div>
@@ -417,6 +445,7 @@
 				note={error}
 				bind:heading
 				onstep={(step) => back(trail.length - step)}
+				onclose={() => back(trail.length)}
 				ontravel={travel}
 			/>
 		{/key}
@@ -433,9 +462,9 @@
 		</span>
 		<span class="word">mise</span>
 	</a>
-</main>
 
-<a class="attribution" href={resolve('/attribution')}>attribution</a>
+	<a class="attribution" href={resolve('/attribution')}>attribution</a>
+</main>
 
 <svelte:window onkeydown={typeAnywhere} />
 
@@ -639,6 +668,42 @@
 		color: var(--ink-soft);
 	}
 
+	.scent {
+		margin: 0.75rem auto 0;
+		padding: 0 max(2.5vw, 12px) 4rem;
+		text-align: center;
+		transition: opacity 200ms ease-out;
+	}
+
+	.scent p {
+		margin: 0;
+	}
+
+	.scent .label {
+		color: var(--ink-soft);
+		font-size: 0.95rem;
+		font-style: normal;
+		font-variant-caps: all-small-caps;
+		letter-spacing: 0.12em;
+		animation: letter 700ms var(--ease) both;
+		animation-delay: calc(var(--delay) - 300ms);
+	}
+
+	.note-text {
+		font-size: 1.05rem;
+		white-space: pre-wrap;
+	}
+
+	.scent.leaving {
+		opacity: 0;
+	}
+
+	.note-text span {
+		opacity: 0;
+		animation: letter 500ms var(--ease) both;
+		animation-delay: calc(var(--delay) + var(--i) * 30ms);
+	}
+
 	.breath {
 		position: fixed;
 		inset: 0;
@@ -649,11 +714,11 @@
 		pointer-events: none;
 	}
 
+	/* At the end of the page, under the last wall, so it never sits on an image. */
 	.attribution {
-		position: fixed;
+		position: absolute;
 		right: 0;
 		bottom: 0;
-		z-index: 2;
 		display: flex;
 		align-items: center;
 		justify-content: center;
@@ -662,11 +727,6 @@
 		padding: max(1vw, 8px) calc(max(2.5vw, 12px) + env(safe-area-inset-right, 0px))
 			calc(max(1vw, 8px) + env(safe-area-inset-bottom, 0px)) max(1vw, 8px);
 		box-sizing: border-box;
-		border-top-left-radius: 0.75rem;
-		/* A veil, so the label stays readable over the tiles that scroll under it. */
-		background: color-mix(in srgb, var(--veil) 80%, transparent);
-		backdrop-filter: blur(16px);
-		-webkit-backdrop-filter: blur(16px);
 		color: var(--ink-soft);
 		font-size: 0.8rem;
 		font-style: normal;
@@ -734,6 +794,10 @@
 		.shown .mark:focus-visible .swatch i {
 			transform: none;
 			transition: none;
+		}
+
+		.note-text span {
+			animation-delay: var(--delay);
 		}
 
 		.breath {

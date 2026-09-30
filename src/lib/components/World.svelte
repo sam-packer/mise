@@ -1,10 +1,9 @@
 <script lang="ts">
-	// Show one work as its own world: the work in the middle, its path above, its neighbors around it.
+	// Show one work as its own world: the work in the middle, its path above, its neighbors below.
 	import type { Item, World } from '$lib/mood/types';
 	import type { LoadedFace } from './typeface';
 	import SongLinks from './SongLinks.svelte';
 	import Wall from './Wall.svelte';
-	import Scent from './Scent.svelte';
 
 	let {
 		world,
@@ -16,6 +15,7 @@
 		note,
 		heading = $bindable(null),
 		onstep,
+		onclose,
 		ontravel
 	}: {
 		world: World;
@@ -32,6 +32,8 @@
 		heading?: HTMLHeadingElement | null;
 		/** Go back to a step of the path. Step 0 is the feeling. */
 		onstep: (step: number) => void;
+		/** Leave every world and go back to the feeling. */
+		onclose: () => void;
 		ontravel: (item: Item, el: HTMLButtonElement) => void;
 	} = $props();
 
@@ -75,19 +77,20 @@
 	style:--mood-style={face?.style ?? null}
 	aria-labelledby="{id}-title"
 >
-	<nav class="trail veil" aria-label="your path">
+	<nav class="trail" aria-label="your path">
 		<ol {@attach toEnd}>
 			<li>
-				<button type="button" class="step" title={feeling} onclick={() => onstep(0)}
-					>{feeling}</button
+				<button
+					type="button"
+					class="step"
+					aria-label="back to your feeling, {feeling}"
+					onclick={() => onstep(0)}>“{feeling}”</button
 				>
 			</li>
 			{#each path as step, i (step.id)}
 				<li>
 					<span class="arrow" aria-hidden="true">→</span>
-					<button type="button" class="step" title={step.title} onclick={() => onstep(i + 1)}
-						>{step.title}</button
-					>
+					<button type="button" class="step" onclick={() => onstep(i + 1)}>{step.title}</button>
 				</li>
 			{/each}
 			<li aria-current="step">
@@ -97,11 +100,16 @@
 		</ol>
 	</nav>
 
+	<!-- Fixed, so the way out stays in view over the wall below. -->
+	<button type="button" class="close" aria-label="close, back to your feeling" onclick={onclose}>
+		<span class="x" aria-hidden="true"></span>close<kbd aria-hidden="true">esc</kbd>
+	</button>
+
 	{#if note}
 		<p class="note">{note}</p>
 	{/if}
 
-	<section class="work" class:poem={!item.image}>
+	<section class="work">
 		<figure
 			class="media"
 			style:background={tone}
@@ -122,7 +130,7 @@
 						onclick={toggle}
 						aria-label={paused ? 'play preview' : 'pause preview'}
 					>
-						<span class="badge veil" aria-hidden="true"><i class="icon" class:paused></i></span>
+						<span class="badge" aria-hidden="true"><i class="icon" class:paused></i></span>
 					</button>
 				{/if}
 			{:else}
@@ -130,14 +138,17 @@
 			{/if}
 		</figure>
 
-		<div class="meta veil">
+		<div class="meta">
 			<p class="kicker">{item.year ? `${item.category} · ${item.year}` : item.category}</p>
 			<h1 id="{id}-title" tabindex="-1" bind:this={heading}>{item.title}</h1>
-			<p class="by">{item.creator}</p>
-			{#if item.category === 'song' && item.album && item.album !== item.title}
-				<p class="by">from <span class="album">{item.album}</span></p>
-			{/if}
+			<p class="by">
+				{item.creator}{#if item.category === 'song' && item.album && item.album !== item.title}
+					<span class="from">, from <span class="album">{item.album}</span></span>
+				{/if}
+			</p>
+
 			<p class="vibe">{item.vibe}</p>
+			<p class="scent"><span class="kicker">scent</span> {world.scent.text}</p>
 
 			{#if canPlay}
 				<audio
@@ -181,7 +192,10 @@
 	</section>
 
 	<section class="near" aria-labelledby="{id}-near">
-		<h2 id="{id}-near" class="label">nearby</h2>
+		<div class="head">
+			<h2 id="{id}-near">nearby</h2>
+			<p>choose one to travel on</p>
+		</div>
 		<Wall
 			items={world.neighbors}
 			label="works near {item.title}"
@@ -190,17 +204,16 @@
 			onopen={ontravel}
 		/>
 	</section>
-
-	<Scent text={world.scent.text} delay={1500} />
 </article>
 
 <style>
 	.world {
+		/* The height of the row that holds the mark. */
+		--top: calc(44px + 2 * max(1.3vw, 10px));
 		--gutter: max(2.5vw, 12px);
 		display: flex;
 		flex-direction: column;
-		/* Clear the mark, which sits in the top left corner of the page. */
-		padding-top: calc(44px + 2 * max(1.3vw, 10px));
+		padding-bottom: 4rem;
 		transition: opacity 200ms ease-out;
 	}
 
@@ -209,30 +222,22 @@
 		pointer-events: none;
 	}
 
-	/* The veil keeps both inks readable over any image: oklab.ts derives --veil for 80% opacity. */
-	.veil {
-		background: color-mix(in srgb, var(--veil) 80%, transparent);
-		backdrop-filter: blur(24px) saturate(1.3);
-		-webkit-backdrop-filter: blur(24px) saturate(1.3);
-		border: 1px solid color-mix(in oklab, var(--ink) 12%, transparent);
-	}
-
+	/* The path shares the top row with the mark on the left and the close control on the right. */
 	.trail {
-		position: sticky;
-		top: max(1vw, 8px);
-		z-index: 3;
-		align-self: center;
-		max-width: calc(100% - 2 * var(--gutter));
+		display: flex;
+		justify-content: center;
+		min-height: var(--top);
+		padding: 0 calc(var(--gutter) + 9rem);
 		box-sizing: border-box;
-		border-radius: 999px;
 		animation: appear 500ms var(--ease) both;
 	}
 
 	.trail ol {
 		display: flex;
 		align-items: center;
+		min-width: 0;
 		margin: 0;
-		padding: 0 0.45rem;
+		padding: 0;
 		overflow-x: auto;
 		scrollbar-width: none;
 		list-style: none;
@@ -256,9 +261,9 @@
 
 	.step {
 		display: block;
-		max-width: 15em;
+		max-width: 14em;
 		min-height: 44px;
-		padding: 0 0.6rem;
+		padding: 0 0.5rem;
 		border: 0;
 		background: none;
 		color: var(--ink-soft);
@@ -271,13 +276,18 @@
 		transition: color 300ms var(--ease);
 	}
 
+	button.step {
+		text-decoration: underline 1px color-mix(in oklab, var(--ink) 30%, transparent);
+		text-underline-offset: 0.25em;
+	}
+
 	button.step:hover,
 	button.step:focus-visible {
 		color: var(--ink);
+		text-decoration-color: var(--ink);
 	}
 
 	button.step:focus-visible {
-		border-radius: 999px;
 		outline: 1px solid var(--ink);
 		outline-offset: -6px;
 	}
@@ -287,20 +297,96 @@
 		cursor: default;
 	}
 
+	/* Solid ink with ground-colored text: a clear control, readable over the wall that scrolls under it. */
+	.close {
+		position: fixed;
+		top: max(1.3vw, 10px);
+		right: var(--gutter);
+		z-index: 5;
+		display: flex;
+		align-items: center;
+		gap: 0.55rem;
+		min-width: 44px;
+		min-height: 44px;
+		padding: 0 0.85rem 0 0.95rem;
+		border: 0;
+		background: var(--ink);
+		color: var(--ground);
+		font: inherit;
+		font-size: 1rem;
+		cursor: pointer;
+		animation: appear 500ms var(--ease) both;
+		transition: background-color 300ms var(--ease);
+	}
+
+	.close:hover,
+	.close:focus-visible {
+		background: var(--ink-soft);
+	}
+
+	.close:focus-visible {
+		outline: 1px solid var(--ink);
+		outline-offset: 3px;
+	}
+
+	kbd {
+		margin-left: 0.2rem;
+		font: inherit;
+		font-size: 0.8rem;
+		font-style: normal;
+		font-variant-caps: all-small-caps;
+		letter-spacing: 0.12em;
+	}
+
+	/* The key hint is for a keyboard. A touch screen has none. */
+	@media not (hover: hover) {
+		kbd {
+			display: none;
+		}
+	}
+
+	/* A drawn cross: two hairlines, so it takes the text color and stays crisp at any size. */
+	.x {
+		position: relative;
+		width: 0.75rem;
+		height: 0.75rem;
+	}
+
+	.x::before,
+	.x::after {
+		content: '';
+		position: absolute;
+		top: 50%;
+		left: -10%;
+		width: 120%;
+		height: 1.25px;
+		background: currentColor;
+		transform: rotate(45deg);
+	}
+
+	.x::after {
+		transform: rotate(-45deg);
+	}
+
 	.note {
-		margin: 0.75rem 0 0;
+		margin: 0 0 0.75rem;
 		color: var(--ink-soft);
 		font-size: 0.95rem;
 		text-align: center;
 	}
 
+	/*
+	 * The work and its title fit in the first screen at any aspect ratio: the image keeps its
+	 * shape inside the height that the top row and a margin leave.
+	 */
 	.work {
+		--room: calc(100svh - var(--top) - 3.5rem);
 		display: grid;
 		grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
-		gap: clamp(1.5rem, 4vw, 4rem);
+		gap: clamp(2rem, 5vw, 5rem);
 		align-items: center;
 		width: min(100% - 2 * var(--gutter), 1200px);
-		margin: clamp(1.5rem, 5vh, 3.5rem) auto 0;
+		margin: 0.75rem auto 0;
 	}
 
 	.media {
@@ -308,16 +394,16 @@
 		justify-self: end;
 		max-width: 100%;
 		margin: 0;
-		overflow: hidden;
 		box-shadow: 0 30px 80px -24px oklch(0 0 0 / 0.45);
 	}
 
 	.media img {
 		display: block;
 		max-width: 100%;
-		max-height: min(72dvh, 760px);
+		max-height: max(14rem, var(--room));
 		width: auto;
 		height: auto;
+		object-fit: contain;
 	}
 
 	/* The whole cover plays the preview. The badge in its corner shows that it can. */
@@ -338,13 +424,14 @@
 		outline-offset: -6px;
 	}
 
+	/* Solid ink like the close control, so the icon keeps its contrast over any cover. */
 	.badge {
 		display: grid;
 		place-items: center;
 		width: 3rem;
 		height: 3rem;
-		border-radius: 999px;
-		color: var(--ink);
+		background: var(--ink);
+		color: var(--ground);
 		transition: transform 400ms var(--ease);
 	}
 
@@ -381,7 +468,7 @@
 		color: var(--paper-ink);
 		font-family: var(--mood-font, var(--serif));
 		font-style: var(--mood-style, italic);
-		font-size: clamp(1rem, 1vw + 0.6rem, 1.35rem);
+		font-size: clamp(1rem, 1vw + 0.6rem, 1.3rem);
 		line-height: 1.55;
 		white-space: pre-line;
 	}
@@ -389,9 +476,8 @@
 	.meta {
 		display: flex;
 		flex-direction: column;
-		gap: 0.45rem;
-		padding: clamp(1.25rem, 2.6vw, 2.25rem);
-		border-radius: 1rem;
+		align-items: flex-start;
+		max-width: 28rem;
 		color: var(--ink);
 		font-size: 1rem;
 		line-height: 1.45;
@@ -411,49 +497,67 @@
 		letter-spacing: 0.12em;
 	}
 
-	h1 {
+	.meta h1 {
+		margin-top: 0.35rem;
 		font-family: var(--mood-font, var(--serif));
 		font-style: var(--mood-style, italic);
-		font-size: clamp(1.7rem, 2.4vw + 0.7rem, 2.9rem);
+		font-size: clamp(1.9rem, 2.6vw + 0.8rem, 3.2rem);
 		font-weight: 400;
-		line-height: 1.1;
-		letter-spacing: -0.01em;
+		line-height: 1.05;
+		letter-spacing: -0.015em;
 		overflow-wrap: anywhere;
+		text-wrap: balance;
 	}
 
 	h1:focus {
 		outline: none;
 	}
 
-	.by {
+	.meta .by {
+		margin-top: 0.6rem;
 		color: var(--ink-soft);
+		font-size: 1.05rem;
 	}
 
 	.album {
 		color: var(--ink);
 	}
 
+	/* A short rule sets the vibe line apart as the sentence the world grows from. */
 	.meta .vibe {
-		max-width: 30rem;
-		margin-top: 0.6rem;
-		font-size: 1.1rem;
-		line-height: 1.5;
+		margin-top: 1.5rem;
+		padding-top: 1.5rem;
+		border-top: 1px solid color-mix(in oklab, var(--ink) 25%, transparent);
+		font-size: 1.2rem;
+		line-height: 1.45;
+		text-wrap: pretty;
+	}
+
+	.meta .scent {
+		margin-top: 0.9rem;
+		color: var(--ink-soft);
+		font-size: 0.95rem;
+	}
+
+	.scent .kicker {
+		margin-right: 0.35rem;
 	}
 
 	.player {
 		display: flex;
 		flex-direction: column;
 		gap: 0.35rem;
-		margin-top: 0.9rem;
+		align-self: stretch;
+		margin-top: 1.5rem;
 	}
 
 	.play {
 		display: flex;
 		align-items: center;
-		gap: 0.7rem;
+		gap: 0.75rem;
 		align-self: flex-start;
 		min-height: 44px;
-		padding: 0 0.9rem 0 0;
+		padding: 0 0.75rem 0 0;
 		border: 0;
 		background: none;
 		color: var(--ink);
@@ -462,7 +566,6 @@
 	}
 
 	.play:focus-visible {
-		border-radius: 999px;
 		outline: 1px solid var(--ink);
 		outline-offset: 2px;
 	}
@@ -470,10 +573,9 @@
 	.ring {
 		display: grid;
 		place-items: center;
-		width: 2.4rem;
-		height: 2.4rem;
+		width: 2.5rem;
+		height: 2.5rem;
 		border: 1px solid color-mix(in oklab, var(--ink) 40%, transparent);
-		border-radius: 999px;
 		transition: border-color 300ms var(--ease);
 	}
 
@@ -495,7 +597,7 @@
 	}
 
 	.links {
-		margin-top: 1rem;
+		margin-top: 1.5rem;
 	}
 
 	.links > a {
@@ -516,15 +618,24 @@
 	}
 
 	.near {
-		margin-top: clamp(3rem, 9vh, 6rem);
+		width: min(100%, 1440px);
+		margin: clamp(3.5rem, 10vh, 6rem) auto 0;
 	}
 
-	.label {
-		width: min(100%, 1440px);
-		box-sizing: border-box;
-		margin: 0 auto -0.5rem;
-		padding: 0 max(2.5vw, 12px);
-		color: var(--ink-soft);
+	.head {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: 0.25rem 1rem;
+		margin: 0 var(--gutter);
+		padding-top: 1rem;
+		border-top: 1px solid color-mix(in oklab, var(--ink) 25%, transparent);
+	}
+
+	.head h2,
+	.head p {
+		margin: 0;
 		font-size: 0.95rem;
 		font-weight: 400;
 		font-style: normal;
@@ -532,18 +643,40 @@
 		letter-spacing: 0.12em;
 	}
 
+	.head h2 {
+		color: var(--ink);
+	}
+
+	.head p {
+		color: var(--ink-soft);
+	}
+
 	@media (max-width: 720px) {
+		/* The mark and the close control take the top row. The path takes the row below it. */
+		.trail {
+			justify-content: flex-start;
+			min-height: 0;
+			padding: var(--top) var(--gutter) 0;
+		}
+
+		.trail ol {
+			margin: 0 -0.5rem;
+		}
+
 		.work {
+			--room: calc(100svh - var(--top) - 44px - 19rem);
 			grid-template-columns: minmax(0, 1fr);
-			gap: 1.25rem;
+			gap: 1.5rem;
+			margin-top: 0.5rem;
 		}
 
 		.media {
 			justify-self: center;
 		}
 
-		.media img {
-			max-height: 56dvh;
+		.meta .vibe {
+			margin-top: 1.1rem;
+			padding-top: 1.1rem;
 		}
 	}
 
