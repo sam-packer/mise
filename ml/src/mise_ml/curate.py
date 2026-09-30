@@ -899,25 +899,42 @@ SI_TOPICS = (
     "Abstraction",
 )
 SI_PEOPLE = re.compile(r"\b(portraits?|self.portraits?|sitters?|group photograph)\b", re.I)
-SI_BIOGRAPHY = re.compile(r",?\s+\(?(?:born|active|died|b\.|d\.|ca\.)\s", re.I)
+SI_BIOGRAPHY = re.compile(r",?\s+\(?(?:born|active|died|founded|b\.|d\.|ca\.)(?:\s|$)", re.I)
+# Catalog numbers used as titles ("PIA14417", "iss025e012345", "S94-12345").
+NASA_TECHNICAL = re.compile(r"\b(PIA\d+|iss\d{3}e\d+|sts\d+-\d+|s\d{2}-\d+|jsc\d+)\b", re.I)
 
 
-def topic_sample(pools: list[list[Record]], n: int) -> list[Record]:
-    """Seeded round-robin selection; no topic exceeds twice its even share."""
+def title_shape(r: Record) -> tuple[str, str]:
+    """A title without its numbers, with its creator. Series titles such as "Earth observations
+    taken by the STS-59 crew" share one shape, so the catalog keeps one of them."""
+    return re.sub(r"\d+", "", norm(r.get("title") or "")), r.get("creator") or ""
+
+
+def topic_sample(pools: list[list[Record]], n: int, creator_cap: int = 8) -> list[Record]:
+    """Seeded round-robin selection; no topic exceeds twice its even share. Keep one record per
+    title shape, and at most `creator_cap` records per creator, so one maker cannot fill a
+    source."""
     rng = random.Random(SEED)
     cap = max(1, math.ceil(2 * n / max(1, len(pools))))
     for pool in pools:
         pool.sort(key=lambda r: r["id"])
         rng.shuffle(pool)
-    out, seen = [], set()
+    out, seen, shapes = [], set(), set()
+    creators: Counter[str] = Counter()
     for i in range(cap):
         for pool in pools:
-            if i < len(pool) and pool[i]["id"] not in seen:
-                r = pool[i]
-                seen.add(r["id"])
-                out.append({**r, "rank": -len(out)})
-                if len(out) >= n:
-                    return out
+            if i >= len(pool) or pool[i]["id"] in seen:
+                continue
+            r = pool[i]
+            shape = title_shape(r)
+            if shape in shapes or creators[r["creator"]] >= creator_cap:
+                continue
+            seen.add(r["id"])
+            shapes.add(shape)
+            creators[r["creator"]] += 1
+            out.append({**r, "rank": -len(out)})
+            if len(out) >= n:
+                return out
     return out
 
 
@@ -975,8 +992,9 @@ def select_nasa(http: CachedClient, cfg: CurateConfig) -> list[Record]:
                     "links": {"primary": f"https://images.nasa.gov/details/{quote(oid, safe='')}"},
                 }
             )
-        pools.append(rows)
-    records = topic_sample(pools, n)
+        pools.append([r for r in rows if not NASA_TECHNICAL.search(r["title"])])
+    # Every NASA image credits a NASA center, so the per-creator cap does not apply.
+    records = topic_sample(pools, n, creator_cap=n)
     log.info("art: %s NASA candidates", num(len(records)))
     return records
 
@@ -1051,7 +1069,8 @@ def select_si(http: CachedClient, cfg: CurateConfig) -> list[Record]:
                         "group": "art:si",
                         "title": clip(a.get("title"), 300) or "Untitled",
                         # The holding museum is in source.unit and the credit line, not the creator.
-                        "creator": ", ".join(n for n in names if n) or "Unknown artist",
+                        "creator": ", ".join(n for n in names if n and n.lower() != "unidentified")
+                        or "Unknown artist",
                         # The first year in the object's dates: the date it was made.
                         "year": years[0] if years else None,
                         "signal": {
