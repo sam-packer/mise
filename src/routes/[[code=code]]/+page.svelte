@@ -569,7 +569,11 @@
 		<Tagline {example} {waiting} away={mood !== null} />
 	</div>
 
-	<a class="attribution" href={resolve('/attribution')}>attribution</a>
+	<nav class="foot" aria-label="about mise">
+		<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external link -->
+		<a href="https://sampacker.com" target="_blank" rel="noopener">who made this</a>
+		<a href={resolve('/attribution')}>attribution</a>
+	</nav>
 </main>
 
 <svelte:window onkeydown={typeAnywhere} />
@@ -830,17 +834,22 @@
 	}
 
 	/* At the end of the page, under the last wall, so it never sits on an image. */
-	.attribution {
+	.foot {
 		position: absolute;
 		right: 0;
 		bottom: 0;
+		display: flex;
+		padding: 0 calc(max(2.5vw, 12px) - max(1vw, 8px) + env(safe-area-inset-right, 0px))
+			env(safe-area-inset-bottom, 0px) 0;
+	}
+
+	.foot a {
 		display: flex;
 		align-items: center;
 		justify-content: center;
 		min-width: 44px;
 		min-height: 44px;
-		padding: max(1vw, 8px) calc(max(2.5vw, 12px) + env(safe-area-inset-right, 0px))
-			calc(max(1vw, 8px) + env(safe-area-inset-bottom, 0px)) max(1vw, 8px);
+		padding: max(1vw, 8px);
 		box-sizing: border-box;
 		color: var(--ink-soft);
 		font-size: 0.8rem;
@@ -851,12 +860,12 @@
 		transition: color 300ms var(--ease);
 	}
 
-	.attribution:hover,
-	.attribution:focus-visible {
+	.foot a:hover,
+	.foot a:focus-visible {
 		color: var(--ink);
 	}
 
-	.attribution:focus-visible {
+	.foot a:focus-visible {
 		outline: 1px solid var(--ink);
 		outline-offset: -3px;
 	}
