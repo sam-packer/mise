@@ -1,6 +1,7 @@
 """Resolve catalog candidates to media and links, then keep each group's highest-ranked items."""
 
 import hashlib
+import html
 import io
 import json
 import re
@@ -90,6 +91,14 @@ AIC_P18_QUERY = """SELECT ?item ?image WHERE {{
 }}"""
 OPENLIBRARY = "https://openlibrary.org"
 MET = "https://collectionapi.metmuseum.org/public/collection/v1/objects"
+WIKISOURCE = "https://en.wikisource.org/w/api.php"
+
+
+def ascii_words(text: str) -> list[str]:
+    """Lowercase ASCII words; accents folded, HTML entities decoded, apostrophes dropped."""
+    text = unicodedata.normalize("NFKD", html.unescape(text)).encode("ascii", "ignore").decode()
+    return re.findall(r"[a-z0-9]+", text.lower().replace("'", ""))
+
 
 # Last.fm tags whose top-track lists give songs their mood tags in bulk: one call returns up
 # to 1,000 tracks. Moods first, then scenes, genres, and decades.
@@ -948,7 +957,61 @@ class Resolver:
         return {**r, "image": image}, "ok"
 
     def poem(self, r: Record) -> Result:
-        return {**r, "image": None}, "ok"
+        page = self.wikisource_page(r)
+        links = {**r["links"], "primary": page} if page else r["links"]
+        return {**r, "image": None, "links": links}, "ok"
+
+    def wikisource_page(self, r: Record) -> str | None:
+        """The Wikisource page that holds the poem's text, or None.
+
+        Search by the opening words of the first line, the second line, the title with the
+        poet's last name, and the first line unquoted. Accept a page only when its text holds
+        the opening words of at least 60% of the poem's first 8 lines, so a page that merely
+        quotes one line does not count.
+        """
+        lines = [x for x in r["text"].splitlines() if x.strip()]
+        probes = [" ".join(w[:4]) for x in lines if len(w := ascii_words(x)) >= 4][:8]
+        if not probes:
+            return None
+        first = " ".join(ascii_words(lines[0])[:8])
+        title = re.split(r"\s*[:–-]\s", r["title"], maxsplit=1)[0].strip("\"'“” ")
+        queries = [f'"{first}"']
+        if len(lines) > 1:
+            queries.append(f'"{" ".join(ascii_words(lines[1])[:8])}"')
+        queries += [f'"{title}" {r["creator"].split()[-1]}', first]
+        tried: set[int] = set()
+        # A line without Latin words ("* * *") gives an empty query, which the API rejects.
+        for query in dict.fromkeys(q for q in queries if q.strip('" ')):
+            params = {
+                "action": "query",
+                "list": "search",
+                "srsearch": query,
+                "srnamespace": 0,
+                "srlimit": 3,
+                "format": "json",
+            }
+            found = self.http.get_json(f"{WIKISOURCE}?{urlencode(params)}") or {}
+            for hit in found.get("query", {}).get("search", []):
+                if hit["pageid"] in tried:
+                    continue
+                tried.add(hit["pageid"])
+                params = {
+                    "action": "parse",
+                    "pageid": hit["pageid"],
+                    "prop": "text",
+                    "disableeditsection": 1,
+                    "format": "json",
+                }
+                parsed = (self.http.get_json(f"{WIKISOURCE}?{urlencode(params)}") or {}).get(
+                    "parse"
+                ) or {}
+                body = re.sub(r"<[^>]+>", " ", parsed.get("text", {}).get("*", ""))
+                text = f" {' '.join(ascii_words(body))} "
+                if sum(f" {p} " in text for p in probes) >= 0.6 * len(probes):
+                    return "https://en.wikisource.org/wiki/" + quote(
+                        parsed["title"].replace(" ", "_"), safe="/_(),'!:"
+                    )
+        return None
 
 
 def rank_key(r: Record) -> tuple[float, str]:
@@ -1099,7 +1162,15 @@ def run() -> None:
     # A changed selection can remove artists, split eras, and change scene priority.
     # Retain repaired facts and images, but use the current candidate membership and order.
     candidates = {r["id"]: r for r in catalog}
-    resolved = [r for r in resolved if r["id"] in candidates]
+    # A poem is the catalog record plus a Wikisource link from the cache, so it resolves again
+    # on every run and a changed lookup reaches every poem.
+    resolved = [r for r in resolved if r["id"] in candidates and r["category"] != "poem"]
+    # Art is the catalog record plus an image, so a fixed title, creator, or link in the
+    # catalog replaces the old one.
+    resolved = [
+        {**candidates[r["id"]], "image": r["image"]} if r["category"] == "art" else r
+        for r in resolved
+    ]
     for r in resolved:
         candidate = candidates[r["id"]]
         for field in ("group", "rank", "selection_order", "group_target"):

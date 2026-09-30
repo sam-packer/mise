@@ -386,7 +386,9 @@ def select_books(http: CachedClient, cfg: CurateConfig) -> list[Record]:
             books = hardcover(http, BOOK_QUERY, variables)["books"]
             for b in books:
                 r = book_record(b, cfg)
-                key = (norm(r["title"]), norm(r["creator"])) if r else None
+                # One book per title shape: of "The Primal Hunter 1" to "10", keep the first.
+                shape = norm(re.sub(r"\d+", "", r["title"])) or norm(r["title"]) if r else ""
+                key = (shape, norm(r["creator"])) if r else None
                 if r is not None and key not in rows:
                     rows[key] = r
                     era.append(r)
@@ -539,6 +541,9 @@ def listenbrainz_pool(http: CachedClient) -> list[dict]:
     return list(pool.values())
 
 
+FEATURED = re.compile(r"\s+(?:feat\.?|ft\.?|featuring)\s+", re.I)
+
+
 def per_artist(pool: list[dict], limit: int) -> list[dict]:
     """At most `limit` songs per artist, by user count; one recording per song; no other
     versions (live, remix, karaoke, ...)."""
@@ -547,7 +552,8 @@ def per_artist(pool: list[dict], limit: int) -> list[dict]:
     names: Counter[str] = Counter()
     for x in sorted(pool, key=lambda x: (-x["users"], x["mbid"])):
         x["title"] = clean_song_title(x["title"])
-        name = artist_name_key(x["artist"])
+        # "Hugh Laurie feat. Dr. John" counts toward Hugh Laurie's cap.
+        name = artist_name_key(FEATURED.split(x["artist"], maxsplit=1)[0])
         title = base_title(x["title"]).casefold().replace("&", "and")
         key = (x["artist_mbid"], "".join(c for c in title if c.isalnum()))
         if (
@@ -656,6 +662,11 @@ def poem_record(row: dict[str, Any], cfg: CurateConfig) -> Record:
     while excerpt and not excerpt[-1].strip():
         excerpt.pop()
     title, author = str(row["title"]).strip(), str(row["author"]).strip()
+    # Resolve links the poem's Wikisource page. Without one, search the web for the exact
+    # opening words: public-domain poems are on many sites, and few are on Poetry Foundation.
+    opening = " ".join(
+        re.findall(r"[\w']+", next((x for x in excerpt if re.search(r"\w", x)), title))[:8]
+    )
     return {
         "id": f"poem:{slugify(author, 24)}-{slugify(title, 40)}",
         "category": "poem",
@@ -667,8 +678,7 @@ def poem_record(row: dict[str, Any], cfg: CurateConfig) -> Record:
         "source": {"poetrydb": True},
         "text": "\n".join(excerpt),
         "links": {
-            "primary": "https://www.poetryfoundation.org/search?query="
-            + quote_plus(f"{title} {author}")
+            "primary": "https://www.google.com/search?q=" + quote_plus(f'"{opening}" {author}')
         },
     }
 
@@ -699,8 +709,55 @@ def load_met() -> pd.DataFrame:
     return met
 
 
+UNKNOWN_MAKER = re.compile(
+    r"^(?:unknown(?: artists?)?|unidentified(?: artists?)?|artist unknown|anonymous\b.*)$", re.I
+)
+
+
+def maker(name: str) -> str:
+    """One spelling for a work with no known maker."""
+    name = name.strip()
+    return "Unknown artist" if not name or UNKNOWN_MAKER.match(name) else name
+
+
+def capped(
+    records: Iterable[Record],
+    n: int,
+    cap: int,
+    shapes: set[tuple[str, str]] | None = None,
+    makers: Counter[str] | None = None,
+) -> list[Record]:
+    """The first n records in rank order, one per title shape and at most `cap` per known
+    maker, so one maker or one series cannot fill a museum. Pass `shapes` and `makers` to
+    share the limits across calls for one museum."""
+    out: list[Record] = []
+    shapes = set() if shapes is None else shapes
+    makers = Counter() if makers is None else makers
+    for r in records:
+        shape = title_shape(r)
+        known = r["creator"] != "Unknown artist"
+        if shape in shapes or (known and makers[r["creator"]] >= cap):
+            continue
+        shapes.add(shape)
+        makers[r["creator"]] += known
+        out.append(r)
+        if len(out) >= n:
+            break
+    return out
+
+
+def given_title(title: str) -> str:
+    """The title without the brackets or parentheses ("[Family Group]") that museums put around
+    a title the cataloguer gave."""
+    title = title.strip()
+    if re.fullmatch(r"\[[^\[\]]+\]|\([^()]+\)", title):
+        return title[1:-1].strip()
+    return title
+
+
 def met_record(row: dict[str, Any], group: str, rank: int) -> Record:
-    title = str(row["Title"]).strip()
+    # "金 傳楊邦基 聘金圖 巻|A Diplomatic Mission to the Jin": the English title is last.
+    title = given_title(str(row["Title"]).split("|")[-1])
     artist = text_or_none(row["Artist Display Name"]) or ""
     oid = int(row["Object ID"])
     wikidata = text_or_none(row["Object Wikidata URL"])
@@ -709,7 +766,7 @@ def met_record(row: dict[str, Any], group: str, rank: int) -> Record:
         "id": f"art:{slugify(title, 40)}-{oid}",
         "category": "art",
         "title": title,
-        "creator": artist.split("|")[0].strip() or "Unknown artist",
+        "creator": maker(artist.split("|")[0]),
         "year": year_or_none(row["Object Begin Date"]),
         "rank": rank,
         "group": group,
@@ -731,6 +788,9 @@ def select_met(cfg: CurateConfig) -> list[Record]:
     met = load_met()
     rng = random.Random(SEED)
     records = []
+    # The maker cap and title shapes hold across the Met's classes.
+    shapes: set[tuple[str, str]] = set()
+    makers: Counter[str] = Counter()
     for cls in cfg.art_met_quota:
         rows = met[met["cls"] == cls].to_dict("records")
         rng.shuffle(rows)
@@ -743,7 +803,13 @@ def select_met(cfg: CurateConfig) -> list[Record]:
         )
         group = f"art:met-{cls.lower()}"
         n = wanted("art", targets(cfg)[group], cfg)
-        records += [met_record(r, group, -rank) for rank, r in enumerate(rows[:n])]
+        records += capped(
+            (met_record(r, group, -rank) for rank, r in enumerate(rows)),
+            n,
+            cfg.art_maker_cap,
+            shapes,
+            makers,
+        )
         log.debug(f"art: Met {cls}: {num(len(rows))} public-domain objects, {num(n)} candidates")
     log.info(f"art: {num(len(records))} Met candidates from {num(len(met))} public-domain objects")
     return records
@@ -778,7 +844,11 @@ def select_aic(http: CachedClient, cfg: CurateConfig) -> list[Record]:
         }
     }
     rows: list[dict] = []
-    for page in range(1, math.ceil(n / 100) + 1):
+    records: list[Record] = []
+    page = 0
+    # The maker cap skips works, so read pages until n works pass it.
+    while len(records) < n:
+        page += 1
         params = {
             "query": query,
             "sort": [{"is_boosted": "desc"}, {"id": "asc"}],
@@ -788,35 +858,37 @@ def select_aic(http: CachedClient, cfg: CurateConfig) -> list[Record]:
         }
         body = http.get_json(f"{AIC}?{urlencode({'params': json.dumps(params)})}") or {}
         rows += body.get("data", [])
+        records = capped(
+            (aic_record(a, -rank) for rank, a in enumerate(rows)), n, cfg.art_maker_cap
+        )
         if page >= body.get("pagination", {}).get("total_pages", 0):
             break
-    records = []
-    for rank, a in enumerate(rows[:n]):
-        title = (a.get("title") or "Untitled").strip()
-        terms = [t for t in a.get("term_titles") or [] if not TERM_JUNK.search(t)]
-        records.append(
-            {
-                "id": f"art:{slugify(title, 40)}-aic{a['id']}",
-                "category": "art",
-                "title": title,
-                "creator": (a.get("artist_title") or "").strip() or "Unknown artist",
-                "year": year_or_none(a.get("date_start")),
-                "rank": -rank,
-                "group": "art:aic",
-                "signal": {
-                    "classification": a.get("artwork_type_title"),
-                    "medium": a.get("medium_display"),
-                    "date": a.get("date_display"),
-                    "subjects": unique(a.get("subject_titles") or [], 15),
-                    "styles": unique(a.get("style_titles") or [], 6),
-                    "terms": unique(terms, 12),
-                },
-                "source": {"aic": a["id"]},
-                "links": {"primary": f"https://www.artic.edu/artworks/{a['id']}"},
-            }
-        )
     log.info(f"art: {num(len(records))} Art Institute of Chicago candidates")
     return records
+
+
+def aic_record(a: dict, rank: int) -> Record:
+    title = (a.get("title") or "Untitled").strip()
+    terms = [t for t in a.get("term_titles") or [] if not TERM_JUNK.search(t)]
+    return {
+        "id": f"art:{slugify(title, 40)}-aic{a['id']}",
+        "category": "art",
+        "title": title,
+        "creator": maker(a.get("artist_title") or ""),
+        "year": year_or_none(a.get("date_start")),
+        "rank": rank,
+        "group": "art:aic",
+        "signal": {
+            "classification": a.get("artwork_type_title"),
+            "medium": a.get("medium_display"),
+            "date": a.get("date_display"),
+            "subjects": unique(a.get("subject_titles") or [], 15),
+            "styles": unique(a.get("style_titles") or [], 6),
+            "terms": unique(terms, 12),
+        },
+        "source": {"aic": a["id"]},
+        "links": {"primary": f"https://www.artic.edu/artworks/{a['id']}"},
+    }
 
 
 CMA_FIELDS = (
@@ -841,7 +913,7 @@ def select_cma(http: CachedClient, cfg: CurateConfig) -> list[Record]:
     rows.sort(key=lambda r: (not r.get("is_highlight"), not r.get("description")))
     n = wanted("art", cfg.art_cma, cfg)
     records = []
-    for rank, a in enumerate(rows[:n]):
+    for rank, a in enumerate(rows):
         title = (a.get("title") or "Untitled").strip()
         creators = a.get("creators") or []
         creator = (creators[0].get("description") or "").split(" (")[0] if creators else ""
@@ -850,7 +922,7 @@ def select_cma(http: CachedClient, cfg: CurateConfig) -> list[Record]:
                 "id": f"art:{slugify(title, 40)}-cma{a['id']}",
                 "category": "art",
                 "title": title,
-                "creator": creator.strip() or "Unknown artist",
+                "creator": maker(creator),
                 "year": year_or_none(a.get("creation_date_earliest")),
                 "rank": -rank,
                 "group": "art:cma",
@@ -865,6 +937,7 @@ def select_cma(http: CachedClient, cfg: CurateConfig) -> list[Record]:
                 "links": {"primary": a.get("url") or f"https://clevelandart.org/art/{a['id']}"},
             }
         )
+    records = capped(records, n, cfg.art_maker_cap)
     log.info(f"art: {num(len(records))} Cleveland Museum of Art candidates of {num(len(rows))}")
     return records
 
@@ -881,7 +954,7 @@ NASA_JUNK = re.compile(
     r"crates?|offload\w*|unload\w*|assembly|technicians?|clean room|"
     r"spacecraft processing|payload processing|launch vehicle|launch complex|"
     r"rocket|rollout|briefing|hangar|ground support|aircraft|airplane|fuselage|livery|"
-    r"diagram|schematic|chart|graph|staff|logo|insignia)\b",
+    r"diagram|schematic|chart|graph|staff|logo|insignia|training|simulation|heritage month)\b",
     re.I,
 )
 SI_TOPICS = (
@@ -900,8 +973,19 @@ SI_TOPICS = (
 )
 SI_PEOPLE = re.compile(r"\b(portraits?|self.portraits?|sitters?|group photograph)\b", re.I)
 SI_BIOGRAPHY = re.compile(r",?\s+\(?(?:born|active|died|founded|b\.|d\.|ca\.)(?:\s|$)", re.I)
-# Catalog numbers used as titles ("PIA14417", "iss025e012345", "S94-12345").
-NASA_TECHNICAL = re.compile(r"\b(PIA\d+|iss\d{3}e\d+|sts\d+-\d+|s\d{2}-\d+|jsc\d+)\b", re.I)
+# What follows a name: dates ("1832–1920", "1813 Bulgaria-died ..."), "n.d.", a nationality
+# ("Paul Signac, French"), or one in parentheses ("Unidentified (British)").
+SI_NAME_TAIL = re.compile(
+    r",\s*(?:\d|n\.d\.|(?:American|British|English|Scottish|Welsh|Irish|French|Dutch|Flemish|"
+    r"Belgian|German|Austrian|Swiss|Italian|Spanish|Portuguese|Russian|Swedish|Norwegian|"
+    r"Danish|Finnish|Polish|Czech|Hungarian|Greek|Chilean|Mexican|Canadian|Brazilian|Argentine|"
+    r"Peruvian|Cuban|Japanese|Chinese|Korean|Indian|Australian)\b)|\s*\(",
+)
+# Catalog numbers used as titles ("PIA14417", "iss025e012345", "S94-12345"), and a title that
+# is one token with a digit ("KSC-06pd2791", "GSFC_20260623_DV_000982", "EHDC2").
+NASA_TECHNICAL = re.compile(
+    r"\b(PIA\d+|iss\d{3}e\d+|sts\d+-\d+|s\d{2}-\d+|jsc\d+)\b|^\S*\d\S*$", re.I
+)
 
 
 def title_shape(r: Record) -> tuple[str, str]:
@@ -910,9 +994,9 @@ def title_shape(r: Record) -> tuple[str, str]:
     return re.sub(r"\d+", "", norm(r.get("title") or "")), r.get("creator") or ""
 
 
-def topic_sample(pools: list[list[Record]], n: int, creator_cap: int = 8) -> list[Record]:
+def topic_sample(pools: list[list[Record]], n: int, creator_cap: int) -> list[Record]:
     """Seeded round-robin selection; no topic exceeds twice its even share. Keep one record per
-    title shape, and at most `creator_cap` records per creator, so one maker cannot fill a
+    title shape, and at most `creator_cap` records per known creator, so one maker cannot fill a
     source."""
     rng = random.Random(SEED)
     cap = max(1, math.ceil(2 * n / max(1, len(pools))))
@@ -930,11 +1014,16 @@ def topic_sample(pools: list[list[Record]], n: int, creator_cap: int = 8) -> lis
                 r = pool[pos[k]]
                 pos[k] += 1
                 shape = title_shape(r)
-                if r["id"] in seen or shape in shapes or creators[r["creator"]] >= creator_cap:
+                known = r["creator"] != "Unknown artist"
+                if (
+                    r["id"] in seen
+                    or shape in shapes
+                    or (known and creators[r["creator"]] >= creator_cap)
+                ):
                     continue
                 seen.add(r["id"])
                 shapes.add(shape)
-                creators[r["creator"]] += 1
+                creators[r["creator"]] += known
                 taken[k] += 1
                 out.append({**r, "rank": -len(out)})
                 took = True
@@ -986,9 +1075,8 @@ def select_nasa(http: CachedClient, cfg: CurateConfig) -> list[Record]:
                     "category": "art",
                     "group": "art:nasa",
                     "title": title,
-                    "creator": " / ".join(
-                        unique(["NASA", a.get("center") or "", a.get("secondary_creator") or ""], 3)
-                    ),
+                    # The image credit ("NASA/JPL-Caltech") goes in source.credit, not the name.
+                    "creator": " / ".join(unique(["NASA", a.get("center") or ""], 2)),
                     "year": year_or_none((a.get("date_created") or "")[:4]),
                     "signal": {
                         "subjects": a.get("keywords") or [],
@@ -996,7 +1084,11 @@ def select_nasa(http: CachedClient, cfg: CurateConfig) -> list[Record]:
                         "description": clip(a.get("description"), cfg.description_chars),
                         "center": a.get("center"),
                     },
-                    "source": {"nasa": oid, "image": image},
+                    "source": {
+                        "nasa": oid,
+                        "credit": a.get("secondary_creator") or "NASA",
+                        "image": image,
+                    },
                     "links": {"primary": f"https://images.nasa.gov/details/{quote(oid, safe='')}"},
                 }
             )
@@ -1060,7 +1152,9 @@ def select_si(http: CachedClient, cfg: CurateConfig) -> list[Record]:
                 # Names carry biography ("William H. Rau, born Philadelphia, PA 1855-died ...").
                 # Keep the name itself.
                 names = [
-                    SI_BIOGRAPHY.split(v["content"], maxsplit=1)[0].strip(" ,;")
+                    SI_NAME_TAIL.split(SI_BIOGRAPHY.split(v["content"], maxsplit=1)[0], maxsplit=1)[
+                        0
+                    ].strip(" ,;")
                     for v in free.get("name", [])
                     if v.get("label", "").lower() in ("artist", "photographer", "maker")
                 ]
@@ -1075,7 +1169,7 @@ def select_si(http: CachedClient, cfg: CurateConfig) -> list[Record]:
                         "id": f"art:si-{oid}",
                         "category": "art",
                         "group": "art:si",
-                        "title": clip(a.get("title"), 300) or "Untitled",
+                        "title": given_title(clip(a.get("title"), 300) or "") or "Untitled",
                         # The holding museum is in source.unit and the credit line, not the creator.
                         "creator": ", ".join(n for n in names if n and n.lower() != "unidentified")
                         or "Unknown artist",
@@ -1103,7 +1197,7 @@ def select_si(http: CachedClient, cfg: CurateConfig) -> list[Record]:
             if start + 100 >= response.get("rowCount", 0):
                 break
         pools.append(rows)
-    records = topic_sample(pools, n)
+    records = topic_sample(pools, n, cfg.art_maker_cap)
     log.info("art: %s Smithsonian candidates", num(len(records)))
     return records
 

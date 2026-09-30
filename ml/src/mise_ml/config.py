@@ -80,6 +80,8 @@ class CurateConfig:
     art_cma: int = 300
     art_nasa: int = 500
     art_si: int = 500
+    # At most this many works per known maker in each museum source.
+    art_maker_cap: int = 8
     # Met public-domain classes and their share of art_met.
     art_met_quota: dict[str, float] = field(
         default_factory=lambda: {
@@ -119,6 +121,8 @@ class ResolveConfig:
             "cdn-images.dzcdn.net": 0.12,
             "query.wikidata.org": 1.0,
             "commons.wikimedia.org": 0.25,
+            # Wikimedia asks for serial API requests; there is no fixed limit.
+            "en.wikisource.org": 0.25,
             "api.artic.edu": 1.0,
             "openaccess-api.clevelandart.org": 0.5,
             "openaccess-cdn.clevelandart.org": 0.1,

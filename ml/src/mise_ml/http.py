@@ -31,6 +31,7 @@ IDENTIFIED_HOSTS = {
     "musicbrainz.org",
     "query.wikidata.org",
     "commons.wikimedia.org",
+    "en.wikisource.org",
 }
 # The Art Institute of Chicago asks for this header on its API.
 HOST_HEADERS = {
