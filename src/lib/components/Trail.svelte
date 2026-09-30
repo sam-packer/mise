@@ -116,19 +116,19 @@
 		<ol class="all" id="{id}-all" aria-label="the whole path">
 			<li>
 				<button type="button" class="row" onclick={() => go(0)}>
-					<span class="n" aria-hidden="true">0</span><span class="name">“{feeling}”</span>
+					<span class="n" aria-hidden="true">1</span><span class="name">“{feeling}”</span>
 				</button>
 			</li>
 			{#each path as step, i (step.id)}
 				<li>
 					<button type="button" class="row" onclick={() => go(i + 1)}>
-						<span class="n" aria-hidden="true">{i + 1}</span><span class="name">{step.title}</span>
+						<span class="n" aria-hidden="true">{i + 2}</span><span class="name">{step.title}</span>
 					</button>
 				</li>
 			{/each}
 			<li aria-current="step">
 				<span class="row here">
-					<span class="n" aria-hidden="true">{path.length + 1}</span><span class="name"
+					<span class="n" aria-hidden="true">{path.length + 2}</span><span class="name"
 						>{current}</span
 					>
 				</span>
