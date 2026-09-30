@@ -37,6 +37,9 @@
 		[0.35, 0, 0]
 	];
 
+	/** One world on the path: its path key, the world, and the works before it. */
+	type Layer = { key: string; world: World; path: Item[] };
+
 	let { data } = $props();
 
 	let text = $state(untrack(() => data.text));
@@ -48,18 +51,20 @@
 	let leaving = $state(false);
 	let error = $state<string | null>(null);
 	let face = $state<LoadedFace | null>(null);
-	let worldFace = $state<{ id: string; face: LoadedFace } | null>(null);
 	let lineRef = $state<HTMLTextAreaElement | null>(null);
-	let heading = $state<HTMLHeadingElement | null>(null);
+	/** The title of each world on the path, by its place on the path. */
+	let headings = $state<(HTMLHeadingElement | null)[]>([]);
 	/** The item whose tile carries the transition name while its world opens. */
 	let pending = $state<string | null>(null);
 	/** The item whose world the user left last, so that its tile takes the transition name back. */
 	let left = $state<string | null>(null);
-	/** The world that stays on screen while it fades out, after the mark starts over. */
-	let held = $state<{ world: World; path: Item[]; feeling: string } | null>(null);
+	/** The worlds that stay on screen while they fade out, after the mark starts over. */
+	let held = $state<{ layers: Layer[]; feeling: string } | null>(null);
 
 	/** Worlds by path: the item ids from the feeling to the world, joined by newlines. */
 	const worlds = new SvelteMap<string, World>();
+	/** The loaded typeface of each world, by item id. */
+	const faces = new SvelteMap<string, LoadedFace>();
 	/** The paths whose worlds the worker builds now. No markup reads it, so it is not reactive. */
 	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- only the load effect's guard reads it
 	const loading = new Set<string>();
@@ -92,9 +97,25 @@
 	const world = $derived(
 		steps.length && steps.every((s) => s !== null) ? (steps[steps.length - 1] as World) : null
 	);
-	const shown = $derived(
-		world ? { world, path: steps.slice(0, -1).map((s) => s!.item), feeling: urlMood } : held
+	/**
+	 * Every world on the path, first to last. All of them stay in the page and only the last one shows,
+	 * so a step back shows the world under it as the user left it.
+	 */
+	const layers: Layer[] = $derived(
+		world
+			? steps.map((s, i) => ({
+					key: pathKey(trail.slice(0, i + 1)),
+					world: s!,
+					path: steps.slice(0, i).map((p) => p!.item)
+				}))
+			: (held?.layers ?? [])
 	);
+	const shown = $derived(
+		layers.length
+			? { ...layers[layers.length - 1], feeling: world ? urlMood : (held?.feeling ?? urlMood) }
+			: null
+	);
+	const heading = $derived(headings[layers.length - 1] ?? null);
 	/** A link to a path opens: the page waits for its worlds, and keeps the mood wall out of view. */
 	const arriving = $derived(target.length > 0 && !world && !error);
 	const scene = $derived(shown?.world ?? mood);
@@ -330,7 +351,7 @@
 			const id = w.item.id;
 			loadTypeface(w.typeface, glyphs(w)).then(
 				(f) => {
-					if (world?.item.id === id) worldFace = { id, face: f };
+					faces.set(id, f);
 				},
 				() => {}
 			);
@@ -367,7 +388,7 @@
 		// The user left this wall while the world loaded.
 		if (key !== from) return;
 		worlds.set(k, w);
-		if (f) worldFace = { id: item.id, face: f };
+		if (f) faces.set(item.id, f);
 		scrolls.set(from, scrollY);
 		left = null;
 		pending = item.id;
@@ -431,7 +452,7 @@
 
 	function startOver(e: MouseEvent) {
 		if (!world || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-		held = shown;
+		held = { layers, feeling: urlMood };
 	}
 
 	// Keep the scroll position of each path, and restore scroll and focus when the browser moves
@@ -534,23 +555,26 @@
 		{/if}
 	</div>
 
-	{#if shown}
-		{#key pathKey([...shown.path.map((p) => p.id), shown.world.item.id])}
+	{#each layers as layer, i (layer.key)}
+		{@const top = i === layers.length - 1}
+		<!-- A world under the one on screen keeps its state, so a step back shows it as the user left it. -->
+		<div class="layer" class:away={!top} inert={!top}>
 			<WorldView
-				world={shown.world}
-				feeling={shown.feeling}
-				path={shown.path}
-				{focus}
-				leaving={leaving && held !== null}
-				face={worldFace?.id === shown.world.item.id ? worldFace.face : null}
-				note={error}
-				bind:heading
+				world={layer.world}
+				feeling={shown?.feeling ?? urlMood}
+				path={layer.path}
+				live={top}
+				focus={top ? focus : null}
+				leaving={top && leaving && held !== null}
+				face={faces.get(layer.world.item.id) ?? null}
+				note={top ? error : null}
+				bind:heading={headings[i]}
 				onstep={(step) => back(trail.length - step)}
 				onclose={() => back(trail.length)}
 				ontravel={travel}
 			/>
-		{/key}
-	{/if}
+		</div>
+	{/each}
 
 	<!-- Place the mark after the field so users reach the field first when they press Tab. -->
 	<a class="mark" href={resolve('/')} aria-label="mise, start over" onclick={startOver}>
@@ -603,7 +627,8 @@
 	}
 
 	/* Out of view and out of the flow, but still rendered, so its animations never start again. */
-	.scene.away {
+	.scene.away,
+	.layer.away {
 		position: absolute;
 		inset: 0 0 auto;
 		height: 0;

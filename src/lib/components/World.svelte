@@ -10,6 +10,7 @@
 		world,
 		feeling,
 		path,
+		live,
 		focus,
 		leaving,
 		face,
@@ -24,6 +25,8 @@
 		feeling: string;
 		/** The works between the feeling and this one, in order. */
 		path: Item[];
+		/** This world is the one on screen. A world under it stays in the page, out of view. */
+		live: boolean;
 		/** The id of the neighbor that the next or the last world grows from. */
 		focus: string | null;
 		/** Fade the world out before the page starts over. */
@@ -40,8 +43,8 @@
 
 	const id = $props.id();
 	const item = $derived(world.item);
-	// The work carries the transition name unless a neighbor on this wall carries it.
-	const named = $derived(!world.neighbors.some((n) => n.id === focus));
+	// The work on screen carries the transition name unless a neighbor on its wall carries it.
+	const named = $derived(live && !world.neighbors.some((n) => n.id === focus));
 	const canPlay = $derived(item.category === 'song' && !!item.preview);
 	const tone = $derived(
 		item.image
@@ -59,6 +62,11 @@
 	const autoplay = (el: HTMLAudioElement) => {
 		el.play().catch(() => {});
 	};
+
+	// A world out of view is silent.
+	$effect(() => {
+		if (!live) audio?.pause();
+	});
 
 	function toggle() {
 		if (!audio) return;
