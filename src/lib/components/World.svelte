@@ -4,6 +4,7 @@
 	import type { LoadedFace } from './typeface';
 	import SongLinks from './SongLinks.svelte';
 	import Wall from './Wall.svelte';
+	import Trail from './Trail.svelte';
 
 	let {
 		world,
@@ -58,10 +59,6 @@
 	const autoplay = (el: HTMLAudioElement) => {
 		el.play().catch(() => {});
 	};
-	// Show the newest step when the path is wider than the screen.
-	const toEnd = (el: HTMLElement) => {
-		el.scrollLeft = el.scrollWidth;
-	};
 
 	function toggle() {
 		if (!audio) return;
@@ -77,28 +74,9 @@
 	style:--mood-style={face?.style ?? null}
 	aria-labelledby="{id}-title"
 >
-	<nav class="trail" aria-label="your path">
-		<ol {@attach toEnd}>
-			<li>
-				<button
-					type="button"
-					class="step"
-					aria-label="back to your feeling, {feeling}"
-					onclick={() => onstep(0)}>“{feeling}”</button
-				>
-			</li>
-			{#each path as step, i (step.id)}
-				<li>
-					<span class="arrow" aria-hidden="true">→</span>
-					<button type="button" class="step" onclick={() => onstep(i + 1)}>{step.title}</button>
-				</li>
-			{/each}
-			<li aria-current="step">
-				<span class="arrow" aria-hidden="true">→</span>
-				<span class="step here">{item.title}</span>
-			</li>
-		</ol>
-	</nav>
+	<div class="top">
+		<Trail {feeling} {path} current={item.title} {onstep} />
+	</div>
 
 	<!-- Fixed, so the way out stays in view over the wall below. -->
 	<button type="button" class="close" aria-label="close, back to your feeling" onclick={onclose}>
@@ -140,7 +118,7 @@
 
 		<div class="meta">
 			<p class="kicker">{item.year ? `${item.category} · ${item.year}` : item.category}</p>
-			<h1 id="{id}-title" tabindex="-1" bind:this={heading}>{item.title}</h1>
+			<h1 id="{id}-title" tabindex="-1" title={item.title} bind:this={heading}>{item.title}</h1>
 			<p class="by">
 				{item.creator}{#if item.category === 'song' && item.album && item.album !== item.title}
 					<span class="from">, from <span class="album">{item.album}</span></span>
@@ -193,12 +171,12 @@
 
 	<section class="near" aria-labelledby="{id}-near">
 		<div class="head">
-			<h2 id="{id}-near">nearby</h2>
-			<p>choose one to travel on</p>
+			<h2 id="{id}-near">worlds next door</h2>
+			<p>step into one</p>
 		</div>
 		<Wall
 			items={world.neighbors}
-			label="works near {item.title}"
+			label="worlds next door to {item.title}"
 			leaving={false}
 			active={focus}
 			onopen={ontravel}
@@ -223,78 +201,17 @@
 	}
 
 	/* The path shares the top row with the mark on the left and the close control on the right. */
-	.trail {
+	/* Above the work, so the whole path can open over it. */
+	.top {
+		position: relative;
+		z-index: 4;
 		display: flex;
+		align-items: center;
 		justify-content: center;
 		min-height: var(--top);
 		padding: 0 calc(var(--gutter) + 9rem);
 		box-sizing: border-box;
 		animation: appear 500ms var(--ease) both;
-	}
-
-	.trail ol {
-		display: flex;
-		align-items: center;
-		min-width: 0;
-		margin: 0;
-		padding: 0;
-		overflow-x: auto;
-		scrollbar-width: none;
-		list-style: none;
-		white-space: nowrap;
-	}
-
-	.trail ol::-webkit-scrollbar {
-		display: none;
-	}
-
-	.trail li {
-		display: flex;
-		flex: none;
-		align-items: center;
-	}
-
-	.arrow {
-		color: var(--ink-soft);
-		font-style: normal;
-	}
-
-	.step {
-		display: block;
-		max-width: 14em;
-		min-height: 44px;
-		padding: 0 0.5rem;
-		border: 0;
-		background: none;
-		color: var(--ink-soft);
-		font: inherit;
-		font-size: 0.95rem;
-		line-height: 44px;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		cursor: pointer;
-		transition: color 300ms var(--ease);
-	}
-
-	button.step {
-		text-decoration: underline 1px color-mix(in oklab, var(--ink) 30%, transparent);
-		text-underline-offset: 0.25em;
-	}
-
-	button.step:hover,
-	button.step:focus-visible {
-		color: var(--ink);
-		text-decoration-color: var(--ink);
-	}
-
-	button.step:focus-visible {
-		outline: 1px solid var(--ink);
-		outline-offset: -6px;
-	}
-
-	.here {
-		color: var(--ink);
-		cursor: default;
 	}
 
 	/* Solid ink with ground-colored text: a clear control, readable over the wall that scrolls under it. */
@@ -376,8 +293,9 @@
 	}
 
 	/*
-	 * The work and its title fit in the first screen at any aspect ratio: the image keeps its
-	 * shape inside the height that the top row and a margin leave.
+	 * The work and its details fit in the first screen. --room is the height that the top row and a
+	 * margin leave. The image keeps its shape inside it at any aspect ratio. The details scale their
+	 * type and spacing with the screen height and clamp the long names, so they fit in it too.
 	 */
 	.work {
 		--room: calc(100svh - var(--top) - 3.5rem);
@@ -464,11 +382,12 @@
 		box-sizing: border-box;
 		width: min(100%, 34rem);
 		margin: 0;
-		padding: clamp(1.5rem, 4vw, 3rem) clamp(1.5rem, 4.5vw, 3.5rem);
+		padding: 2em 2.25em;
 		color: var(--paper-ink);
 		font-family: var(--mood-font, var(--serif));
 		font-style: var(--mood-style, italic);
-		font-size: clamp(1rem, 1vw + 0.6rem, 1.3rem);
+		/* The poem's 14 lines and padding take about 26em. Size the em so the poem fits in --room. */
+		font-size: clamp(0.78rem, min(1vw + 0.6rem, var(--room) / 27), 1.3rem);
 		line-height: 1.55;
 		white-space: pre-line;
 	}
@@ -477,6 +396,8 @@
 		display: flex;
 		flex-direction: column;
 		align-items: flex-start;
+		/* The space between the groups of details: less on a short screen. */
+		--beat: clamp(0.8rem, 2.6svh, 1.5rem);
 		max-width: 28rem;
 		color: var(--ink);
 		font-size: 1rem;
@@ -501,12 +422,18 @@
 		margin-top: 0.35rem;
 		font-family: var(--mood-font, var(--serif));
 		font-style: var(--mood-style, italic);
-		font-size: clamp(1.9rem, 2.6vw + 0.8rem, 3.2rem);
+		font-size: clamp(1.6rem, min(2.6vw + 0.8rem, 4.2svh + 0.4rem), 3.2rem);
 		font-weight: 400;
 		line-height: 1.05;
 		letter-spacing: -0.015em;
 		overflow-wrap: anywhere;
 		text-wrap: balance;
+		/* A catalog title can run to 300 characters. The title attribute and the trail keep all of it. */
+		display: -webkit-box;
+		overflow: hidden;
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 3;
+		line-clamp: 3;
 	}
 
 	h1:focus {
@@ -514,7 +441,12 @@
 	}
 
 	.meta .by {
+		display: -webkit-box;
 		margin-top: 0.6rem;
+		overflow: hidden;
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 2;
+		line-clamp: 2;
 		color: var(--ink-soft);
 		font-size: 1.05rem;
 	}
@@ -525,8 +457,8 @@
 
 	/* A short rule sets the vibe line apart as the sentence the world grows from. */
 	.meta .vibe {
-		margin-top: 1.5rem;
-		padding-top: 1.5rem;
+		margin-top: var(--beat);
+		padding-top: var(--beat);
 		border-top: 1px solid color-mix(in oklab, var(--ink) 25%, transparent);
 		font-size: 1.2rem;
 		line-height: 1.45;
@@ -548,7 +480,7 @@
 		flex-direction: column;
 		gap: 0.35rem;
 		align-self: stretch;
-		margin-top: 1.5rem;
+		margin-top: var(--beat);
 	}
 
 	.play {
@@ -597,7 +529,7 @@
 	}
 
 	.links {
-		margin-top: 1.5rem;
+		margin-top: var(--beat);
 	}
 
 	.links > a {
@@ -653,30 +585,30 @@
 
 	@media (max-width: 720px) {
 		/* The mark and the close control take the top row. The path takes the row below it. */
-		.trail {
+		.top {
 			justify-content: flex-start;
 			min-height: 0;
 			padding: var(--top) var(--gutter) 0;
 		}
 
-		.trail ol {
-			margin: 0 -0.5rem;
-		}
-
 		.work {
-			--room: calc(100svh - var(--top) - 44px - 19rem);
+			--room: calc(100svh - var(--top) - 46px - 3.5rem);
+			gap: clamp(1.25rem, 4vw, 2rem);
+			margin-top: 0.5rem;
+		}
+	}
+
+	/* A phone stacks the work over its details. A half screen window keeps them side by side. */
+	@media (max-width: 600px) {
+		.work {
+			/* Leave room for the path's row, the category, and a title of three lines. */
+			--room: calc(100svh - var(--top) - 46px - 17rem);
 			grid-template-columns: minmax(0, 1fr);
 			gap: 1.5rem;
-			margin-top: 0.5rem;
 		}
 
 		.media {
 			justify-self: center;
-		}
-
-		.meta .vibe {
-			margin-top: 1.1rem;
-			padding-top: 1.1rem;
 		}
 	}
 
