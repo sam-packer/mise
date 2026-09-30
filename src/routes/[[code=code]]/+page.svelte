@@ -1,22 +1,25 @@
 <script lang="ts">
-	// Turn shared feeling text into a mood and coordinate the wall, colors, fonts, and navigation.
+	// Turn shared feeling text into a mood, travel into the worlds of its works, and coordinate
+	// the walls, colors, fonts, and navigation.
 	import { onMount, tick, untrack } from 'svelte';
 	import { fade } from 'svelte/transition';
+	import { SvelteMap } from 'svelte/reactivity';
 	import { env } from '$env/dynamic/public';
 	import { page } from '$app/state';
 	import { afterNavigate, goto, pushState } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { BUNDLE_URL } from '$lib/bundle';
 	import { feelingCode, feelings, normalize } from '$lib/code';
-	import type { Item, Mood, OKLab } from '$lib/mood/types';
-	import { infer, ready, start } from '$lib/mood/client';
+	import { CATEGORIES, type Item, type Mood, type OKLab, type World } from '$lib/mood/types';
+	import { infer, ready, start, world as requestWorld } from '$lib/mood/client';
 	import { lightStrength, neutralTokens, paletteFavicon, paletteToTokens } from '$lib/color/oklab';
 	import { applyTokens, tweenTokens } from '$lib/color/tween';
 	import { loadTypeface, type LoadedFace } from '$lib/components/typeface';
 	import { EXAMPLES } from '$lib/examples';
 	import MoodLine from '$lib/components/MoodLine.svelte';
 	import Wall from '$lib/components/Wall.svelte';
-	import FullView from '$lib/components/FullView.svelte';
+	import Scent from '$lib/components/Scent.svelte';
+	import WorldView from '$lib/components/World.svelte';
 	import RoomLight from '$lib/components/RoomLight.svelte';
 
 	const NEUTRAL: OKLab[] = [
@@ -27,37 +30,68 @@
 		[0.35, 0, 0]
 	];
 
-	type Open = NonNullable<App.PageState['open']>;
-
 	let { data } = $props();
 
 	let text = $state(untrack(() => data.text));
 	let mood = $state<Mood | null>(null);
 	let waiting = $state(false);
+	let traveling = $state(false);
 	let leaving = $state(false);
 	let error = $state<string | null>(null);
 	let face = $state<LoadedFace | null>(null);
-	let lastOpened = $state<Open | null>(null);
+	let worldFace = $state<{ id: string; face: LoadedFace } | null>(null);
 	let lineRef = $state<HTMLTextAreaElement | null>(null);
+	let heading = $state<HTMLHeadingElement | null>(null);
+	/** The item whose tile carries the transition name while its world opens. */
+	let pending = $state<string | null>(null);
+	/** The item whose world the user left last, so that its tile takes the transition name back. */
+	let left = $state<string | null>(null);
+	/** The world that stays on screen while it fades out, after the mark starts over. */
+	let held = $state<{ world: World; path: Item[]; feeling: string } | null>(null);
 
+	/** Worlds by path: the item ids from the feeling to the world, joined by newlines. */
+	const worlds = new SvelteMap<string, World>();
+	/** The paths whose worlds the worker builds now. No markup reads it, so it is not reactive. */
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- only the load effect's guard reads it
+	const loading = new Set<string>();
+	/** The last scroll position of each path. The empty path is the mood wall. */
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- written on each scroll, read on navigation
+	const scrolls = new Map<string, number>();
 	let modelReady = false;
-	let opener: HTMLElement | null = null;
 	let seq = 0;
 	let reduced = false;
+	/** The world that the color tokens show now. */
+	let tinted: World | null = null;
+	/** The path on screen, read when the browser moves through history. */
+	let shownTrail: string[] = [];
 
+	const pathKey = (ids: string[]) => ids.join('\n');
 	const urlMood = $derived(data.text);
-	const open = $derived(mood && page.state.open ? page.state.open : null);
-	const openItem = $derived(
-		!mood || !open ? null : open === 'anchor' ? mood.anchor : mood.picks[open]
+	const trail = $derived(mood ? (page.state.trail ?? []) : []);
+	const key = $derived(pathKey(trail));
+	const steps = $derived(trail.map((_, i) => worlds.get(pathKey(trail.slice(0, i + 1))) ?? null));
+	const world = $derived(
+		steps.length && steps.every((s) => s !== null) ? (steps[steps.length - 1] as World) : null
 	);
-	const favicon = $derived(paletteFavicon(mood ? mood.palette : NEUTRAL));
+	const shown = $derived(
+		world ? { world, path: steps.slice(0, -1).map((s) => s!.item), feeling: urlMood } : held
+	);
+	const scene = $derived(shown?.world ?? mood);
+	const focus = $derived(pending ?? left);
+	const picks = $derived.by(() => {
+		const m = mood;
+		return m ? CATEGORIES.flatMap((c) => (m.picks[c] ? [m.picks[c]] : [])) : [];
+	});
+	const favicon = $derived(paletteFavicon(scene ? scene.palette : NEUTRAL));
 	const strength = $derived(
-		mood ? lightStrength(paletteToTokens(mood.palette, mood.light), mood.light) : 1
+		scene ? lightStrength(paletteToTokens(scene.palette, scene.light), scene.light) : 1
 	);
 	const settled = $derived(mood !== null && text.trim() === mood.query);
 	const scentDelay = 1300;
 
 	const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+	const message = (cause: unknown) =>
+		cause instanceof Error ? cause.message : 'the moods are out — try again soon';
 	/** For a song, the album carries the feeling better than the single track. */
 	const work = (item: Item) => (item.category === 'song' ? (item.album ?? item.title) : item.title);
 
@@ -78,7 +112,12 @@
 
 	// Focus the field when the user types with no other control selected.
 	function typeAnywhere(e: KeyboardEvent) {
-		if (open || e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
+		if (e.key === 'Escape' && world) {
+			e.preventDefault();
+			void back(1);
+			return;
+		}
+		if (shown || e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
 		if (document.activeElement && document.activeElement !== document.body) return;
 		lineRef?.focus({ preventScroll: true });
 	}
@@ -99,6 +138,7 @@
 				if (my !== seq) return;
 			}
 			mood = null;
+			held = null;
 			leaving = false;
 			waiting = false;
 			face = null;
@@ -117,7 +157,7 @@
 		} catch (cause) {
 			if (my !== seq) return;
 			waiting = false;
-			error = cause instanceof Error ? cause.message : 'the moods are out — try again soon';
+			error = message(cause);
 			return;
 		}
 		if (my !== seq) return;
@@ -127,8 +167,10 @@
 			await sleep(200);
 			if (my !== seq) return;
 		}
-		void tweenTokens(paletteToTokens(m.palette, m.light), 900);
-		lastOpened = null;
+		// History can return to a world of this feeling. Then the world keeps its own colors.
+		if (!world) void tweenTokens(paletteToTokens(m.palette, m.light), 900);
+		pending = null;
+		left = null;
 		leaving = false;
 		mood = m;
 		loadFace(my, m, m.picks.poem?.text ?? '');
@@ -144,6 +186,7 @@
 			}
 		);
 	}
+
 	async function submit(raw: string) {
 		const q = normalize(raw);
 		if (!q) return;
@@ -174,44 +217,138 @@
 		return vt.finished.catch(() => {});
 	}
 
-	async function openView(key: Open, el: HTMLButtonElement) {
-		opener = el;
-		lastOpened = key;
+	// Load every world on the path that is not in memory, for example after the browser returns to
+	// a page whose history holds a path.
+	$effect(() => {
+		trail.forEach((_, i) => {
+			const ids = trail.slice(0, i + 1);
+			const k = pathKey(ids);
+			if (worlds.has(k) || loading.has(k)) return;
+			loading.add(k);
+			requestWorld(ids[i], ids)
+				.then(
+					(w) => worlds.set(k, w),
+					(cause) => (error = message(cause))
+				)
+				.finally(() => loading.delete(k));
+		});
+	});
+
+	// Retint the page when a world opens or closes. show() tints the page for a new mood.
+	$effect(() => {
+		const w = world;
+		if (w === tinted) return;
+		tinted = w;
+		if (w) {
+			void tweenTokens(paletteToTokens(w.palette, w.light), 900);
+			const id = w.item.id;
+			loadTypeface(w.typeface, w.item.title + (w.item.text ?? '')).then(
+				(f) => {
+					if (world?.item.id === id) worldFace = { id, face: f };
+				},
+				() => {}
+			);
+		} else if (mood && !held) {
+			void tweenTokens(paletteToTokens(mood.palette, mood.light), 900);
+		}
+	});
+
+	/** Travel from the wall on screen into the world of one of its works. */
+	async function travel(item: Item) {
+		if (traveling) return;
+		const from = key;
+		const ids = [...trail, item.id];
+		const k = pathKey(ids);
+		error = null;
+		let w = worlds.get(k);
+		if (!w) {
+			traveling = true;
+			try {
+				w = await requestWorld(item.id, ids);
+			} catch (cause) {
+				error = message(cause);
+				return;
+			} finally {
+				traveling = false;
+			}
+			// The user left this wall while the world loaded.
+			if (key !== from) return;
+			worlds.set(k, w);
+		}
+		left = null;
+		pending = item.id;
 		await tick();
-		await viewTransition(() => pushState('', { open: key }));
+		await viewTransition(() => {
+			pushState('', { trail: ids });
+			pending = null;
+			scrollTo(0, 0);
+		});
+		heading?.focus({ preventScroll: true });
 	}
 
-	async function closeView() {
-		if (!page.state.open) return;
-		await viewTransition(
-			() =>
-				new Promise<void>((resolve) => {
-					addEventListener('popstate', () => resolve(), { once: true });
-					history.back();
-				})
+	/** Go back the given number of steps on the path. The popstate listener restores focus. */
+	async function back(count: number) {
+		if (!world || count <= 0) return;
+		const y = scrolls.get(pathKey(trail.slice(0, trail.length - count))) ?? 0;
+		left = world.item.id;
+		pending = null;
+		await viewTransition(() =>
+			new Promise<void>((resolve) => {
+				addEventListener('popstate', () => resolve(), { once: true });
+				history.go(-count);
+			}).then(async () => {
+				await tick();
+				scrollTo(0, y);
+			})
 		);
 	}
 
-	// Restore focus after closing a full view through browser history.
+	function startOver(e: MouseEvent) {
+		if (!world || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+		held = shown;
+	}
+
+	$effect(() => {
+		shownTrail = trail;
+	});
+
+	// Keep the scroll position of each path, and restore scroll and focus when the browser moves
+	// through the path's history.
 	onMount(() => {
-		const restoreFocus = async () => {
-			// Let the router's popstate listener update page.state before restoring focus.
+		const onscroll = () => scrolls.set(key, scrollY);
+		const onpopstate = async () => {
+			// The router's popstate listener runs first. For a step on the path it sets page.state at
+			// once; for another page it navigates later, and afterNavigate takes over.
+			if (location.pathname !== page.url.pathname) return;
+			const before = shownTrail;
+			const after = mood ? (page.state.trail ?? []) : [];
+			const y = scrolls.get(pathKey(after)) ?? 0;
+			const shorter = after.length < before.length;
+			if (shorter) left = before[before.length - 1];
+			else if (after.length > before.length) left = null;
 			await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 			await tick();
-			if (page.state.open || !opener) return;
-			opener.focus({ preventScroll: true });
-			opener = null;
+			scrollTo(0, y);
+			const tile = shorter
+				? [...document.querySelectorAll<HTMLElement>(`[data-item="${CSS.escape(left!)}"]`)].find(
+						(el) => !el.closest('[inert]')
+					)
+				: null;
+			if (tile) tile.focus({ preventScroll: true });
+			else if (world) heading?.focus({ preventScroll: true });
 		};
-		addEventListener('popstate', restoreFocus);
+		addEventListener('scroll', onscroll, { passive: true });
+		addEventListener('popstate', onpopstate);
 		return () => {
 			seq++;
-			removeEventListener('popstate', restoreFocus);
+			removeEventListener('scroll', onscroll);
+			removeEventListener('popstate', onpopstate);
 		};
 	});
 </script>
 
 <svelte:head>
-	<title>{mood ? mood.query : 'mise'}</title>
+	<title>{shown ? shown.world.item.title : mood ? mood.query : 'mise'}</title>
 	<link rel="icon" href={favicon} />
 </svelte:head>
 
@@ -221,63 +358,72 @@
 	style:--mood-font={face?.family ?? null}
 	style:--mood-style={face?.style ?? null}
 >
-	<header class="line">
-		<MoodLine
-			bind:value={text}
-			bind:ref={lineRef}
-			examples={EXAMPLES}
-			boxed={mood !== null}
-			{settled}
-			{waiting}
-			onsubmit={submit}
-		/>
+	<!-- The mood stays in the page under a world, so a return shows it as the user left it. -->
+	<div class="scene" class:away={shown !== null} inert={shown !== null}>
+		<header class="line">
+			<MoodLine
+				bind:value={text}
+				bind:ref={lineRef}
+				examples={EXAMPLES}
+				boxed={mood !== null}
+				{settled}
+				{waiting}
+				onsubmit={submit}
+			/>
 
-		{#if mood?.anchor}
+			{#if mood?.anchor}
+				{#key mood.query}
+					{@const anchor = mood.anchor}
+					<p class="anchor" class:leaving class:editing={!settled}>
+						<span class="reveal">
+							in the key of
+							<button
+								type="button"
+								class="work"
+								data-item={anchor.id}
+								style:view-transition-name={!shown && focus === anchor.id ? 'mood-tile' : null}
+								onclick={() => travel(anchor)}
+								>{work(anchor)} <span class="dash">—</span> {anchor.creator}</button
+							>
+						</span>
+					</p>
+				{/key}
+			{/if}
+
+			{#if error && !shown}
+				<p class="note" in:fade={{ duration: 400 }}>{error}</p>
+			{/if}
+		</header>
+
+		{#if mood}
 			{#key mood.query}
-				{@const anchor = mood.anchor}
-				<p class="anchor" class:leaving class:editing={!settled}>
-					<span class="reveal">
-						in the key of
-						<button
-							type="button"
-							class="work"
-							style:view-transition-name={!open && lastOpened === 'anchor' ? 'mood-tile' : null}
-							onclick={(e) => openView('anchor', e.currentTarget)}
-							>{work(anchor)} <span class="dash">—</span> {anchor.creator}</button
-						>
-					</span>
-				</p>
+				<Wall items={picks} label="picks" {leaving} active={shown ? null : focus} onopen={travel} />
+			{/key}
+			{#key `${mood.query}\n${mood.scent.id}`}
+				<Scent text={mood.scent.text} {leaving} delay={scentDelay} />
 			{/key}
 		{/if}
+	</div>
 
-		{#if error}
-			<p class="note" in:fade={{ duration: 400 }}>{error}</p>
-		{/if}
-	</header>
-
-	{#if mood}
-		{#key mood.query}
-			<Wall
-				picks={mood.picks}
-				{leaving}
-				active={open || lastOpened === 'anchor' ? null : lastOpened}
-				onopen={(item, el) => openView(item.category, el)}
+	{#if shown}
+		{#key pathKey([...shown.path.map((p) => p.id), shown.world.item.id])}
+			<WorldView
+				world={shown.world}
+				feeling={shown.feeling}
+				path={shown.path}
+				{focus}
+				leaving={leaving && held !== null}
+				face={worldFace?.id === shown.world.item.id ? worldFace.face : null}
+				note={error}
+				bind:heading
+				onstep={(step) => back(trail.length - step)}
+				ontravel={travel}
 			/>
-		{/key}
-		{#key `${mood.query}\n${mood.scent.id}`}
-			<div class="scent" class:leaving style:--delay="{scentDelay}ms">
-				<p class="label">scent</p>
-				<p class="note-text" aria-label={mood.scent.text}>
-					{#each mood.scent.text.split('') as ch, i (i)}
-						<span style:--i={i} aria-hidden="true">{ch}</span>
-					{/each}
-				</p>
-			</div>
 		{/key}
 	{/if}
 
 	<!-- Place the mark after the field so users reach the field first when they press Tab. -->
-	<a class="mark" href={resolve('/')} aria-label="mise, start over">
+	<a class="mark" href={resolve('/')} aria-label="mise, start over" onclick={startOver}>
 		<span class="swatch" aria-hidden="true">
 			<i style:--k={0} style:background="var(--ground)"></i>
 			<i style:--k={1} style:background="var(--mid-1)"></i>
@@ -289,25 +435,15 @@
 	</a>
 </main>
 
-{#if !openItem}
-	<a class="attribution" href={resolve('/attribution')}>attribution</a>
-{/if}
+<a class="attribution" href={resolve('/attribution')}>attribution</a>
 
 <svelte:window onkeydown={typeAnywhere} />
 
-{#if waiting}
+{#if waiting || traveling}
 	<div class="breath" aria-hidden="true" transition:fade={{ duration: 600 }}></div>
 {/if}
 
-<RoomLight light={mood?.light ?? null} {strength} />
-
-{#if openItem}
-	<FullView
-		item={openItem}
-		kicker={open === 'anchor' ? 'in the key of' : undefined}
-		onclose={closeView}
-	/>
-{/if}
+<RoomLight light={scene?.light ?? null} {strength} />
 
 <style>
 	.stage {
@@ -318,6 +454,21 @@
 		flex-direction: column;
 		min-height: 100dvh;
 		box-sizing: border-box;
+	}
+
+	.scene {
+		display: flex;
+		flex: 1;
+		flex-direction: column;
+	}
+
+	/* Out of view and out of the flow, but still rendered, so its animations never start again. */
+	.scene.away {
+		position: absolute;
+		inset: 0 0 auto;
+		height: 0;
+		overflow: hidden;
+		visibility: hidden;
 	}
 
 	.line {
@@ -488,42 +639,6 @@
 		color: var(--ink-soft);
 	}
 
-	.scent {
-		margin: 0.75rem auto 0;
-		padding: 0 max(2.5vw, 12px) 4rem;
-		text-align: center;
-		transition: opacity 200ms ease-out;
-	}
-
-	.scent p {
-		margin: 0;
-	}
-
-	.scent .label {
-		font-size: 0.95rem;
-		font-style: normal;
-		font-variant-caps: all-small-caps;
-		letter-spacing: 0.12em;
-		color: var(--ink-soft);
-		animation: letter 700ms var(--ease) both;
-		animation-delay: calc(var(--delay) - 300ms);
-	}
-
-	.note-text {
-		font-size: 1.05rem;
-		white-space: pre-wrap;
-	}
-
-	.scent.leaving {
-		opacity: 0;
-	}
-
-	.note-text span {
-		opacity: 0;
-		animation: letter 500ms var(--ease) both;
-		animation-delay: calc(var(--delay) + var(--i) * 30ms);
-	}
-
 	.breath {
 		position: fixed;
 		inset: 0;
@@ -547,6 +662,11 @@
 		padding: max(1vw, 8px) calc(max(2.5vw, 12px) + env(safe-area-inset-right, 0px))
 			calc(max(1vw, 8px) + env(safe-area-inset-bottom, 0px)) max(1vw, 8px);
 		box-sizing: border-box;
+		border-top-left-radius: 0.75rem;
+		/* A veil, so the label stays readable over the tiles that scroll under it. */
+		background: color-mix(in srgb, var(--veil) 80%, transparent);
+		backdrop-filter: blur(16px);
+		-webkit-backdrop-filter: blur(16px);
 		color: var(--ink-soft);
 		font-size: 0.8rem;
 		font-style: normal;
@@ -597,10 +717,6 @@
 	@media (prefers-reduced-motion: reduce) {
 		.line {
 			transition: none;
-		}
-
-		.note-text span {
-			animation-delay: var(--delay);
 		}
 
 		.anchor .work::after {
