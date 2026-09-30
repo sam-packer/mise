@@ -123,7 +123,8 @@ export async function createEncoder(io: EncoderIO, manifest: Manifest): Promise<
 /** Load bundle assets and combine encoder outputs with catalog matches. */
 // A world id and the work to show in it, for the demo path.
 const PINNED: Record<string, string> = {
-	'song:laufey-from-the-start': 'song:the-marias-no-one-noticed'
+	'song:laufey-from-the-start': 'song:the-marias-no-one-noticed',
+	'song:the-marias-no-one-noticed': 'song:mac-demarco-my-kind-of-woman'
 };
 
 export async function createMoodEngine(io: EngineIO): Promise<MoodEngine> {
