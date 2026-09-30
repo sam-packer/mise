@@ -151,7 +151,7 @@
 		font-style: normal;
 		font-variant-caps: all-small-caps;
 		letter-spacing: 0.12em;
-		opacity: 0.55;
+		color: var(--ink-soft);
 	}
 
 	.name {
@@ -161,7 +161,7 @@
 		-webkit-line-clamp: 2;
 		line-clamp: 2;
 		font-size: 0.9rem;
-		color: color-mix(in oklab, var(--ink) 68%, transparent);
+		color: var(--ink-soft);
 		transition: color 400ms var(--ease);
 	}
 

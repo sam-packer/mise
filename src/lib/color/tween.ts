@@ -3,10 +3,19 @@
 import type { OKLab } from '$lib/mood/types';
 import { cssLch, labToLch, toGamut, type OKLCH, type Tokens } from './oklab';
 
-const KEYS = ['--ground', '--ink', '--mid-1', '--mid-2', '--mid-3', '--paper-ink'] as const;
+const KEYS = [
+	'--ground',
+	'--ink',
+	'--ink-soft',
+	'--mid-1',
+	'--mid-2',
+	'--mid-3',
+	'--paper-ink',
+	'--veil'
+] as const;
 
 function flat(t: Tokens): OKLab[] {
-	return [t.ground, t.ink, ...t.mids, t.paperInk];
+	return [t.ground, t.ink, t.inkSoft, ...t.mids, t.paperInk, t.veil];
 }
 
 function mixLch(a: OKLCH, b: OKLCH, t: number): OKLCH {

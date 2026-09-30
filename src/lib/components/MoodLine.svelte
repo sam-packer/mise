@@ -253,7 +253,7 @@
 	.ghost {
 		display: grid;
 		pointer-events: none;
-		color: color-mix(in oklab, var(--ink) 32%, transparent);
+		color: var(--ink-soft);
 		user-select: none;
 	}
 
@@ -337,7 +337,7 @@
 		padding: 0 0.15rem 0.3rem 0.6rem;
 		border: 0;
 		background: none;
-		color: color-mix(in oklab, var(--ink) 50%, transparent);
+		color: var(--ink-soft);
 		font: inherit;
 		font-size: 0.85rem;
 		font-style: normal;
@@ -365,7 +365,7 @@
 		left: 0;
 		right: 0;
 		margin: 0;
-		color: color-mix(in oklab, var(--ink) 45%, transparent);
+		color: var(--ink-soft);
 		font-size: 0.85rem;
 		font-style: normal;
 		font-variant-caps: all-small-caps;

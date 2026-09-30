@@ -10,7 +10,7 @@
 	import { feelingCode, feelings, normalize } from '$lib/code';
 	import type { Item, Mood, OKLab } from '$lib/mood/types';
 	import { infer, ready, start } from '$lib/mood/client';
-	import { neutralTokens, paletteFavicon, paletteToTokens } from '$lib/color/oklab';
+	import { lightStrength, neutralTokens, paletteFavicon, paletteToTokens } from '$lib/color/oklab';
 	import { applyTokens, tweenTokens } from '$lib/color/tween';
 	import { loadTypeface, type LoadedFace } from '$lib/components/typeface';
 	import { EXAMPLES } from '$lib/examples';
@@ -51,6 +51,9 @@
 		!mood || !open ? null : open === 'anchor' ? mood.anchor : mood.picks[open]
 	);
 	const favicon = $derived(paletteFavicon(mood ? mood.palette : NEUTRAL));
+	const strength = $derived(
+		mood ? lightStrength(paletteToTokens(mood.palette, mood.light), mood.light) : 1
+	);
 	const settled = $derived(mood !== null && text.trim() === mood.query);
 	const scentDelay = 1300;
 
@@ -124,7 +127,7 @@
 			await sleep(200);
 			if (my !== seq) return;
 		}
-		void tweenTokens(paletteToTokens(m.palette), 900);
+		void tweenTokens(paletteToTokens(m.palette, m.light), 900);
 		lastOpened = null;
 		leaving = false;
 		mood = m;
@@ -296,7 +299,7 @@
 	<div class="breath" aria-hidden="true" transition:fade={{ duration: 600 }}></div>
 {/if}
 
-<RoomLight light={mood?.light ?? null} />
+<RoomLight light={mood?.light ?? null} {strength} />
 
 {#if openItem}
 	<FullView
@@ -355,13 +358,13 @@
 		font-size: 1.9rem;
 		line-height: 1;
 		letter-spacing: 0.015em;
-		opacity: 0.85;
-		transition: opacity 400ms var(--ease);
+		color: var(--ink-soft);
+		transition: color 400ms var(--ease);
 	}
 
 	.mark:hover .word,
 	.mark:focus-visible .word {
-		opacity: 1;
+		color: var(--ink);
 	}
 
 	.mark:focus-visible .word {
@@ -469,7 +472,7 @@
 	}
 
 	.dash {
-		opacity: 0.5;
+		color: var(--ink-soft);
 	}
 
 	/* The anchor belongs to the feeling on the wall; while the line is edited, the hint takes its place. */
@@ -482,7 +485,7 @@
 	.note {
 		margin: 0.5rem 0 0;
 		font-size: 0.95rem;
-		opacity: 0.6;
+		color: var(--ink-soft);
 	}
 
 	.scent {
@@ -501,8 +504,8 @@
 		font-style: normal;
 		font-variant-caps: all-small-caps;
 		letter-spacing: 0.12em;
-		opacity: 0;
-		animation: dim 700ms var(--ease) both;
+		color: var(--ink-soft);
+		animation: letter 700ms var(--ease) both;
 		animation-delay: calc(var(--delay) - 300ms);
 	}
 
@@ -544,7 +547,7 @@
 		padding: max(1vw, 8px) calc(max(2.5vw, 12px) + env(safe-area-inset-right, 0px))
 			calc(max(1vw, 8px) + env(safe-area-inset-bottom, 0px)) max(1vw, 8px);
 		box-sizing: border-box;
-		color: color-mix(in oklab, var(--ink) 42%, transparent);
+		color: var(--ink-soft);
 		font-size: 0.8rem;
 		font-style: normal;
 		font-variant-caps: all-small-caps;
@@ -569,15 +572,6 @@
 		}
 		to {
 			opacity: 1;
-		}
-	}
-
-	@keyframes dim {
-		from {
-			opacity: 0;
-		}
-		to {
-			opacity: 0.55;
 		}
 	}
 

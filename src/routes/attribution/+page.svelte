@@ -156,7 +156,7 @@
 		min-height: 44px;
 		margin: -0.6rem 0 1.5rem -0.1rem;
 		padding: 0.6rem 0.1rem;
-		color: color-mix(in oklab, var(--ink) 55%, transparent);
+		color: var(--ink-soft);
 		font-size: 0.85rem;
 		font-style: normal;
 		font-variant-caps: all-small-caps;
@@ -186,7 +186,7 @@
 
 	.intro {
 		margin: 0 0 2.5rem;
-		color: color-mix(in oklab, var(--ink) 75%, transparent);
+		color: var(--ink-soft);
 		font-size: 1.05rem;
 	}
 
@@ -239,7 +239,7 @@
 
 	.notice {
 		margin: 0.4rem 0 0;
-		color: color-mix(in oklab, var(--ink) 55%, transparent);
+		color: var(--ink-soft);
 		font-size: 0.9rem;
 		line-height: 1.5;
 	}

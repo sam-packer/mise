@@ -90,17 +90,24 @@
 		padding: 0;
 		border: 0;
 		background: none;
-		color: var(--ink);
+		color: var(--ink-soft);
 		font: inherit;
-		opacity: 0.45;
+		text-decoration: underline 1px transparent;
+		text-underline-offset: 0.3em;
 		cursor: pointer;
-		transition: opacity 300ms var(--ease);
+		transition:
+			color 300ms var(--ease),
+			text-decoration-color 300ms var(--ease);
 	}
 
 	button.on,
 	button:hover,
 	button:focus-visible {
-		opacity: 1;
+		color: var(--ink);
+	}
+
+	button.on {
+		text-decoration-color: currentColor;
 	}
 
 	button:focus-visible {
