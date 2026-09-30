@@ -150,6 +150,14 @@ export async function createMoodEngine(io: EngineIO): Promise<MoodEngine> {
 			if (!name || !outputs[name]) throw new Error(`missing model output: ${name}`);
 			return outputs[name].data as Float32Array;
 		};
+		const choice = (name: 'light' | 'typeface' | 'scent') => {
+			const logits = read(names[name]);
+			const correction = manifest.heads.corrections?.[name];
+			if (!correction) return argmax(logits);
+			return argmax(
+				Array.from(logits, (score, i) => score - correction.tau * Math.log(correction.prior[i]))
+			);
+		};
 		const flat = read(names.palette);
 		const palette = Array.from(
 			{ length: 5 },
@@ -157,9 +165,9 @@ export async function createMoodEngine(io: EngineIO): Promise<MoodEngine> {
 		) as Palette;
 		return {
 			palette,
-			light: vocab.lights[argmax(read(names.light))],
-			typeface: vocab.typefaces[argmax(read(names.typeface))].id,
-			scent: vocab.scents[argmax(read(names.scent))].id
+			light: vocab.lights[choice('light')],
+			typeface: vocab.typefaces[choice('typeface')].id,
+			scent: vocab.scents[choice('scent')].id
 		};
 	}
 

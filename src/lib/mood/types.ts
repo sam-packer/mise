@@ -46,7 +46,10 @@ export type Manifest = {
 		anchors?: { path: string; format: 'json' };
 		anchorVectors?: { path: string; format: 'fp32-le' };
 	};
-	heads: { kind: 'anchors' | 'onnx' };
+	heads: {
+		kind: 'anchors' | 'onnx';
+		corrections?: Record<'light' | 'typeface' | 'scent', { prior: number[]; tau: number }>;
+	};
 	counts: { items: number };
 };
 

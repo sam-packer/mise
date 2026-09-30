@@ -1,6 +1,7 @@
 """Compare trained models with the baseline and record the gate for bundle installation."""
 
 import gc
+import json
 import statistics
 import time
 from collections import defaultdict
@@ -13,6 +14,7 @@ from transformers import AutoModel, AutoTokenizer
 
 from mise_ml.config import (
     BUNDLE,
+    CATALOG,
     CATEGORIES,
     EVAL_REPORT,
     JUDGMENTS,
@@ -25,6 +27,7 @@ from mise_ml.config import (
 from mise_ml.data import (
     Catalog,
     load_catalog,
+    load_eval_sets,
     load_eval_texts,
     load_queries,
     recall_at_k,
@@ -35,8 +38,8 @@ from mise_ml.features import shared_encoder
 from mise_ml.llm import Job, JobSpec, Record, Request, Unit, sha
 from mise_ml.log import elapsed, get, num, progress
 from mise_ml.profile import (
-    FEELING_RULES,
     chunks,
+    item_prompt,
     lazy_llm,
     numbered,
     numbered_array,
@@ -53,13 +56,27 @@ SHIP_MARGIN = 0.05
 SEP = "\x1f"
 JUDGED_K = 10
 
-JUDGE_SYSTEM = f"""You judge picks for mise, a mood app. A user typed a feeling, and the app \
+JUDGE_SYSTEM = """You judge picks for mise, a mood app. A user typed a feeling, and the app \
 shows works that should feel like it.
 
-{FEELING_RULES}
+Read the feeling as a person would. It can be short, casual, misspelled, figurative, \
+sarcastic, or mixed. Interpret idioms and slang by their meaning. For sarcasm, judge the \
+underlying feeling, not the literal claim.
 
-For each numbered work, answer fit = true when a thoughtful person would say the work \
-feels like the moment, and false otherwise. Judge the mood, not the literal topic."""
+For each numbered work, default to fit = false. Answer true only when source evidence \
+supports the same dominant emotion as the user's feeling. Use the source facts and tags to \
+check the generated profile. The profile is an interpretation, not independent evidence. Mark a \
+pick false when it matches only a surface word, object, setting, or title but not the \
+feeling. Require the work's central feeling to match the user's specific emotional \
+experience; a broad shared mood such as sadness or unease is not enough. When source \
+facts and the profile disagree, trust the source facts. Do not invent events or feelings \
+to justify a match. Answer true only with direct evidence that the work shares the \
+dominant emotion. Answer false when the source describes a different or opposing \
+emotion, or when the match needs an unsupported interpretation. For example, 'over the \
+moon' means delight; a lonely lunar adventure is not a fit just because it involves the \
+moon. In 'beautiful morning but i cannot face getting up', exhaustion dominates; a \
+cheerful morning scene is not a fit. Judge the emotional core and tone of the work, \
+not the literal topic."""
 
 
 def judge_schema(count: int) -> dict[str, Any]:
@@ -111,12 +128,20 @@ def student_outputs(texts: list[str], catalog: Catalog) -> tuple[Outputs, list[f
         out = onnx_run(session, tokenizer, [text], max_tokens)
         latency.append((time.perf_counter() - start) * 1000)
         rows.append(out)
+    heads = json.loads((BUNDLE / "manifest.json").read_text(encoding="utf-8"))["heads"]
+    choices = []
+    for name in ("light", "typeface", "scent"):
+        logits = np.concatenate([r[name] for r in rows])
+        correction = heads.get("corrections", {}).get(name)
+        if correction:
+            logits = logits - correction["tau"] * np.log(np.asarray(correction["prior"]))
+        choices.append(logits)
     return (
         Outputs(
             query=np.concatenate([r["embedding"] for r in rows]),
             items=items,
             palette=np.concatenate([r["palette"] for r in rows]),
-            choices=[np.concatenate([r[k] for r in rows]) for k in ("light", "typeface", "scent")],
+            choices=choices,
         ),
         latency,
     )
@@ -124,8 +149,6 @@ def student_outputs(texts: list[str], catalog: Catalog) -> tuple[Outputs, list[f
 
 def baseline_outputs(texts: list[str], catalog: Catalog) -> Outputs:
     """Untrained student backbone for the retrieval floor and judging pool."""
-    import json
-
     from mise_ml.student import STUDENT_DIR
 
     saved = json.loads((STUDENT_DIR / "meta.json").read_text(encoding="utf-8"))["cfg"]
@@ -170,8 +193,6 @@ def judge() -> None:
         f"judge: {num(len(texts))} eval feelings; pool = top {k} per category from the "
         "teacher, the student, and the untrained MiniLM"
     )
-    import json
-
     from mise_ml.steps import JUDGE_POOL, judge_pool_state
 
     state = judge_pool_state()
@@ -209,9 +230,26 @@ def judge() -> None:
 def judge_job(keys: list[str]) -> JobSpec:
     cfg = ProfileConfig()
     catalog = load_catalog()
+    sources = {row["id"]: row for row in iter_jsonl(CATALOG)}
 
     def describe(key: str) -> str:
-        return catalog.texts[catalog.index[key.split(SEP)[2]]]
+        index = catalog.index[key.split(SEP)[2]]
+        resolved = catalog.items[index]
+        source = sources.get(resolved["id"], {})
+        facts = {
+            **source,
+            **resolved,
+            "signal": {**source.get("signal", {}), **resolved.get("signal", {})},
+        }
+        return f"Source facts:\n{item_prompt(facts)}\nGenerated profile: {catalog.texts[index]}"
+
+    def prompt_for(text: str, group: list[str]) -> str:
+        return (
+            f"Feeling: {text}\n\nWorks:\n{numbered([describe(k) for k in group])}"
+            f"\n\nUser's feeling: {text}\n"
+            "For each work, compare its central emotion with this feeling. Default to false. "
+            "Answer true only when source evidence supports the same dominant emotion."
+        )
 
     def build(pending: list[str]) -> list[Unit]:
         groups: dict[str, list[str]] = defaultdict(list)
@@ -220,7 +258,7 @@ def judge_job(keys: list[str]) -> JobSpec:
         units = []
         for text, group in sorted(groups.items()):
             for chunk in chunks(group, 20):
-                prompt = f"Feeling: {text}\n\nWorks:\n{numbered([describe(k) for k in chunk])}"
+                prompt = prompt_for(text, chunk)
                 units.append(
                     Unit(
                         chunk,
@@ -233,7 +271,7 @@ def judge_job(keys: list[str]) -> JobSpec:
         return parse_numbered(unit_keys, data["fits"], lambda row: {"fit": bool(row["fit"])})
 
     def fingerprint(key: str) -> str:
-        return sha(key + describe(key))
+        return sha(key + prompt_for(key.split(SEP)[0], [key]))
 
     return JobSpec(
         Job("judge", JUDGMENTS, cfg),
@@ -407,6 +445,13 @@ def run() -> dict[str, Any]:
         "p95": float(np.percentile(latency, 95)),
         "threads": 1,
     }
+    report["student"]["room_usage"] = {}
+    for name, logits in zip(("light", "typeface", "scent"), student.choices, strict=True):
+        counts = np.bincount(logits[:n_eval].argmax(-1), minlength=logits.shape[1])
+        report["student"]["room_usage"][name] = {
+            "distinct": int(np.count_nonzero(counts)),
+            "top_share": float(counts.max() / n_eval) if n_eval else None,
+        }
     systems = {"teacher": teacher, "student": student, "baseline": baseline}
     held_scores = {
         name: recall_scores(out.query[n_eval:], held_pos, out.items, catalog.categories)
@@ -431,6 +476,18 @@ def run() -> dict[str, Any]:
     }
     for name, scores in judged.items():
         report[name]["recall@10_judged"] = float(scores.mean()) if len(scores) else float("nan")
+    eval_sets = load_eval_sets()
+    set_names = np.asarray([eval_sets[text] for text in eval_texts])
+    for name, scores in judged.items():
+        report[name]["judged_by_set"] = {}
+        for set_name in sorted(set(set_names)):
+            mask = set_names[judged_mask] == set_name
+            selected = scores[mask]
+            report[name]["judged_by_set"][str(set_name)] = {
+                "feelings": int((set_names == set_name).sum()),
+                "judged": int(mask.sum()),
+                "recall@10": float(selected.mean()) if len(selected) else None,
+            }
     known = {r["key"] for r in iter_jsonl(JUDGMENTS)}
     # Check only the depth used by the metric.
     # The deeper judge pool covers near-tied items that floating-point noise can reorder.
@@ -470,6 +527,22 @@ def run() -> dict[str, Any]:
             f"{cell(e.get('typeface_acc'), 6)} {cell(e.get('scent_acc'), 6)}"
         )
     log.info("baseline = untrained student backbone; it has no palette or choice heads")
+    for set_name in sorted(set(set_names)):
+        results = [report[name]["judged_by_set"][set_name] for name in systems]
+        log.info(
+            "judged set %s (%d/%d): teacher %s, student %s, baseline %s",
+            set_name,
+            results[0]["judged"],
+            results[0]["feelings"],
+            *(cell(result["recall@10"], 5) for result in results),
+        )
+    for name, usage in report["student"]["room_usage"].items():
+        log.info(
+            "student %s: %d distinct; top share %s",
+            name,
+            usage["distinct"],
+            cell(usage["top_share"], 5),
+        )
     lat = report["student"]["latency_ms"]
     log.info(f"student latency: median {lat['median']:.1f} ms, p95 {lat['p95']:.1f} ms (1 thread)")
     verdict = "ship" if report["ship"]["ok"] else "do not ship"
