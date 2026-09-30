@@ -11,6 +11,7 @@
 		settled = false,
 		waiting = false,
 		onsubmit,
+		onexample,
 		ref = $bindable(null)
 	}: {
 		value?: string;
@@ -22,6 +23,8 @@
 		/** The model is still loading. */
 		waiting?: boolean;
 		onsubmit: (text: string) => void;
+		/** The example on screen changed. */
+		onexample?: (text: string) => void;
 		ref?: HTMLTextAreaElement | null;
 	} = $props();
 
@@ -50,6 +53,8 @@
 		const timer = setInterval(() => (index += 1), 4000);
 		return () => clearInterval(timer);
 	});
+
+	$effect(() => onexample?.(example));
 
 	const hint = $derived.by(() => {
 		if (waiting) return 'getting the room ready';

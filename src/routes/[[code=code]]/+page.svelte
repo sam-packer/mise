@@ -42,6 +42,8 @@
 	let text = $state(untrack(() => data.text));
 	let mood = $state<Mood | null>(null);
 	let waiting = $state(false);
+	/** The example feeling that the empty line shows. */
+	let example = $state('');
 	let traveling = $state(false);
 	let leaving = $state(false);
 	let error = $state<string | null>(null);
@@ -414,7 +416,6 @@
 	<!-- The mood stays in the page under a world, so a return shows it as the user left it. -->
 	<div class="scene" class:away={shown !== null} inert={shown !== null}>
 		<header class="line">
-			<Tagline away={mood !== null} />
 			<MoodLine
 				bind:value={text}
 				bind:ref={lineRef}
@@ -423,6 +424,7 @@
 				{settled}
 				{waiting}
 				onsubmit={submit}
+				onexample={(current) => (example = current)}
 			/>
 
 			{#if mood?.anchor}
@@ -496,12 +498,17 @@
 		<span class="word">mise</span>
 	</a>
 
+	<!-- The brand line sits under the word of the mark, as in the brand lockup. -->
+	<div class="motto">
+		<Tagline {example} {waiting} away={mood !== null} />
+	</div>
+
 	<a class="attribution" href={resolve('/attribution')}>attribution</a>
 </main>
 
 <svelte:window onkeydown={typeAnywhere} />
 
-<!-- While the model loads, the tagline breathes instead. -->
+<!-- While a world loads, the page breathes. -->
 {#if traveling}
 	<div class="breath" aria-hidden="true" transition:fade={{ duration: 600 }}></div>
 {/if}
@@ -562,6 +569,14 @@
 		padding: max(1.3vw, 10px) max(2.5vw, 12px);
 		color: var(--ink);
 		text-decoration: none;
+	}
+
+	/* Under the word of the mark: past its padding, its five bands, and its gap. */
+	.motto {
+		position: absolute;
+		top: calc(max(1.3vw, 10px) + 1.9rem + 0.7rem);
+		left: calc(max(2.5vw, 12px) + 5 * 0.56rem + 0.7rem);
+		pointer-events: none;
 	}
 
 	.mark:focus-visible {

@@ -190,6 +190,12 @@ export function fromHex(color: string): OKLab {
 	return fromSrgb([1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16) / 255) as RGB);
 }
 
+/** Text for `paper`: the palette color with the most contrast on it, moved until it meets TEXT_TARGET. */
+export function textOn(paper: OKLab, palette: readonly OKLab[]): OKLab {
+	const best = palette.reduce((a, b) => (contrast(b, paper) > contrast(a, paper) ? b : a));
+	return clampContrast(best, [paper], TEXT_TARGET);
+}
+
 export type Tokens = {
 	ground: OKLab;
 	ink: OKLab;
