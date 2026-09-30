@@ -12,8 +12,12 @@
 	const feeling = $derived(typeof page.data.text === 'string' ? page.data.text.trim() : '');
 	const title = $derived(feeling ? `“${feeling}”` : 'mise');
 	const url = $derived(new URL(page.url.pathname, SITE).href);
-	/** The preview image. Keep it one value, so a share link can later use its own image. */
-	const image = $derived(`${SITE}/brand/og.png`);
+	/** A share link shows its own feeling in its own colors. Every other page shows the brand card. */
+	const code = $derived(feeling ? page.params.code : undefined);
+	const image = $derived(code ? `${SITE}/og/${code}.png` : `${SITE}/brand/og.png`);
+	const alt = $derived(
+		code ? `${title} on mise: every feeling has a world.` : 'mise: every feeling has a world.'
+	);
 	/** The mood page sets its own tab icon from the palette, so it must not get a second one. */
 	const ownIcon = $derived(page.route.id === '/[[code=code]]');
 </script>
@@ -30,11 +34,11 @@
 	<meta property="og:image:type" content="image/png" />
 	<meta property="og:image:width" content="1200" />
 	<meta property="og:image:height" content="630" />
-	<meta property="og:image:alt" content="mise: every feeling has a world." />
+	<meta property="og:image:alt" content={alt} />
 	<meta name="twitter:title" content={title} />
 	<meta name="twitter:description" content={TAGLINE} />
 	<meta name="twitter:image" content={image} />
-	<meta name="twitter:image:alt" content="mise: every feeling has a world." />
+	<meta name="twitter:image:alt" content={alt} />
 </svelte:head>
 
 {@render children()}

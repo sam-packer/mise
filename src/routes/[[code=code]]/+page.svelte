@@ -10,7 +10,14 @@
 	import { resolve } from '$app/paths';
 	import { BUNDLE_URL } from '$lib/bundle';
 	import { feelingCode, feelings, normalize } from '$lib/code';
-	import { CATEGORIES, type Item, type Mood, type OKLab, type World } from '$lib/mood/types';
+	import {
+		CATEGORIES,
+		type Item,
+		type Mood,
+		type OKLab,
+		type Palette,
+		type World
+	} from '$lib/mood/types';
 	import { infer, ready, start, world as requestWorld } from '$lib/mood/client';
 	import { lightStrength, neutralTokens, paletteFavicon, paletteToTokens } from '$lib/color/oklab';
 	import { applyTokens, tweenTokens } from '$lib/color/tween';
@@ -20,6 +27,7 @@
 	import Wall from '$lib/components/Wall.svelte';
 	import WorldView from '$lib/components/World.svelte';
 	import RoomLight from '$lib/components/RoomLight.svelte';
+	import Tagline from '$lib/components/Tagline.svelte';
 
 	const NEUTRAL: OKLab[] = [
 		[0.97, 0, 0],
@@ -56,6 +64,12 @@
 	/** The last scroll position of each path. The empty path is the mood wall. */
 	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- written on each scroll, read on navigation
 	const scrolls = new Map<string, number>();
+	/** The feeling saves that this session started, by code. */
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- only savePalette reads it
+	const saving = new Map<string, Promise<unknown>>();
+	/** The codes whose palettes this session sent. */
+	// eslint-disable-next-line svelte/prefer-svelte-reactivity -- only savePalette reads it
+	const paletteSent = new Set<string>();
 	let modelReady = false;
 	let seq = 0;
 	let reduced = false;
@@ -183,6 +197,21 @@
 		leaving = false;
 		mood = m;
 		loadFace(my, m, m.picks.poem?.text ?? '');
+		void savePalette(q, m.palette);
+	}
+
+	/** Send the palette of a feeling's mood to the server once, for the link preview image. */
+	async function savePalette(q: string, palette: Palette) {
+		const code = await feelingCode(q);
+		if (paletteSent.has(code)) return;
+		paletteSent.add(code);
+		// The server keeps a palette only for a stored feeling, so wait for this session's save.
+		await saving.get(code);
+		fetch(`/api/feeling/${code}/palette`, {
+			method: 'PUT',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify({ text: q, palette })
+		}).catch(() => {});
 	}
 
 	function loadFace(my: number, m: Mood, poem: string) {
@@ -206,11 +235,14 @@
 		// Derive the code locally so navigation does not wait for storage.
 		const code = await feelingCode(q);
 		feelings.set(code, q);
-		fetch('/api/feeling', {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ text: q })
-		}).catch(() => {});
+		saving.set(
+			code,
+			fetch('/api/feeling', {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({ text: q })
+			}).catch(() => {})
+		);
 		// Navigate to the feeling so afterNavigate starts inference.
 		void goto(resolve('/[[code=code]]', { code }), { keepFocus: true, noScroll: true });
 	}
@@ -369,7 +401,7 @@
 </script>
 
 <svelte:head>
-	<title>{shown ? shown.world.item.title : mood ? mood.query : 'mise'}</title>
+	<title>{shown ? shown.world.item.title : mood ? mood.query : data.text || 'mise'}</title>
 	<link rel="icon" href={favicon} />
 </svelte:head>
 
@@ -382,6 +414,7 @@
 	<!-- The mood stays in the page under a world, so a return shows it as the user left it. -->
 	<div class="scene" class:away={shown !== null} inert={shown !== null}>
 		<header class="line">
+			<Tagline away={mood !== null} />
 			<MoodLine
 				bind:value={text}
 				bind:ref={lineRef}
@@ -468,7 +501,8 @@
 
 <svelte:window onkeydown={typeAnywhere} />
 
-{#if waiting || traveling}
+<!-- While the model loads, the tagline breathes instead. -->
+{#if traveling}
 	<div class="breath" aria-hidden="true" transition:fade={{ duration: 600 }}></div>
 {/if}
 

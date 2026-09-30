@@ -52,14 +52,15 @@ The course default is React and Next.js. The instructor approved Svelte and a fr
 
 The code is small and split by job:
 
-| Path                  | What it holds                                                             |
-| --------------------- | ------------------------------------------------------------------------- |
-| `src/routes/`         | the pages (the main page and attribution) and the three small API routes  |
-| `src/lib/components/` | the UI: the text box, the wall, a tile, a work's world, the room light    |
-| `src/lib/mood/`       | the search engine: the web worker, the model call, and the catalog search |
-| `src/lib/color/`      | OKLab color math and the palette fade                                     |
-| `scripts/`            | a small sample bundle for local work, and a command line search           |
-| `ml/`                 | the pipeline that builds the catalog and trains the model                 |
+| Path                  | What it holds                                                                    |
+| --------------------- | -------------------------------------------------------------------------------- |
+| `src/routes/`         | the pages (the main page and attribution), the API routes, and the preview image |
+| `src/lib/components/` | the UI: the text box, the wall, a tile, a work's world, the room light           |
+| `src/lib/mood/`       | the search engine: the web worker, the model call, and the catalog search        |
+| `src/lib/server/`     | the preview image: its layout, its font, and the palette check                   |
+| `src/lib/color/`      | OKLab color math and the palette fade                                            |
+| `scripts/`            | a small sample bundle for local work, and a command line search                  |
+| `ml/`                 | the pipeline that builds the catalog and trains the model                        |
 
 ## APIs
 
@@ -69,7 +70,14 @@ At run time the app calls three services:
   them. When you open a song, the route `/api/preview/deezer/<id>` asks Deezer for a fresh link and
   redirects the audio player to it.
 - Google Fonts. Each mood picks a typeface. The page downloads only the letters it needs.
-- Cloudflare Workers KV. It stores the sentence behind each share link.
+- Cloudflare Workers KV. It stores the sentence behind each share link, and the palette of its mood.
+
+Each share link also has its own preview image for chat apps and social sites. The route
+`/og/<code>.png` draws a 1200 by 630 PNG of the feeling in quotes, in the five colors of its mood,
+with the mise wordmark. The palette comes from your browser: after the page finds the mood, it sends
+the palette once to `/api/feeling/<code>/palette`. Until that palette arrives, the image uses the
+brand colors. The Worker draws the image with Satori and resvg in WebAssembly and keeps it in the
+Cloudflare cache. The feeling is set in EB Garamond Italic, under the SIL Open Font License.
 
 The catalog itself comes from APIs too. I built it ahead of time, because a live query to a dozen
 services for each feeling would be slow and would hit rate limits. The pipeline reads TMDB (films),
@@ -81,7 +89,7 @@ posters and covers, the song tags, and the links.
 The search runs in your browser. A small language model (23 MB) turns your sentence into a list of
 numbers and compares it with the numbers for about 11,000 works. The same model also picks the
 palette, the light, the typeface, and the scent. After the first load, a search takes a fraction of
-a second. The server only stores the sentence for the share link.
+a second. The server only stores the sentence and its palette for the share link.
 
 ## Run it locally
 

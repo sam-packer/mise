@@ -42,6 +42,7 @@
 		"wrangler": "^4.97.0"
 	},
 	"dependencies": {
+		"@cf-wasm/og": "^0.5.0",
 		"@huggingface/tokenizers": "^0.2.0",
 		"onnxruntime-web": "^1.30.0"
 	}

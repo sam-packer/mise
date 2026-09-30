@@ -175,7 +175,7 @@ export function cssLch([L, C, H]: OKLCH): string {
 	return `oklch(${L.toFixed(4)} ${C.toFixed(4)} ${H.toFixed(2)})`;
 }
 
-function hex(lab: OKLab): string {
+export function hex(lab: OKLab): string {
 	return `#${toSrgb(lab)
 		.map((s) =>
 			Math.round(s * 255)
@@ -183,6 +183,11 @@ function hex(lab: OKLab): string {
 				.padStart(2, '0')
 		)
 		.join('')}`;
+}
+
+/** Convert a #rrggbb color to OKLab. */
+export function fromHex(color: string): OKLab {
+	return fromSrgb([1, 3, 5].map((i) => parseInt(color.slice(i, i + 2), 16) / 255) as RGB);
 }
 
 export type Tokens = {
