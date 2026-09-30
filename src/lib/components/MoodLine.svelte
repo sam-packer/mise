@@ -56,7 +56,17 @@
 
 	$effect(() => onexample?.(example));
 
+	/** A short answer to a command, shown in place of the hint. */
+	let notice = $state('');
+
+	$effect(() => {
+		if (!notice) return;
+		const timer = setTimeout(() => (notice = ''), 3000);
+		return () => clearTimeout(timer);
+	});
+
 	const hint = $derived.by(() => {
+		if (notice) return notice;
 		if (waiting) return 'getting the room ready';
 		if (coarse) return empty && focused ? 'tap to use this' : '';
 		if (!focused) return empty || settled ? '' : 'enter to see it';
@@ -109,6 +119,22 @@
 		if (e.key !== 'Enter') return;
 		e.preventDefault();
 		if (e.shiftKey) return;
+		// Opt this browser out of Plausible, or back in, with the exact command. It is not a feeling.
+		if (
+			value === 'localStorage.plausible_ignore=true' ||
+			value === 'localStorage.plausible_ignore=false'
+		) {
+			const off = value.endsWith('true');
+			try {
+				if (off) localStorage.setItem('plausible_ignore', 'true');
+				else localStorage.removeItem('plausible_ignore');
+				notice = off ? 'analytics off in this browser' : 'analytics on in this browser';
+			} catch {
+				notice = 'this browser blocks storage';
+			}
+			value = '';
+			return;
+		}
 		if (empty) value = example;
 		onsubmit(value);
 	}
@@ -138,7 +164,8 @@
 			placeholder={example}
 			{onmousedown}
 			{onfocus}
-			{onkeydown}></textarea>
+			{onkeydown}
+			oninput={() => (notice = '')}></textarea>
 		{#if empty && example}
 			<!-- Prevent blur so users can select an example without closing the touch keyboard. -->
 			<div

@@ -921,20 +921,28 @@ def topic_sample(pools: list[list[Record]], n: int, creator_cap: int = 8) -> lis
         rng.shuffle(pool)
     out, seen, shapes = [], set(), set()
     creators: Counter[str] = Counter()
-    for i in range(cap):
-        for pool in pools:
-            if i >= len(pool) or pool[i]["id"] in seen:
-                continue
-            r = pool[i]
-            shape = title_shape(r)
-            if shape in shapes or creators[r["creator"]] >= creator_cap:
-                continue
-            seen.add(r["id"])
-            shapes.add(shape)
-            creators[r["creator"]] += 1
-            out.append({**r, "rank": -len(out)})
-            if len(out) >= n:
-                return out
+    # A skipped record does not use a turn: each pool reads on until it takes one.
+    taken, pos = [0] * len(pools), [0] * len(pools)
+    while len(out) < n:
+        took = False
+        for k, pool in enumerate(pools):
+            while taken[k] < cap and pos[k] < len(pool):
+                r = pool[pos[k]]
+                pos[k] += 1
+                shape = title_shape(r)
+                if r["id"] in seen or shape in shapes or creators[r["creator"]] >= creator_cap:
+                    continue
+                seen.add(r["id"])
+                shapes.add(shape)
+                creators[r["creator"]] += 1
+                taken[k] += 1
+                out.append({**r, "rank": -len(out)})
+                took = True
+                if len(out) >= n:
+                    return out
+                break
+        if not took:
+            return out
     return out
 
 
