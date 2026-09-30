@@ -68,6 +68,12 @@ Every API answer goes into `data/cache/http/`, so a second run needs almost no n
 failures in a row, the pipeline stops calling that host for the rest of the run. The next run tries
 again.
 
+Resolve checks compilation and live-album names against official releases. It uses a song's
+original release year and repairs recording identities that point only to bootlegs. For books,
+it uses the source's first-publication year. A year from 1 to 999 needs source evidence of an
+ancient work. A resolve format change also repairs existing song and book rows. It keeps unrelated
+resolved works and reuses cached API answers.
+
 ## label
 
 `label` runs Qwen3.5-9B on the GPU. Constrained decoding (xgrammar) makes every answer valid JSON
@@ -75,11 +81,22 @@ for its schema, so the model can't return a broken answer. It runs five jobs:
 
 | Job     | What the LLM writes                                                                     |
 | ------- | --------------------------------------------------------------------------------------- |
-| items   | a short vibe line, a mood description, and three example feelings for each work        |
-| moods   | about 6,000 invented feelings, from random scene hints                                  |
+| items   | an emotional-core vibe, a mood description, and three feelings in different registers |
+| moods   | about 6,000 invented feelings, with scene, first-person, and heartbreak hints |
 | pat     | a feeling for each named palette in the PAT data set                                    |
 | labels  | five colors, a light, a typeface, and a scent for about 30,000 feelings                 |
-| distill | about 36,000 more feelings in many styles (short, long, casual, typos), with no labels |
+| distill | up to 40,000 feelings across 30 styles, with no labels |
+
+The items job asks for at most 10 words in a vibe. The grammar allows up to 12 so the model can
+finish the thought. Words use ASCII letters, digits, apostrophes, and hyphens, with at most 14
+characters. The parser rejects a vibe that ends with a function word or comma. Descriptions and
+example feelings use the same word rule, with ordinary punctuation. The examples include a scene,
+a casual first-person thought, and a figurative or slangy line.
+
+Distill styles include idioms, sarcasm, internet slang, heartbreak, envy, spite, shame, dark humor,
+second-person lines, mixed feelings, and one-to-three-word moods. Training keeps these texts and
+adds a version with a swapped, dropped, or doubled letter for about 10% of them. Fixed seeds keep
+these additions stable. Duplicate texts and eval feelings are excluded from distillation.
 
 An answer that fails its checks gets one retry. Each job keeps its answers in `data/llm/<job>.jsonl`.
 The key of each answer is a hash of its exact prompt. So a rerun only asks for what is new or
@@ -106,16 +123,26 @@ changed, and a change to a prompt or the model redoes only the answers it affect
 
 `train` never uploads anything.
 
+Export also saves training-label priors for light, typeface, and scent in the manifest's `heads`
+object. It adds one count per choice so each prior stays positive. For each head, it selects the
+largest correction strength from 0, 0.25, 0.5, and 0.75 that loses at most two percentage points
+of choice accuracy on validation feelings. The browser subtracts `tau * log(prior)` from each
+score before it chooses the highest. Bundles without priors use the raw scores.
+
 ### How the model is scored
 
 There are two tests.
 
 - **Held-out recall@10.** 10% of the item feelings never go into training. For each one, the test
   asks whether its source work lands in the top 10 of its category.
-- **Judged recall@10.** For the 290 feelings in `eval_feelings.jsonl`, the teacher, the student, and
+- **Judged recall@10.** For the 540 feelings in `eval_feelings.jsonl`, the teacher, the student, and
   the untrained MiniLM each return their top 20 works per category. The LLM marks each work in that
   pool as a fit or not. A model's score is the fits in its top 10, divided by the fits it could
   have found (at most 10).
+
+The judge reads the generated profile alongside source facts: film overviews, book descriptions,
+tags, poem text, and song albums. It interprets slang, idioms, sarcasm, and mixed feelings. A pick
+that matches only a surface word must fail.
 
 The ship gate needs all of these to pass:
 
@@ -123,20 +150,17 @@ The ship gate needs all of these to pass:
 - The student is at least 10 points above the untrained MiniLM on held-out recall.
 - At least 100 eval feelings have complete judgments.
 
-The report gives a 95% confidence interval for each gap. The current model:
-
-| Model                   | Judged recall@10 | Held-out recall@10 |
-| ----------------------- | ---------------- | ------------------ |
-| teacher                 | 0.717            | 0.329              |
-| student (int8, shipped) | 0.673            | 0.307              |
-| untrained MiniLM        | 0.505            | 0.131              |
-
-The student trails the teacher by 4.4 points on judged recall (interval 2.8 to 5.9) and by 2.2
-points on held-out recall. It runs in about 1 ms per feeling on one CPU thread.
+The report gives a 95% confidence interval for each gap. It reports judged recall for each set
+for all three models. The ship gate uses all eval feelings together. The report also gives the
+number of distinct student lights, typefaces, and scents, and the share of each head's most
+common choice on eval feelings.
 
 `eval_feelings.jsonl` holds one JSON object per line, like
-`{ "text": "a snowy december and i just made warm hot chocolate" }`. These feelings never go into
-training. If you add some, run `uv run label` again. It labels only the new lines.
+`{ "text": "a snowy december and i just made warm hot chocolate", "set": "scene" }`.
+It has 290 scene feelings, 80 casual first-person feelings, 50 idioms and metaphors, 30 sarcasm
+and irony lines, 40 slang and typo lines, 20 mixed feelings, and 30 heavy feelings such as grief,
+envy, and shame. These feelings never go into training. If you add some, run `uv run label` again
+to label the new lines, then `uv run train` to update the judgments and report.
 
 ## publish
 
@@ -200,8 +224,9 @@ Git ignores `data/` and `out/`.
 - Every step writes sorted output, and the API cache makes `curate` repeatable. To take newer
   data, delete the cache folder for that host.
 - Training uses fixed seeds and PyTorch's deterministic mode.
-- The LLM decodes greedily in a fixed order, so labels repeat on the same GPU and driver. Other
-  hardware can round differently.
+- The items job samples at temperature 0.7 and top-p 0.95, with a separate seed for each work.
+  Other jobs decode greedily on the first pass. Retries sample with a seed from the key. Fixed
+  seeds make the random choices repeatable; hardware and batch rounding can still change output.
 
 ## Configuration
 
