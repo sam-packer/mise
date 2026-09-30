@@ -1,8 +1,8 @@
+// Resolve share codes from the browser session or the feeling API before rendering the page.
 import { browser } from '$app/environment';
 import { feelings } from '$lib/code';
 import type { PageLoad } from './$types';
 
-/** The feeling a code names: from this session when the browser knows it, else from the store. */
 export const load: PageLoad = async ({ params, fetch }) => {
 	const code = params.code;
 	if (!code) return { text: '' };

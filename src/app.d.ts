@@ -1,5 +1,4 @@
-// See https://svelte.dev/docs/kit/types#app.d.ts
-// for information about these interfaces
+// Define Cloudflare bindings and navigation state for SvelteKit routes.
 import type { Category } from '$lib/mood/types';
 
 declare global {
@@ -15,10 +14,6 @@ declare global {
 			/** The category whose full view is open, or the anchor the feeling names. */
 			open?: Category | 'anchor';
 		}
-
-		// interface Error {}
-		// interface Locals {}
-		// interface PageData {}
 	}
 }
 

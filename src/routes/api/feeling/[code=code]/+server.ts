@@ -1,3 +1,4 @@
+// Retrieve stored feeling text for shared URLs and browser navigation.
 import { error, json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 

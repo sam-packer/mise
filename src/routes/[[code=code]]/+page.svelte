@@ -1,4 +1,5 @@
 <script lang="ts">
+	// Turn shared feeling text into a mood and coordinate the wall, colors, fonts, and navigation.
 	import { onMount, tick, untrack } from 'svelte';
 	import { fade } from 'svelte/transition';
 	import { env } from '$env/dynamic/public';
@@ -57,7 +58,7 @@
 	/** For a song, the album carries the feeling better than the single track. */
 	const work = (item: Item) => (item.category === 'song' ? (item.album ?? item.title) : item.title);
 
-	// The bundle root: BUNDLE_URL, unless PUBLIC_BUNDLE_URL is set (a local stub for testing).
+	// Allow a local bundle through PUBLIC_BUNDLE_URL.
 	const bundleOverride = env.PUBLIC_BUNDLE_URL?.trim();
 	const bundleUrl = bundleOverride || BUNDLE_URL;
 	const bundleBase = bundleUrl.endsWith('/') ? bundleUrl : `${bundleUrl}/`;
@@ -72,7 +73,7 @@
 		);
 	});
 
-	// Type anywhere: a key pressed while nothing has focus goes to the line.
+	// Focus the field when the user types with no other control selected.
 	function typeAnywhere(e: KeyboardEvent) {
 		if (open || e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
 		if (document.activeElement && document.activeElement !== document.body) return;
@@ -99,7 +100,7 @@
 			waiting = false;
 			face = null;
 			text = '';
-			// The line kept focus through goto's keepFocus, which paused the ghost's rotation. Let it resume.
+			// Release the focus retained by goto so example rotation can resume.
 			lineRef?.blur();
 			void tweenTokens(neutralTokens(matchMedia('(prefers-color-scheme: dark)').matches));
 			return;
@@ -147,7 +148,7 @@
 			if (!mood || mood.query !== q) void show(q);
 			return;
 		}
-		// The code comes from the text, so the page moves at once and the store catches up on its own.
+		// Derive the code locally so navigation does not wait for storage.
 		const code = await feelingCode(q);
 		feelings.set(code, q);
 		fetch('/api/feeling', {
@@ -272,7 +273,7 @@
 		{/key}
 	{/if}
 
-	<!-- After the line in DOM order, so the first Tab lands on the line. -->
+	<!-- Place the mark after the field so users reach the field first when they press Tab. -->
 	<a class="mark" href={resolve('/')} aria-label="mise, start over">
 		<span class="swatch" aria-hidden="true">
 			<i style:--k={0} style:background="var(--ground)"></i>

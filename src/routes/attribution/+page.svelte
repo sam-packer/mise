@@ -1,4 +1,5 @@
 <script lang="ts">
+	// List the data, image, and font sources used by the moodboard.
 	import { resolve } from '$app/paths';
 </script>
 
