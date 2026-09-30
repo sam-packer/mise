@@ -178,13 +178,10 @@
 	</section>
 
 	<section class="near" aria-labelledby="{id}-near">
-		<div class="head">
-			<h2 id="{id}-near">worlds next door</h2>
-			<p>step into one</p>
-		</div>
+		<h2 id="{id}-near">the same feeling, elsewhere.</h2>
 		<Wall
 			items={world.neighbors}
-			label="worlds next door to {item.title}"
+			label="works that share the feeling of {item.title}"
 			leaving={false}
 			active={focus}
 			onopen={ontravel}
@@ -566,36 +563,33 @@
 
 	.near {
 		width: min(100%, 1440px);
-		margin: clamp(3.5rem, 10vh, 6rem) auto 0;
+		margin: clamp(4.5rem, 14vh, 9rem) auto 0;
 	}
 
-	.head {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: baseline;
-		justify-content: space-between;
-		gap: 0.25rem 1rem;
-		margin: 0 var(--gutter);
-		padding-top: 1rem;
-		border-top: 1px solid color-mix(in oklab, var(--ink) 25%, transparent);
-	}
-
-	.head h2,
-	.head p {
-		margin: 0;
-		font-size: 0.95rem;
-		font-weight: 400;
-		font-style: normal;
-		font-variant-caps: all-small-caps;
-		letter-spacing: 0.12em;
-	}
-
-	.head h2 {
+	/*
+	 * One line in the world's own typeface, set as a moment between the work and its neighbors.
+	 * A short rule above it gives the pause before it.
+	 */
+	.near h2 {
+		margin: 0 var(--gutter) clamp(0.5rem, 2vh, 1.25rem);
 		color: var(--ink);
+		font-family: var(--mood-font, var(--serif));
+		font-style: var(--mood-style, italic);
+		font-size: clamp(1.75rem, 2.6vw + 0.9rem, 3.1rem);
+		font-weight: 400;
+		line-height: 1.1;
+		letter-spacing: -0.015em;
+		text-align: center;
+		text-wrap: balance;
 	}
 
-	.head p {
-		color: var(--ink-soft);
+	.near h2::before {
+		content: '';
+		display: block;
+		width: 2.5rem;
+		height: 1px;
+		margin: 0 auto clamp(1.25rem, 3vh, 2rem);
+		background: color-mix(in oklab, var(--ink) 35%, transparent);
 	}
 
 	@media (max-width: 720px) {
