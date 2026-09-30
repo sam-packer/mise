@@ -90,7 +90,7 @@ def teacher_outputs(texts: list[str], catalog: Catalog) -> Outputs:
 
 
 def student_outputs(texts: list[str], catalog: Catalog) -> tuple[Outputs, list[float]]:
-    """Read the public int8 ONNX graph and private catalog vectors."""
+    """Read the public int8 ONNX graph and public catalog vectors."""
     model_path = BUNDLE / "model" / "model.onnx"
     if not model_path.exists():
         raise SystemExit(f"no bundle at {BUNDLE}; run uv run train first")

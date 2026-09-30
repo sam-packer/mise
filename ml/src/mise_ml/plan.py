@@ -95,6 +95,11 @@ def show(command: str, *, prune: bool = False) -> None:
     for step in steps:
         reasons: list[str] = []
         details: list[str] = []
+        upstream = (
+            sorted(dirty)
+            if command == "label" and step.name == "judge"
+            else [name for name in step.needs if name in dirty]
+        )
         try:
             if step.name == "publish":
                 from mise_ml.publish import plan
@@ -116,7 +121,6 @@ def show(command: str, *, prune: bool = False) -> None:
                         reasons.append("retrieval pool must be ranked")
                 else:
                     result, notes = inspect_job(step.call()), []
-                upstream = [name for name in step.needs if name in dirty]
                 if upstream:
                     result.membership_verified = False
                     result.unused.clear()
@@ -134,7 +138,6 @@ def show(command: str, *, prune: bool = False) -> None:
                     reasons.append("materialize current records")
             else:
                 reasons = stale_reasons(step.name, step.state(), step.outputs())
-            upstream = [name for name in step.needs if name in dirty]
             reasons.extend(
                 f"upstream {name} will run; recheck after its outputs change" for name in upstream
             )

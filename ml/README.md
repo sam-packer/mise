@@ -452,8 +452,8 @@ Run `uv run publish` from this directory.
 - Images go to `img/<first 20 hex of the SHA-256>.webp`. Publish uploads missing images,
   16 at a time, and rewrites each record's image URL to the public CDN URL.
 - All other files go to `bundles/<date>-<hash8>/`, including records, fp16 vectors, and
-  name data. The manifest lists the published image URLs. Publish uploads the manifest last.
-- The prefix hash covers the file names and bytes, including rewritten records and manifest.
+  name data. `items.json` contains the published image URLs. Publish uploads the manifest last.
+- The prefix hash covers the file names and bytes, including the rewritten records.
   Publish reuses an existing prefix with the same content hash.
 - Objects use `Cache-Control: public, max-age=31536000, immutable`.
   JSON uses `application/json`; ONNX and binary files use `application/octet-stream`.
