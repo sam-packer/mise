@@ -9,7 +9,6 @@ import {
 	type MatchResult
 } from './types';
 export type CatalogInfo = {
-	version: string;
 	dims: number;
 	counts: { items: number };
 	heads: { kind: 'onnx' | 'anchors' };
@@ -103,8 +102,6 @@ export function createSearch(
 	const anchorHeads = createAnchorHeads(anchors, anchorVectors, dims);
 
 	return {
-		dims,
-		version: info.version,
 		match(query: string, embedding: Float32Array): MatchResult {
 			const row = findAnchor(query);
 			const anchor = row >= 0 ? items[row] : null;

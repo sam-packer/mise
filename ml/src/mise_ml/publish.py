@@ -60,28 +60,24 @@ def client(cfg: dict[str, str]) -> Any:
 
 
 def require_buckets(s3: Any, cfg: dict[str, str]) -> None:
-    """Name each missing or unreachable bucket before any upload starts."""
-    problems = []
-    for key, role in (("bucket", "public bundle"),):
-        name = cfg[key]
-        try:
-            s3.head_bucket(Bucket=name)
-        except ClientError as e:
-            code = e.response["Error"]["Code"]
-            if code in ("404", "NoSuchBucket", "NotFound"):
-                problems.append(
-                    f"the {role} bucket {name!r} does not exist; create it with "
-                    f"`bunx wrangler r2 bucket create {name}`"
-                )
-            else:
-                problems.append(
-                    f"the {role} bucket {name!r} is not reachable ({code}); give the R2 API "
-                    "token object read and write access to it"
-                )
-    for problem in problems:
+    """Report a missing or unreachable bucket before any upload starts."""
+    name = cfg["bucket"]
+    try:
+        s3.head_bucket(Bucket=name)
+    except ClientError as e:
+        code = e.response["Error"]["Code"]
+        if code in ("404", "NoSuchBucket", "NotFound"):
+            problem = (
+                f"the public bundle bucket {name!r} does not exist; create it with "
+                f"`bunx wrangler r2 bucket create {name}`"
+            )
+        else:
+            problem = (
+                f"the public bundle bucket {name!r} is not reachable ({code}); give the R2 API "
+                "token object read and write access to it"
+            )
         log.error(problem)
-    if problems:
-        raise SystemExit(1)
+        raise SystemExit(1) from e
 
 
 def existing(s3: Any, bucket: str, prefix: str) -> set[str]:

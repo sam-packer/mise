@@ -218,10 +218,9 @@ class Step:
     llm: bool = False
     observed_http: bool = False
 
-    def state(self, *, outputs: bool = True) -> dict[str, Any]:
+    def state(self) -> dict[str, Any]:
         state = snapshot(self.inputs(), self.config(), [SOURCE / f"{m}.py" for m in self.modules])
-        if outputs:
-            state["outputs"] = file_hashes(self.outputs())
+        state["outputs"] = file_hashes(self.outputs())
         if self.observed_http:
             old = read_stamp(self.name) or {}
             paths = old.get("observed")
@@ -362,7 +361,10 @@ STEPS = {
                 *query_inputs(),
                 *images(),
                 c.REPO_ROOT / "scripts" / "build-name-data.ts",
-                *sorted((c.REPO_ROOT / "src" / "lib" / "mood").glob("*.ts")),
+                *[
+                    c.REPO_ROOT / "src" / "lib" / "mood" / name
+                    for name in ("name-data.ts", "types.ts", "anchor-search.ts", "search.ts")
+                ],
                 public_items(),
                 constants("SEED", "CATEGORIES"),
             ],

@@ -12,7 +12,7 @@ COMMANDS = {
     "download": "Fetch sources, curate the catalog, and resolve media and links.",
     "label": "Write profiles and labels with the local LLM.",
     "train": "Train, export, evaluate, and install only when the ship gate passes.",
-    "publish": "Upload the installed public bundle and private catalog to R2.",
+    "publish": "Upload the installed public bundle to R2.",
 }
 
 log = logs.get("cli")
