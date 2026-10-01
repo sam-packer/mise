@@ -14,13 +14,13 @@ from torch import nn
 from transformers import AutoModel, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
 
 from mise_ml.config import ML_ROOT, MODELS, SEED, StudentConfig
-from mise_ml.data import load_catalog, recall_at_k
+from mise_ml.data import fidelity_at_k, load_catalog, recall_at_k, typo_feeling
 from mise_ml.heads import ChoiceHeads, kl_logits, palette_loss
 from mise_ml.inference import encode_batches
 from mise_ml.log import elapsed, get, num, progress
 from mise_ml.teacher import OUTPUTS as TEACHER_OUTPUTS
 from mise_ml.training import cosine_schedule
-from mise_ml.util import make_deterministic
+from mise_ml.util import hash_fraction, make_deterministic
 from mise_ml.vocab import load_vocab
 
 log = get(__name__)
@@ -141,21 +141,52 @@ def encode_texts(
 
 
 def item_candidates(
-    top: torch.Tensor, positives: torch.Tensor, n_items: int, cfg: StudentConfig
+    teacher_sims: torch.Tensor,
+    positives: torch.Tensor,
+    by_category: list[torch.Tensor],
+    cfg: StudentConfig,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Items for one step: sorted indices, and a (queries x candidates) mask of the items that
+    the teacher picked for each query.
+
+    Take the teacher's top items in each category for each query, plus the positives and
+    random items.
+    """
+    top = torch.cat(
+        [
+            idx[teacher_sims[:, idx].topk(min(cfg.teacher_topk, len(idx)), dim=1).indices]
+            for idx in by_category
+        ],
+        dim=1,
+    )
+    rand = torch.randint(
+        0, sum(map(len, by_category)), (cfg.random_items,), device=positives.device
+    )
+    cand = torch.cat([top.flatten(), positives[positives >= 0], rand]).unique()
+    picked = torch.zeros(len(positives), len(cand), dtype=torch.bool, device=cand.device)
+    picked.scatter_(1, torch.searchsorted(cand, top), True)
+    return cand, picked
+
+
+def category_kl(
+    student: torch.Tensor, teacher: torch.Tensor, categories: torch.Tensor, n_categories: int
 ) -> torch.Tensor:
-    """Keep teacher neighbors and positives within the memory budget for item activations."""
-    required = torch.cat([top.flatten(), positives[positives >= 0]]).unique()
-    rand = torch.randint(0, n_items, (cfg.random_items,), device=top.device)
-    cand = torch.cat([required, rand]).unique()
-    # Trim only random extras if unusually distinct neighbors exceed the step budget.
-    upper = min(n_items, 1120)
-    if len(required) > upper:
-        raise ValueError("teacher neighbors and positives exceed the 1120-item step budget")
-    if len(cand) > upper:
-        extras = rand[~torch.isin(rand, required)].unique()
-        extras = extras[torch.randperm(len(extras), device=top.device)]
-        cand = torch.cat([required, extras[: upper - len(required)]]).sort().values
-    return cand
+    """Mean over categories of the KL between the rankings inside each category."""
+    losses = [
+        kl_logits(student[:, categories == c], teacher[:, categories == c], 1.0)
+        for c in range(n_categories)
+        if (categories == c).any()
+    ]
+    return torch.stack(losses).mean()
+
+
+def noisy_texts(texts: list[str], rows: np.ndarray, share: float, epoch: int) -> list[str]:
+    """Copy of texts where a `share` of `rows` gets typing noise that changes each epoch."""
+    noisy = list(texts)
+    for i in rows:
+        if hash_fraction(f"typo:{epoch}:{texts[i]}") < share:
+            noisy[i] = typo_feeling(texts[i], str(epoch))
+    return noisy
 
 
 def embed_items(model: "Student", tokens: Pretokenized, cand: torch.Tensor, chunks: int = 4):
@@ -197,6 +228,9 @@ def run() -> None:
     t_palette = t["palette"].float().to(dev)
     t_choices = [t[k].float().to(dev) for k in ("light", "typeface", "scent")]
     n_items = len(catalog.items)
+    item_categories = torch.as_tensor(catalog.categories, device=dev)
+    n_categories = int(catalog.categories.max()) + 1
+    by_category = [torch.where(item_categories == c)[0] for c in range(n_categories)]
 
     groups = [
         {"params": model.encoder.parameters(), "lr": cfg.encoder_lr},
@@ -210,7 +244,6 @@ def run() -> None:
     rng = np.random.default_rng(SEED)
     best, best_epoch = -1.0, -1
     tau = cfg.temperature
-    query_tokens = Pretokenized(tokenizer, texts, cfg.max_length, dev)
     item_tokens = Pretokenized(tokenizer, catalog.texts, cfg.item_max_length, dev)
     log.info(
         f"reading teacher outputs: {num(len(texts))} queries "
@@ -220,15 +253,23 @@ def run() -> None:
     )
     log.info(
         f"training: {cfg.epochs} epochs x {num(steps_per_epoch)} steps, batch {cfg.batch_size}, "
-        f"encoder lr {cfg.encoder_lr}, head lr {cfg.head_lr}; items per step: teacher top "
-        f"{cfg.teacher_topk} per query + {cfg.random_items} random + positives, "
-        "at most 1120 unique items"
+        f"encoder lr {cfg.encoder_lr}, head lr {cfg.head_lr}; items per step: per query and "
+        f"category the teacher's top {cfg.teacher_topk}, plus positives and "
+        f"{cfg.random_items} random; KL weight {cfg.kl_weight}; typing noise on "
+        f"{cfg.typo_share:.0%} of train rows"
     )
-    log.info("one epoch = one pass over train + distill rows; validation uses val rows only")
+    log.info(
+        "one epoch = one pass over train + distill rows; validation uses val rows only; "
+        "the best epoch has the highest val fidelity (overlap with the teacher's top 10 per "
+        "category)"
+    )
     start_all = time.perf_counter()
 
     for epoch in range(cfg.epochs):
         start = time.perf_counter()
+        query_tokens = Pretokenized(
+            tokenizer, noisy_texts(texts, train, cfg.typo_share, epoch), cfg.max_length, dev
+        )
         model.train()
         order = rng.permutation(train)
         bar = progress(range(steps_per_epoch), desc=f"epoch {epoch + 1}/{cfg.epochs}", unit="step")
@@ -237,19 +278,26 @@ def run() -> None:
             b = torch.as_tensor(
                 order[step * cfg.batch_size : (step + 1) * cfg.batch_size], device=dev
             )
-            top = (tq[b] @ ti.T).topk(cfg.teacher_topk, dim=1).indices
             p = pos[b]
-            cand = item_candidates(top, p, n_items, cfg)
+            cand, picked = item_candidates(tq[b] @ ti.T, p, by_category, cfg)
             queries = query_tokens.rows(b)
             with torch.autocast(dev, dtype=torch.bfloat16):
                 q_emb, palette, light, face, scent = model(**queries)
                 i_emb = embed_items(model, item_tokens, cand)
             s = q_emb.float() @ i_emb.float().T / tau
             teacher_sims = tq[b] @ ti[cand].T / tau
-            loss_kl = cfg.kl_weight * kl_logits(s, teacher_sims, 1.0)
+            loss_kl = cfg.kl_weight * category_kl(
+                s, teacher_sims, item_categories[cand], n_categories
+            )
             has = p >= 0
+            target = torch.searchsorted(cand, p[has])
+            # The teacher's own picks for a query often fit it too, so they are not negatives
+            # for that query's positive.
+            false_negatives = picked[has]
+            false_negatives[torch.arange(len(target), device=dev), target] = False
             loss_nce = (
-                cfg.infonce_weight * F.cross_entropy(s[has], torch.searchsorted(cand, p[has]))
+                cfg.infonce_weight
+                * F.cross_entropy(s[has].masked_fill(false_negatives, float("-inf")), target)
                 if has.any()
                 else s.new_zeros(())
             )
@@ -277,18 +325,21 @@ def run() -> None:
                 )
 
         item_emb = encode_texts(model, tokenizer, catalog.texts, cfg.item_max_length)
-        val_pos = val[t["pos"].numpy()[val] >= 0]
-        q = encode_texts(model, tokenizer, [texts[i] for i in val_pos], cfg.max_length)
-        recall = recall_at_k(q, t["pos"].numpy()[val_pos], item_emb, catalog.categories)
-        teacher_recall = recall_at_k(
-            t["query_emb"].float().numpy()[val_pos],
-            t["pos"].numpy()[val_pos],
-            t["item_emb"].float().numpy(),
-            catalog.categories,
+        q = encode_texts(model, tokenizer, [texts[i] for i in val], cfg.max_length)
+        teacher_q = t["query_emb"].float().numpy()
+        teacher_items = t["item_emb"].float().numpy()
+        fidelity = float(
+            fidelity_at_k(q, item_emb, teacher_q[val], teacher_items, catalog.categories).mean()
         )
-        improved = recall > best
+        has_pos = t["pos"].numpy()[val] >= 0
+        val_pos = t["pos"].numpy()[val][has_pos]
+        recall = recall_at_k(q[has_pos], val_pos, item_emb, catalog.categories)
+        teacher_recall = recall_at_k(
+            teacher_q[val][has_pos], val_pos, teacher_items, catalog.categories
+        )
+        improved = fidelity > best
         if improved:
-            best, best_epoch = recall, epoch + 1
+            best, best_epoch = fidelity, epoch + 1
             save_student(
                 model,
                 tokenizer,
@@ -300,18 +351,19 @@ def run() -> None:
                     "item_ids": [it["id"] for it in catalog.items],
                     "cfg": dataclasses.asdict(cfg),
                     "val_recall@10": recall,
+                    "val_fidelity@10": fidelity,
                 },
             )
         log.info(
             f"epoch {epoch + 1}/{cfg.epochs} ({elapsed(start)}): train loss "
-            f"{running / steps_per_epoch:.4f}; val recall@10 {recall:.3f} (teacher "
-            f"{teacher_recall:.3f}); best {best:.3f} (epoch {best_epoch})"
-            + (", saved" if improved else "")
+            f"{running / steps_per_epoch:.4f}; val fidelity@10 {fidelity:.3f}; val recall@10 "
+            f"{recall:.3f} (teacher {teacher_recall:.3f}); best fidelity {best:.3f} "
+            f"(epoch {best_epoch})" + (", saved" if improved else "")
         )
         if epoch + 1 - best_epoch >= cfg.patience:
-            log.info("early stop: no recall improvement for %d epochs", cfg.patience)
+            log.info("early stop: no fidelity improvement for %d epochs", cfg.patience)
             break
     log.info(
-        f"done in {elapsed(start_all)}: best val recall@10 {best:.3f} at epoch {best_epoch} -> "
+        f"done in {elapsed(start_all)}: best val fidelity@10 {best:.3f} at epoch {best_epoch} -> "
         f"{STUDENT_DIR.relative_to(ML_ROOT).as_posix()}"
     )

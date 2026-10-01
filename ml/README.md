@@ -3,24 +3,26 @@
 This folder builds everything the app loads from the CDN: the catalog of about 16,000 works, their
 images, and the small model that runs in the browser. It runs on one local NVIDIA GPU.
 
-The pipeline has four commands. Run them from `ml/`, in this order:
+The pipeline has five commands. Run them from `ml/`, in this order:
 
 ```sh
 uv sync
-uv run download   # fetch the sources, choose the catalog, find images and links
+uv run download   # fetch the sources, choose the catalog, find images, links, and song facts
 uv run label      # a local LLM describes every work and writes training feelings
+uv run refine     # GPT-6.1 Sol grades every description; failed works are replaced
 uv run train      # train the teacher, distill the student, export, evaluate, install
 uv run publish    # upload the installed bundle to R2
 ```
 
-Add `--help` to any command for its details. Add `--plan` to see what it would do without doing it.
+Add `--help` to any command for its details. Add `--plan` to see what it would do without doing it
+(all commands except `refine`).
 
 ## What you need
 
 - An NVIDIA GPU with 32 GB of memory. The defaults suit an RTX 5090.
 - About 60 GB of free disk, [uv](https://docs.astral.sh/uv/), and [Bun](https://bun.sh) (the export
   step runs the app's TypeScript search code).
-- Four free API keys in `ml/.env`. Copy [.env.example](.env.example) to `.env` and follow its
+- Four free API keys and an OpenAI key in `ml/.env`. Copy [.env.example](.env.example) to `.env` and follow its
   comments. Git ignores `.env`. A variable already set in your shell wins over the file.
 
 | Variable                       | Where to get it                 | What it is for                        |
@@ -30,6 +32,7 @@ Add `--help` to any command for its details. Add `--plan` to see what it would d
 | `LISTENBRAINZ_TOKEN`           | listenbrainz.org/settings       | songs: the top recordings per artist  |
 | `LASTFM_API_KEY`               | last.fm/api/account/create      | songs: older artists and mood tags    |
 | `SMITHSONIAN_API_KEY`          | api.data.gov/signup             | optional: Smithsonian CC0 art         |
+| `OPENAI_API_KEY`               | platform.openai.com/api-keys    | `refine`: the description grader      |
 
 NASA needs no key. Without a Smithsonian key, the Met, Chicago, and Cleveland fill its 500 slots
 in a 60/25/15 split. Set the optional key to include Smithsonian works on the next download.
@@ -55,7 +58,7 @@ for a browser (15 GB), so the student learns to copy the teacher's rankings in 2
 
 ## download
 
-`download` runs three steps.
+`download` runs four steps.
 
 1. **fetch** downloads the fixed source files in `sources.toml` (the Met collection and a palette
    data set) and checks each checksum. PoetryDB is an API, so fetch reads it poem by poem.
@@ -68,6 +71,13 @@ for a browser (15 GB), so the student learns to copy the teacher's rankings in 2
 3. **resolve** finds an image and links for each work. Posters come from TMDB, covers from
    Hardcover or Open Library, album art and previews from Deezer, and museum images from Wikimedia
    Commons or the museum. Each image becomes an 800 px WebP file.
+4. **facts** finds two facts for each song: the song's Wikipedia article (the intro and its
+   lyrics, composition, background, and meaning sections, at most 1,200 characters) and its
+   lyrics from LRCLIB. The article must be about this song by this artist, not an album, a
+   disambiguation page, or the original of a cover. Lyrics count only when LRCLIB's track length
+   is within 8 seconds of the Deezer track; otherwise facts looks for a version that matches. The
+   lyrics stay on this machine in `curated/facts.jsonl`. Only a one-sentence theme that the labeler
+   writes from them goes into a description, and no lyrics go into the bundle.
 
 ### Song breadth and scene balance
 
@@ -89,7 +99,7 @@ When titles share a slug, each record gets its recording ID as a suffix. This ke
 works separate and prevents a later selection from reusing another work's saved media.
 
 Within each era, selection reserves 14 candidates per discovery group for a floor of 10 songs
-(the song candidate factor is 1.4). If the era is too small, the reserve shrinks to its even
+(set by the song candidate factor). If the era is too small, the reserve shrinks to its even
 share. Each reserve uses listener rank. The rest use listener rank with the existing year cap.
 Resolve keeps this selection order, including when it reuses saved images and repaired facts.
 An unavailable scene releases its slots to the rest. Failed media can reduce a scene's final
@@ -98,7 +108,8 @@ count; the extra candidates provide replacements. There is no artist boost or pe
 The song eras separate the 2000s and 2010s. Selection logs each era's quota, pool size, candidate
 count, last candidate's listener count, and minimum including the scene reserves.
 Scene reserves can have fewer listeners than the main cutoff.
-The candidate factors stay at 1.05 for films, 1.1 for books, 1.4 for songs, and 1.25 for art.
+The candidate factors are 1.3 for films, 1.35 for books, 1.8 for songs, and 1.6 for art. The spare
+candidates also refill the works that `refine` drops.
 
 See [the expansion measurements](catalog-expansion.md) for the quota, scene-share, cutoff,
 image-download, size, and time tables from this change.
@@ -131,30 +142,70 @@ resolved works and reuses cached API answers.
 ## label
 
 `label` runs Qwen3.5-9B on the GPU. Constrained decoding (xgrammar) makes every answer valid JSON
-for its schema, so the model can't return a broken answer. It runs five jobs:
+for its schema, so the model can't return a broken answer. It runs six jobs:
 
 | Job     | What the LLM writes                                                                     |
 | ------- | --------------------------------------------------------------------------------------- |
-| items   | an emotional-core vibe, a mood description, and three feelings in different registers |
+| themes  | one sentence about what a song is about and how it feels, from its checked lyrics      |
+| items   | the work's main emotion as a vibe, a description, and three feelings a person might type |
 | moods   | about 6,000 invented feelings, with scene, first-person, and heartbreak hints |
 | pat     | a feeling for each named palette in the PAT data set                                    |
 | labels  | five colors, a light, a typeface, and a scent for about 30,000 feelings                 |
 | distill | up to 40,000 feelings across 30 styles, with no labels |
 
+The items prompt is neutral on purpose. Blind audits by Claude showed that a word in the prompt
+shows up in the descriptions: "tension" made works darker, and "irony" put irony into most lyric
+themes. The prompt asks for the emotion most people feel from the work, says to keep light works
+light, and forbids invented lyrics, sounds, colors, figures, and events. For songs, the prompt also
+gets the Wikipedia text and the lyric theme from `facts`.
+
 The items job asks for at most 10 words in a vibe. The grammar allows up to 12 so the model can
 finish the thought. Words use ASCII letters, digits, apostrophes, and hyphens, with at most 14
 characters. The parser rejects a vibe that ends with a function word or comma. Descriptions and
-example feelings use the same word rule, with ordinary punctuation. The examples include a scene,
-a casual first-person thought, and a figurative or slangy line.
+example feelings use the same word rule, with ordinary punctuation. Each example feeling has 6 to
+30 words.
 
 Distill styles include idioms, sarcasm, internet slang, heartbreak, envy, spite, shame, dark humor,
-second-person lines, mixed feelings, and one-to-three-word moods. Training keeps these texts and
-adds a version with a swapped, dropped, or doubled letter for about 10% of them. Fixed seeds keep
-these additions stable. Duplicate texts and eval feelings are excluded from distillation.
+second-person lines, mixed feelings, and one-to-three-word moods. Another 200 requests each name
+five idioms or slang terms from a fixed list, so the texts do not repeat the same few. Duplicate
+texts and eval feelings are excluded from distillation.
 
 An answer that fails its checks gets one retry. Each job keeps its answers in `data/llm/<job>.jsonl`.
 The key of each answer is a hash of its exact prompt. So a rerun only asks for what is new or
 changed, and a change to a prompt or the model redoes only the answers it affects.
+
+## refine
+
+`refine` checks every description and replaces the works that the labeler cannot describe well.
+It needs `OPENAI_API_KEY` and the download keys, because a refill downloads new works.
+
+One round:
+
+1. Run facts, themes, and items for works that do not have a description yet.
+2. GPT-6.1 Sol grades each description that `curated/ledger.jsonl` does not have yet, one at a
+   time, with the source facts and, for art, the image. It gives the work's real emotion in a few
+   words and grades the description: factual 0-2, emotion 0-3, specific 0-2, and good queries
+   0-3.
+3. A description with an emotion grade below 2 fails. Its work goes to `resolve_dropped.jsonl` with
+   the reason `label_quality`, so no later download tries it again.
+4. Resolve fills each free place with the next candidate of the same group.
+
+One run of refine does at most three rounds: the first grading and two refills. In the last round,
+failed works are dropped without a refill, and the next download or refine fills their places. A
+run stops early when no description fails. A run first applies any failed grades that an
+interrupted run did not apply, and fills any free places.
+
+`curated/ledger.jsonl` keeps one line per graded description: the round, the grades, the grader's
+note on the real emotion, and the verdict. A rerun grades a description again only when its grader
+request changes: the description, the facts, the image, the model, or the rubric.
+`data/cache/grades.jsonl` keeps each answer, so a repeated request costs nothing. A changed
+`min_emotion` applies to the grades already in the ledger.
+
+The grader came from a comparison on 830 descriptions that Claude had graded. Each candidate graded
+the same labels, one at a time. GPT-6.1 Sol agreed with itself on 93% of the right-or-wrong calls
+and with the Claude graders' consensus on 91%. GPT-6 Astra did no better at five times the price.
+Jev, a second local labeler, and a re-run of the labeler itself caught fewer than half of the bad
+descriptions.
 
 ## train
 
@@ -165,9 +216,13 @@ changed, and a change to a prompt or the model redoes only the answers it affect
    batch), and to predict the palette, light, typeface, and scent. 6 epochs at a learning rate of
    3e-4, with warmup and a cosine decay. The run keeps the epoch with the best validation score.
 2. **train-student.** MiniLM learns from the teacher. For each feeling it copies the teacher's
-   ranking of works, its palette, and its label choices. The distillation feelings from `label`
+   ranking of works inside each category (the teacher's top 4 per category, with a strong KL
+   weight of 16), its palette, and its label choices. The distillation feelings from `label`
    have no answers of their own. They only teach the student to rank the way the teacher does, on
-   a wider range of writing.
+   a wider range of writing. In each epoch, 30% of the training feelings get typing noise (casual
+   spellings such as "im" and "wanna", and one or two letter slips); the teacher's target stays
+   the one for the clean text. The run keeps the epoch whose rankings agree best with the
+   teacher's top 10 per category on validation feelings (fidelity), for up to 16 epochs.
 3. **export** writes one ONNX file with the encoder and all heads, then quantizes it to int8 (8-bit
    weights instead of 32-bit). It tries a few quantization recipes and keeps the one with the best
    validation score under 24 MiB. It also writes the item vectors as 16-bit floats and the name
@@ -211,9 +266,10 @@ common choice on eval feelings.
 
 `eval_feelings.jsonl` holds one JSON object per line, like
 `{ "text": "a snowy december and i just made warm hot chocolate", "set": "scene" }`.
-It has 290 scene feelings, 80 casual first-person feelings, 50 idioms and metaphors, 30 sarcasm
-and irony lines, 40 slang and typo lines, 20 mixed feelings, and 30 heavy feelings such as grief,
-envy, and shame. These feelings never go into training. If you add some, run `uv run label` again
+It has 290 scene feelings, 80 casual first-person feelings, and 70 each of idioms and metaphors,
+sarcasm and irony lines, slang and typo lines, mixed feelings, and heavy feelings such as grief,
+envy, and shame. The report also gives the student's fidelity for each set: the share of the
+teacher's top 10 per category that the student also ranks in its top 10. These feelings never go into training. If you add some, run `uv run label` again
 to label the new lines, then `uv run train` to update the judgments and report.
 
 ## publish

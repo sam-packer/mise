@@ -9,8 +9,14 @@
 		"binding": "ASSETS",
 		"directory": ".svelte-kit/cloudflare"
 	},
-	// Short links: code to feeling. Create the namespace with `bunx wrangler kv namespace create moods`.
-	"kv_namespaces": [{ "binding": "MOODS", "id": "73941fa8ddb9434f8ceddc6edbf3bc78" }],
+	// Short links, one namespace each, created with `bunx wrangler kv namespace create <name>`.
+	// MOODS: code to feeling text, and nothing else, so a listing gives every feeling.
+	// PATHS: code to { text, trail, bundle }. PALETTES: "<bundle>:<feeling code>" to five OKLab colors.
+	"kv_namespaces": [
+		{ "binding": "MOODS", "id": "73941fa8ddb9434f8ceddc6edbf3bc78" },
+		{ "binding": "PATHS", "id": "f677fcacce314c94a400ac92c9f2f05a" },
+		{ "binding": "PALETTES", "id": "061106b300c34a40b418825eaa8af898" }
+	],
 	"workers_dev": true,
 	"preview_urls": true,
 	"observability": {

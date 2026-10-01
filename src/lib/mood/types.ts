@@ -90,7 +90,7 @@ export type Mood = {
 	/** Inference time in milliseconds. */
 	ms: number;
 
-	/** The works closest to the feeling, in category order. */
+	/** The works closest to the feeling, with the categories mixed. */
 	picks: Item[];
 	/**
 	 * The catalog item named in the query, or null. Its vector guides the picks, which exclude the item itself.
@@ -101,7 +101,7 @@ export type Mood = {
 /** One work as a place of its own: the mood of its vibe line, and the works closest to it. */
 export type World = Pick<Mood, 'palette' | 'light' | 'typeface' | 'scent'> & {
 	item: Item;
-	/** Nearest works in category order. They exclude the work, its creator, and the path so far. */
+	/** Nearest works, with the categories mixed. They exclude the work, its creator, and the path so far. */
 	neighbors: Item[];
 };
 

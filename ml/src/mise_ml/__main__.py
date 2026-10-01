@@ -13,6 +13,7 @@ from mise_ml.config import ML_ROOT
 COMMANDS = {
     "download": "Fetch sources, curate the catalog, and resolve media and links.",
     "label": "Write profiles and labels with the local LLM.",
+    "refine": "Grade the profiles with GPT-6.1 Sol, drop failed works, and refill them.",
     "train": "Train, export, evaluate, and install only when the ship gate passes.",
     "publish": "Upload the installed public bundle to R2.",
 }
@@ -31,7 +32,10 @@ def preflight(command: str) -> None:
         problems.extend(keys.missing(["tmdb", "hardcover", "listenbrainz", "lastfm"]))
     if command == "publish":
         problems.extend(f"missing {key}; set it in ml/.env" for key in keys.missing_r2())
-    if command in ("label", "train"):
+    if command == "refine":
+        # Refills download new works, and the grader is a cloud model.
+        problems.extend(keys.missing(["tmdb", "hardcover", "listenbrainz", "lastfm", "openai"]))
+    if command in ("label", "train", "refine"):
         import torch
 
         if not torch.cuda.is_available():
@@ -104,11 +108,12 @@ def command(name: str) -> None:
     import sys
 
     parser = argparse.ArgumentParser(prog=name, description=COMMANDS[name])
-    parser.add_argument(
-        "--plan",
-        action="store_true",
-        help="Show what would run and why, without writes or model loads.",
-    )
+    if name != "refine":
+        parser.add_argument(
+            "--plan",
+            action="store_true",
+            help="Show what would run and why, without writes or model loads.",
+        )
     if name == "label":
         parser.add_argument(
             "--prune",
@@ -117,7 +122,7 @@ def command(name: str) -> None:
         )
     args = parser.parse_args()
     load_dotenv(ML_ROOT / ".env", override=False)
-    if args.plan or getattr(args, "prune", False):
+    if getattr(args, "plan", False) or getattr(args, "prune", False):
         sys.dont_write_bytecode = True
         from mise_ml.plan import show
 
@@ -132,11 +137,16 @@ def command(name: str) -> None:
     with logs.session(name):
         try:
             preflight(name)
-            if name == "label":
+            if name in ("label", "refine"):
                 from mise_ml.config import SEED
                 from mise_ml.util import make_deterministic
 
                 make_deterministic(SEED, warn_only=True)
+            if name == "refine":
+                from mise_ml.refine import loop
+                from mise_ml.steps import STEPS
+
+                loop(lambda step_name: run.step(STEPS[step_name]))
             for step in command_steps(name):
                 if step.name == "install":
                     report = json.loads(EVAL_REPORT.read_text(encoding="utf-8"))
@@ -155,6 +165,10 @@ def download() -> None:
 
 def label() -> None:
     command("label")
+
+
+def refine() -> None:
+    command("refine")
 
 
 def train() -> None:

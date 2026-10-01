@@ -9,7 +9,7 @@
 	import { afterNavigate, goto, pushState, replaceState } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { BUNDLE_URL } from '$lib/bundle';
-	import { feelingCode, normalize, pathCode, shared } from '$lib/code';
+	import { BUNDLE, feelingCode, normalize, pathCode, shared } from '$lib/code';
 	import type { Item, Mood, OKLab, Palette, World } from '$lib/mood/types';
 	import { infer, ready, start, world as requestWorld } from '$lib/mood/client';
 	import { lightStrength, neutralTokens, paletteFavicon, paletteToTokens } from '$lib/color/oklab';
@@ -135,7 +135,7 @@
 	const glyphs = (w: World) => w.item.title + (w.item.text ?? '');
 	const message = (cause: unknown) =>
 		cause instanceof Error ? cause.message : 'the moods are out — try again soon';
-	/** The worker's message for an item id that the catalog no longer has, for example after a retrain. */
+	/** The worker's message for an item id that the catalog does not have, for example in a local bundle. */
 	const MISSING = 'that work is not in the catalog';
 	/** For a song, the album carries the feeling better than the single track. */
 	const work = (item: Item) => (item.category === 'song' ? (item.album ?? item.title) : item.title);
@@ -237,7 +237,7 @@
 		fetch(`/api/feeling/${code}/palette`, {
 			method: 'PUT',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ text: q, palette })
+			body: JSON.stringify({ text: q, palette, bundle: BUNDLE })
 		}).catch(() => {});
 	}
 
@@ -310,15 +310,15 @@
 	/** The share code of a path of this feeling. The empty path is the feeling itself. */
 	async function share(ids: string[]): Promise<string> {
 		const text = urlMood;
-		const code = ids.length ? await pathCode(text, ids) : await feelingCode(text);
+		const code = ids.length ? await pathCode(text, ids, BUNDLE) : await feelingCode(text);
 		if (!shared.has(code)) {
-			shared.set(code, { text, trail: ids });
+			shared.set(code, { text, trail: ids, bundle: BUNDLE });
 			// Store the path in the background, as submit does for a feeling. The feeling is stored.
 			if (ids.length)
 				fetch('/api/feeling', {
 					method: 'POST',
 					headers: { 'content-type': 'application/json' },
-					body: JSON.stringify({ text, trail: ids })
+					body: JSON.stringify({ text, trail: ids, bundle: BUNDLE })
 				}).catch(() => {});
 		}
 		return code;

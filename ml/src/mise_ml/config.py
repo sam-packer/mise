@@ -30,6 +30,13 @@ RESOLVE_DROPPED = CURATED / "resolve_dropped.jsonl"
 RESOLVE_META = CURATED / "resolve.meta.json"
 RESOLVE_VERSION = 3
 PROFILES = CURATED / "profiles.jsonl"
+# Song facts for the labeler: a Wikipedia song article and checked lyrics. Lyrics stay local;
+# only the theme sentence that the labeler writes from them reaches a profile.
+FACTS = CURATED / "facts.jsonl"
+THEMES = CURATED / "themes.jsonl"
+# One line per graded profile: the refine round, the grade, and kept or dropped.
+LEDGER = CURATED / "ledger.jsonl"
+GRADES = CACHE / "grades.jsonl"
 MOODS = CURATED / "moods.jsonl"
 DISTILL = CURATED / "distill.jsonl"
 PAT_SENTENCES = CURATED / "pat_sentences.jsonl"
@@ -68,9 +75,10 @@ class CurateConfig:
     song_scene_floor: int = 10
     song_tags: int = 10
     # Candidates per kept item. Resolve fills each group's quota in rank order.
-    # Replace each drop with the next candidate.
+    # Replace each drop with the next candidate. The spare candidates also refill the works
+    # that refine drops for a failed profile.
     candidate_factor: dict[str, float] = field(
-        default_factory=lambda: {"film": 1.05, "book": 1.1, "song": 1.4, "art": 1.25}
+        default_factory=lambda: {"film": 1.3, "book": 1.35, "song": 1.8, "art": 1.6}
     )
     # Spread within an era: a year gets at most this many times its even share at first.
     # Free slots then go to the best remaining candidates of the era.
@@ -123,6 +131,9 @@ class ResolveConfig:
             "commons.wikimedia.org": 0.25,
             # Wikimedia asks for serial API requests; there is no fixed limit.
             "en.wikisource.org": 0.25,
+            "en.wikipedia.org": 0.25,
+            # LRCLIB publishes no limit; 1 request/s.
+            "lrclib.net": 1.0,
             "api.artic.edu": 1.0,
             "openaccess-api.clevelandart.org": 0.5,
             "openaccess-cdn.clevelandart.org": 0.1,
@@ -169,6 +180,24 @@ class ProfileConfig:
     judge_pool_per_system: int = 20
     distill_feelings: int = 40000
     distill_per_request: int = 20
+    # Extra requests that each name a few idioms or slang terms, so the LLM does not repeat
+    # the same handful. Each request asks for distill_per_request feelings.
+    distill_idiom_requests: int = 100
+    distill_slang_requests: int = 100
+    distill_terms_per_request: int = 5
+
+
+@dataclass(frozen=True)
+class RefineConfig:
+    # The grader. In tests against Claude, Opus, and Astra it was the most consistent grader.
+    model: str = "gpt-6.1-sol"
+    reasoning_effort: str = "medium"
+    workers: int = 8
+    # A profile fails when its emotion grade (0-3) is below this; refine drops the work.
+    min_emotion: int = 2
+    # The first download plus at most two refills. The last round drops failures without a
+    # refill.
+    rounds: int = 3
 
 
 @dataclass(frozen=True)
@@ -201,17 +230,26 @@ class StudentConfig:
     item_max_length: int = 128
     dims: int = 384
     head_hidden: int = 256
-    epochs: int = 12
-    patience: int = 2
+    epochs: int = 16
+    # Epochs without a better val fidelity before the run stops.
+    patience: int = 3
     batch_size: int = 64
     encoder_lr: float = 3e-5
     head_lr: float = 1e-3
     weight_decay: float = 0.01
     warmup_ratio: float = 0.06
     temperature: float = 0.05
-    teacher_topk: int = 8
+    # The teacher's top items per query and category in each step. The KL ranks each category
+    # apart. A step holds at most batch_size x (5 x teacher_topk + 1) + random_items items.
+    # Near misses from the teacher's ranks 10-60 lowered val fidelity and recall in tests.
+    teacher_topk: int = 4
     random_items: int = 128
-    kl_weight: float = 1.0
+    # Share of train rows that the student reads with typing noise in each epoch.
+    # The teacher target stays the one for the clean text.
+    typo_share: float = 0.3
+    # A strong KL keeps the student close to the teacher's ranking: weights 1, 4, 16 gave val
+    # fidelity 0.22, 0.25, 0.26 in 2-epoch tests.
+    kl_weight: float = 16.0
     infonce_weight: float = 1.0
     palette_weight: float = 3.0
     lightness_weight: float = 0.5

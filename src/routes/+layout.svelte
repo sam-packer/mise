@@ -2,6 +2,7 @@
 	// Apply shared styles to every route, and give every page its link preview tags.
 	import './layout.css';
 	import { page } from '$app/state';
+	import { BUNDLE } from '$lib/code';
 
 	let { children } = $props();
 
@@ -19,7 +20,8 @@
 	const code = $derived(
 		feeling && typeof page.data.feeling === 'string' ? page.data.feeling : undefined
 	);
-	const image = $derived(code ? `${SITE}/og/${code}.png` : `${SITE}/brand/og.png`);
+	// The bundle in the query gives each model's colors their own image URL.
+	const image = $derived(code ? `${SITE}/og/${code}.png?b=${BUNDLE}` : `${SITE}/brand/og.png`);
 	const alt = $derived(
 		code ? `${title} on mise: every feeling has a world.` : 'mise: every feeling has a world.'
 	);

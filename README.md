@@ -38,8 +38,9 @@ You can describe that feeling in a sentence, and mise gives you a place to start
 
 The page also covers the other states. The first visit shows a breathing background while the
 model downloads. A failed load or a failed search shows a short note under the text box. A shared
-link that no longer exists says "that feeling has faded". A song without a preview hides the play
-button.
+link that no longer exists says "that feeling has faded". A shared path from an older model opens
+the feeling itself, with the note "this path has changed since it was shared". A song without a
+preview hides the play button.
 
 ## Tech stack
 
@@ -73,8 +74,10 @@ At run time the app calls three services:
   them. When you open a song, the route `/api/preview/deezer/<id>` asks Deezer for a fresh link and
   redirects the audio player to it.
 - Google Fonts. Each mood picks a typeface. The page downloads only the letters it needs.
-- Cloudflare Workers KV. It stores the sentence behind each share link, the item ids of a shared
-  path, and the palette of the mood.
+- Cloudflare Workers KV, in three namespaces. `MOODS` holds only the sentence behind each share
+  link, so a list of its keys is a list of every feeling. `PATHS` holds the item ids of each shared
+  path. `PALETTES` holds the palette of each mood. A path and a palette also store the bundle that
+  made them, because a new model or catalog changes both. A sentence does not depend on the model.
 
 Each share link also has its own preview image for chat apps and social sites. The route
 `/og/<code>.png` draws a 1200 by 630 PNG of the feeling in quotes, in the five colors of its mood,
@@ -106,7 +109,7 @@ bun run dev
 
 Open http://localhost:5173. The local site loads the published model from `cdn.mise.art`, so you
 don't need to train anything. Share links work locally too: Wrangler gives the dev server an
-empty local copy of the KV store.
+empty local copy of each KV namespace.
 
 To work offline with a small hand-made sample instead of the real catalog:
 

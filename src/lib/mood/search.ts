@@ -49,6 +49,28 @@ function blendPalettes(palettes: Palette[], weights: number[]): Palette {
 	}) as Palette;
 }
 
+/**
+ * Mix the categories on a wall. The seed fixes the order, so a feeling or a world shows the same wall
+ * each time it opens.
+ */
+function shuffle<T>(list: T[], seed: string): T[] {
+	// FNV-1a hash of the seed, then mulberry32.
+	let h = 0x811c9dc5;
+	for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 0x01000193);
+	const random = () => {
+		h = (h + 0x6d2b79f5) | 0;
+		let t = Math.imul(h ^ (h >>> 15), 1 | h);
+		t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+	};
+	const out = [...list];
+	for (let i = out.length - 1; i > 0; i--) {
+		const j = Math.floor(random() * (i + 1));
+		[out[i], out[j]] = [out[j], out[i]];
+	}
+	return out;
+}
+
 function l2normalize(v: Float32Array): Float32Array {
 	let sum = 0;
 	for (let i = 0; i < v.length; i++) sum += v[i] * v[i];
@@ -113,14 +135,17 @@ export function createSearch(
 		return found;
 	}
 
-	function pick(q: Float32Array, anchor: Item | null): Item[] {
+	function pick(query: string, q: Float32Array, anchor: Item | null): Item[] {
 		const near = nearest(
 			q,
 			() => PICKS_EACH,
 			(i) =>
 				anchor !== null && (items[i].creator === anchor.creator || items[i].title === anchor.title)
 		);
-		return CATEGORIES.flatMap((c) => near[c]);
+		return shuffle(
+			CATEGORIES.flatMap((c) => near[c]),
+			query
+		);
 	}
 
 	const anchorHeads = createAnchorHeads(anchors, anchorVectors, dims);
@@ -133,7 +158,7 @@ export function createSearch(
 				? blendAnchor(embedding, vectors.subarray(row * dims, (row + 1) * dims))
 				: embedding;
 			return {
-				picks: pick(q, anchor),
+				picks: pick(query, q, anchor),
 				anchor,
 				...(info.heads.kind === 'anchors' ? { heads: anchorHeads(q) } : {})
 			};
@@ -160,7 +185,13 @@ export function createSearch(
 					items[i].creator === item.creator ||
 					items[i].title === item.title
 			);
-			return { item, neighbors: CATEGORIES.flatMap((c) => near[c]) };
+			return {
+				item,
+				neighbors: shuffle(
+					CATEGORIES.flatMap((c) => near[c]),
+					id
+				)
+			};
 		}
 	};
 }

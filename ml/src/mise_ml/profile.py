@@ -9,6 +9,7 @@ from typing import Any
 from mise_ml.color import parse_hex
 from mise_ml.config import (
     DISTILL,
+    FACTS,
     IMG,
     MOODS,
     PAT,
@@ -16,6 +17,7 @@ from mise_ml.config import (
     PROFILES,
     RESOLVED,
     SEED,
+    THEMES,
     ProfileConfig,
 )
 from mise_ml.data import MAX_FEELING, distill_rejection, load_eval_texts, normalize_feeling
@@ -40,34 +42,27 @@ lower case and casual. Use first person, a scene, or figurative everyday languag
 Never write a bare list of mood words such as "calm, cozy, nostalgic". Never name a title, \
 an artist, or a genre."""
 
-ITEM_SYSTEM = f"""You write mood profiles for mise, a mood app. A user types a feeling. \
-The app answers with a film, a book, a song, a poem, and an artwork that fit it.
+# Tested against the old prompt in blind audits. Keep it neutral: a word in the prompt shows up
+# in the profiles ("tension", "quiet", "irony", and "mix" all did).
+ITEM_SYSTEM = """You write short mood profiles of works for mise. In mise, a person types how \
+they feel, and the app answers with an artwork, a film, a book, a poem, and a song.
 
-{FEELING_RULES}
+You get the facts about one work. Describe the emotion that most people feel from this work.
 
-The work comes with facts and crowd tags: film genres and keywords, reader moods and \
-genres for books, listener tags for songs, subjects and styles for art. Use them as hints \
-for the mood. Crowd tags can be noisy; ignore a tag that does not fit the rest.
-Use your knowledge of the work, not the title alone. When facts are sparse, do not invent \
-lyrics, instruments, or plot events. Describe the feeling without claiming unsupported facts.
-Still images and soft sounds do not always mean comfort. Use the work's context: satire \
-can feel mocking, a love song can feel frantic, and a peaceful setting can hold dread.
+Accuracy comes first.
+- Use your own knowledge of the work together with the facts.
+- If the work is joyful, funny, calm, or warm, say so. Do not make it darker or more dramatic \
+than it is.
+- If you do not know the work and the facts do not show its emotion, write only what the facts \
+support. Do not invent lyrics, sounds, colors, figures, or events.
 
-For the work you get, write:
-- vibe: one complete line about the emotional core, lower case, at most 10 words, no title, \
-no names, no final punctuation. Say what it feels like to be inside this work in plain words. \
-Use whole words separated by spaces, each at most 14 characters. Use only ASCII letters, \
-digits, apostrophes, and hyphens within words. Finish the thought. Name the specific \
-emotional tension, not just scenery. Avoid stock phrases about rooms, light, and weather.
-- description: two or three plain sentences about the emotional core of the work, what it \
-feels like to be inside it, and its pace. Use its setting, colors, and light only when they \
-explain the feeling. Do not retell the plot. Use ASCII English text. Choose short, complete \
-words; never shorten or join words to fit a limit.
-- q1: a plain scene a person might type when this work fits their feeling.
-- q2: a casual first-person thought using i, me, or my. Sound like a text to a friend.
-- q3: a figurative or slangy line. Use an idiom, metaphor, or slang for its emotional meaning.
-All three feelings must follow the feeling rules and use ASCII English text. Match the \
-emotional core rather than repeating objects in the work. Use three different situations."""
+Write:
+- vibe: its main emotion in plain words, at most 10 words, lower case.
+- description: two or three plain sentences about the emotion of the work and why it has that \
+emotion. Use details from the work only when they carry the emotion.
+- q1, q2, q3: three different feelings that a real person could type into the app when this \
+work is a good answer. Write them the way people type: plain, first person or a simple \
+situation, 6 to 30 words. Each feeling must fit the work's main emotion."""
 
 MOODS_SYSTEM = f"""You write feelings that people type into mise, a mood app.
 
@@ -278,13 +273,38 @@ def item_prompt(r: Record) -> str:
         lines.append(f"{label}: {value}")
     if r.get("text"):
         lines.append(f"poem text:\n{r['text']}")
+    if r.get("wikipedia"):
+        lines.append(f"wikipedia: {r['wikipedia']}")
+    if r.get("lyrics_theme"):
+        lines.append(f"lyrics theme: {r['lyrics_theme']}")
     return "\n".join(lines)
+
+
+def item_records() -> dict[str, Record]:
+    """Resolved works by id, with the song facts that the labeler and the grader read."""
+    facts = {r["id"]: r for r in iter_jsonl(FACTS)} if FACTS.is_file() else {}
+    themes = {r["key"]: r["theme"] for r in iter_jsonl(THEMES)} if THEMES.is_file() else {}
+    out = {}
+    for r in iter_jsonl(RESOLVED):
+        extra = {}
+        if facts.get(r["id"], {}).get("wikipedia"):
+            extra["wikipedia"] = facts[r["id"]]["wikipedia"]
+        if r["id"] in themes:
+            extra["lyrics_theme"] = themes[r["id"]]
+        out[r["id"]] = {**r, **extra}
+    return out
 
 
 def item_fields(r: Record) -> dict[str, Any]:
     # Digest the rendered values: omitted fields and ignored descriptions stay omitted.
     fields = {"category": r["category"], "title": r["title"]}
-    fields.update({k: r[k] for k in ("creator", "album", "year", "text") if r.get(k)})
+    fields.update(
+        {
+            k: r[k]
+            for k in ("creator", "album", "year", "text", "wikipedia", "lyrics_theme")
+            if r.get(k)
+        }
+    )
     for key in SIGNAL_LABELS:
         value = r.get("signal", {}).get(key)
         if value in (None, [], ""):
@@ -384,11 +404,7 @@ ITEM_GENERATION_SCHEMA = obj(
         "vibe": {"type": "string", "pattern": f"^{WORD}( {WORD}){{0,11}}$"},
         "description": {"type": "string", "pattern": f"^{PROSE_WORD}( {PROSE_WORD}){{0,89}}$"},
         "q1": FEELING_TEXT,
-        # The parser requires a first-person q2, so the grammar starts it in the first person.
-        "q2": {
-            "type": "string",
-            "pattern": rf"^(?:[Ii]|[Mm]y|[Ii]'(?:m|ve|ll|d))( {PROSE_WORD}){{5,29}}$",
-        },
+        "q2": FEELING_TEXT,
         "q3": FEELING_TEXT,
     }
 )
@@ -414,8 +430,6 @@ def parse_item(keys: list[str], data: dict[str, Any]) -> list[Record]:
     if not data["description"].strip():
         raise ValueError("description is empty")
     queries = [normalized(data[q]) for q in ("q1", "q2", "q3")]
-    if not re.search(r"\b(?:i|me|my|mine|myself)\b", queries[1]):
-        raise ValueError("q2 must be a casual first-person thought using i, me, or my")
     for name, query in zip(("q1", "q2", "q3"), queries, strict=True):
         # Name the copied example: a general reason lets the retry copy it again.
         if query in PROMPT_EXAMPLES:
@@ -445,7 +459,7 @@ def parse_item(keys: list[str], data: dict[str, Any]) -> list[Record]:
 
 def items_job() -> JobSpec:
     cfg = ProfileConfig()
-    items = {r["id"]: r for r in iter_jsonl(RESOLVED)}
+    items = item_records()
 
     def fingerprint(k: str) -> str:
         image = item_image(items[k])
@@ -475,6 +489,41 @@ def items_job() -> JobSpec:
         parse_item,
         fingerprint,
         lambda k: item_fields(items[k]),
+    )
+
+
+# Neutral on purpose: "double meaning or irony" in an earlier wording put irony in 56 of 70
+# themes.
+THEME_SYSTEM = """Read the lyrics of one song. In one or two plain sentences, say what the \
+song is about and the feeling it carries. Do not quote the lyrics."""
+THEME_SCHEMA = obj({"theme": {"type": "string", "maxLength": 300}})
+
+
+def themes_job() -> JobSpec:
+    """One theme sentence per song with checked lyrics. The lyrics never leave this machine."""
+    cfg = ProfileConfig()
+    lyrics = (
+        {r["id"]: r["lyrics"] for r in iter_jsonl(FACTS) if r.get("lyrics")}
+        if FACTS.is_file()
+        else {}
+    )
+
+    def build(keys: list[str]) -> list[Unit]:
+        return [Unit([k], Request(THEME_SYSTEM, lyrics[k][:4000], THEME_SCHEMA, 120)) for k in keys]
+
+    def parse(keys: list[str], data: dict[str, Any]) -> list[Record]:
+        theme = " ".join(data["theme"].split())
+        if not theme:
+            raise ValueError("theme is empty")
+        return [{"key": keys[0], "theme": theme}]
+
+    return JobSpec(
+        Job("themes", THEMES, cfg),
+        list(lyrics),
+        build,
+        parse,
+        lambda k: sha(lyrics[k]),
+        lambda k: {"lyrics": sha(lyrics[k])},
     )
 
 
@@ -662,6 +711,273 @@ DISTILL_STYLES = (
     "a second-person accusation or comfort addressed to another person",
     "a mixed feeling with a contrast, such as sunny out and i can't get out of bed",
 )
+DISTILL_IDIOM_STYLE = (
+    "each feeling uses one of these idioms, in any tense or person, for its emotional meaning, "
+    "not a literal scene; use each idiom about equally: "
+)
+DISTILL_IDIOMS = (
+    "walking on eggshells",
+    "on cloud nine",
+    "down in the dumps",
+    "at the end of my rope",
+    "a weight off my shoulders",
+    "butterflies in my stomach",
+    "over the moon",
+    "under the weather",
+    "at my wits' end",
+    "a lump in my throat",
+    "on pins and needles",
+    "in a rut",
+    "out of my depth",
+    "the last straw",
+    "burning the candle at both ends",
+    "hit rock bottom",
+    "on top of the world",
+    "feeling blue",
+    "green with envy",
+    "a chip on my shoulder",
+    "a heavy heart",
+    "cold feet",
+    "a shot in the dark",
+    "coming out of my shell",
+    "the elephant in the room",
+    "running on fumes",
+    "bent out of shape",
+    "a fish out of water",
+    "treading water",
+    "keeping my head above water",
+    "pulling my hair out",
+    "tip of my tongue",
+    "wearing my heart on my sleeve",
+    "a bitter pill to swallow",
+    "cry over spilled milk",
+    "can't see the forest for the trees",
+    "the calm before the storm",
+    "a storm in a teacup",
+    "in the same boat",
+    "on the fence",
+    "sitting on a powder keg",
+    "skating on thin ice",
+    "a blessing in disguise",
+    "salt in the wound",
+    "throw in the towel",
+    "back to square one",
+    "at a crossroads",
+    "light at the end of the tunnel",
+    "every cloud has a silver lining",
+    "head in the clouds",
+    "down to earth",
+    "a breath of fresh air",
+    "walking on air",
+    "tickled pink",
+    "jumping for joy",
+    "happy as a clam",
+    "fit as a fiddle",
+    "like a kid in a candy store",
+    "on edge",
+    "at sixes and sevens",
+    "all over the place",
+    "falling apart at the seams",
+    "coming apart",
+    "keeping it together",
+    "biting my tongue",
+    "bottling it up",
+    "letting off steam",
+    "blowing off steam",
+    "flew off the handle",
+    "seeing red",
+    "hot under the collar",
+    "gets under my skin",
+    "drives me up the wall",
+    "fed up",
+    "sick and tired",
+    "had it up to here",
+    "wear thin",
+    "running out of steam",
+    "a second wind",
+    "a new lease on life",
+    "turn over a new leaf",
+    "a clean slate",
+    "water under the bridge",
+    "burned my bridges",
+    "bury the hatchet",
+    "cut ties",
+    "the cold shoulder",
+    "left out in the cold",
+    "a third wheel",
+    "odd one out",
+    "on the outside looking in",
+    "a shoulder to cry on",
+    "in good hands",
+    "a safe harbor",
+    "home is where the heart is",
+    "a far cry from home",
+    "a stranger in a strange land",
+    "the grass is always greener",
+    "a trip down memory lane",
+    "the good old days",
+    "a blast from the past",
+    "time flies",
+    "stuck in the past",
+    "living on borrowed time",
+    "in limbo",
+    "twiddling my thumbs",
+    "bored to tears",
+    "watching paint dry",
+    "wide awake",
+    "dead on my feet",
+    "a night owl",
+    "burning the midnight oil",
+    "on a roll",
+    "in the zone",
+    "firing on all cylinders",
+    "riding high",
+    "hanging by a thread",
+    "on thin ice",
+    "in hot water",
+    "between a rock and a hard place",
+    "the world on my shoulders",
+    "a monkey on my back",
+    "skeletons in the closet",
+    "egg on my face",
+    "wanted the ground to swallow me",
+    "red in the face",
+    "my heart sank",
+    "heart in my mouth",
+    "heart of gold",
+    "heartstrings",
+    "broke my heart",
+    "head over heels",
+    "swept off my feet",
+    "the one that got away",
+    "plenty of fish in the sea",
+    "a match made in heaven",
+    "love is blind",
+    "butter wouldn't melt",
+    "a wolf in sheep's clothing",
+    "crocodile tears",
+    "tongue in cheek",
+    "take it with a grain of salt",
+    "whistling in the dark",
+    "whistling past the graveyard",
+    "putting on a brave face",
+    "grin and bear it",
+    "keep a stiff upper lip",
+    "chin up",
+    "roll with the punches",
+    "go with the flow",
+)
+DISTILL_SLANG_STYLE = (
+    "casual internet messages; each feeling uses one of these slang terms naturally, with the "
+    "meaning a young person would give it; use each term about equally: "
+)
+DISTILL_SLANG = (
+    "ngl",
+    "lowkey",
+    "highkey",
+    "fr",
+    "no cap",
+    "deadass",
+    "rn",
+    "tbh",
+    "idk",
+    "imo",
+    "smh",
+    "istg",
+    "iykyk",
+    "afk",
+    "brb",
+    "irl",
+    "delulu",
+    "bestie",
+    "bestie vibes",
+    "vibe check",
+    "it's giving",
+    "main character energy",
+    "npc",
+    "touch grass",
+    "chronically online",
+    "rent free",
+    "living rent free",
+    "slay",
+    "ate",
+    "no crumbs",
+    "mid",
+    "bussin",
+    "sus",
+    "salty",
+    "pressed",
+    "shook",
+    "sending me",
+    "i'm dead",
+    "crying",
+    "screaming",
+    "bruh",
+    "oof",
+    "yikes",
+    "cringe",
+    "big mood",
+    "mood",
+    "same",
+    "it's the little things for me",
+    "the ick",
+    "situationship",
+    "ghosted",
+    "left on read",
+    "soft launch",
+    "hard launch",
+    "red flag",
+    "green flag",
+    "beige flag",
+    "rizz",
+    "unhinged",
+    "feral",
+    "gremlin mode",
+    "goblin mode",
+    "rotting",
+    "bed rot",
+    "brain rot",
+    "doomscrolling",
+    "burnt out",
+    "cooked",
+    "we're so back",
+    "it's so over",
+    "copium",
+    "hopium",
+    "sleep is for the weak",
+    "core memory",
+    "emotional damage",
+    "the vibes are off",
+    "vibes",
+    "understood the assignment",
+    "and that's on period",
+    "periodt",
+    "tea",
+    "spill",
+    "receipts",
+    "stan",
+    "simp",
+    "lives in my head",
+    "on god",
+    "bet",
+    "say less",
+    "valid",
+    "real",
+    "so real",
+    "not me",
+    "why am i like this",
+    "send help",
+    "help",
+    "gatekeep",
+    "girl dinner",
+    "romanticize",
+    "main character",
+    "villain era",
+    "healing era",
+    "flop era",
+    "in my feels",
+    "feels",
+)
 DISTILL_SYSTEM = """Write what people type into a mood-board app about how they feel right now.
 Follow the requested situation and writing style. Vary the length from 1 to about 25 words
 where the style allows it. Lower case is allowed. Use ordinary human language, including
@@ -683,13 +999,28 @@ def distill_seeds(cfg: ProfileConfig) -> dict[str, tuple[str, str, int]]:
     count = -(-cfg.distill_feelings // cfg.distill_per_request)
     if count > len(grid):
         raise ValueError("distill_feelings exceeds the seed grid capacity")
-    return {
+    seeds = {
         f"distill-{i:04d}": (
             *grid[i],
             min(cfg.distill_per_request, cfg.distill_feelings - i * cfg.distill_per_request),
         )
         for i in range(count)
     }
+    # Name the terms in the extra requests, so each request uses different idioms and slang.
+    for kind, terms, requests, style in (
+        ("idiom", DISTILL_IDIOMS, cfg.distill_idiom_requests, DISTILL_IDIOM_STYLE),
+        ("slang", DISTILL_SLANG, cfg.distill_slang_requests, DISTILL_SLANG_STYLE),
+    ):
+        for i in range(requests):
+            picked = random.Random(f"{SEED}:{kind}:{i}").sample(
+                terms, cfg.distill_terms_per_request
+            )
+            seeds[f"distill-{kind}-{i:03d}"] = (
+                situations[i % len(situations)],
+                style + "; ".join(picked),
+                cfg.distill_per_request,
+            )
+    return seeds
 
 
 def distill_job() -> JobSpec:

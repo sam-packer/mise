@@ -31,6 +31,7 @@ dependencies = [
 [project.scripts]
 download = "mise_ml.__main__:download"
 label = "mise_ml.__main__:label"
+refine = "mise_ml.__main__:refine"
 train = "mise_ml.__main__:train"
 publish = "mise_ml.__main__:publish"
 

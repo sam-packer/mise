@@ -122,12 +122,28 @@ def public_items() -> ContentInput:
 
 
 def item_inputs() -> list[StampInput]:
-    from mise_ml.profile import item_fields, item_image
+    from mise_ml.profile import item_fields, item_image, item_records
 
-    rows = list(iter_jsonl(c.RESOLVED))
+    rows = item_records()
     return [
-        content(c.RESOLVED, {r["id"]: item_fields(r) for r in rows}, "prompt fields"),
-        *[path for r in rows if (path := item_image(r)) is not None],
+        content(c.RESOLVED, {k: item_fields(r) for k, r in rows.items()}, "prompt fields"),
+        *[path for r in rows.values() if (path := item_image(r)) is not None],
+    ]
+
+
+def theme_inputs() -> list[StampInput]:
+    if not c.FACTS.is_file():
+        return [c.FACTS]
+    return [
+        content(
+            c.FACTS,
+            {
+                r["id"]: hashlib.sha256(r["lyrics"].encode()).hexdigest()
+                for r in iter_jsonl(c.FACTS)
+                if r.get("lyrics")
+            },
+            "lyrics",
+        )
     ]
 
 
@@ -282,6 +298,44 @@ STEPS = {
             observed_http=True,
         ),
         Step(
+            "facts",
+            "download",
+            lambda: [
+                content(
+                    c.RESOLVED,
+                    [
+                        [
+                            r["id"],
+                            r["title"],
+                            r.get("creator"),
+                            r.get("source", {}).get("artist_mbid"),
+                            r.get("source", {}).get("deezer"),
+                        ]
+                        for r in iter_jsonl(c.RESOLVED)
+                        if r["category"] == "song"
+                    ],
+                    "song identity",
+                )
+            ],
+            lambda: settings(c.ResolveConfig),
+            ("facts", "curate", "http", "util", "threads"),
+            lambda: [c.FACTS],
+            "facts:run",
+            ("resolve",),
+            observed_http=True,
+        ),
+        Step(
+            "themes",
+            "label",
+            theme_inputs,
+            c.ProfileConfig,
+            PROFILE,
+            lambda: [c.THEMES],
+            "profile:themes_job",
+            ("facts",),
+            True,
+        ),
+        Step(
             "items",
             "label",
             item_inputs,
@@ -289,7 +343,8 @@ STEPS = {
             PROFILE,
             lambda: [c.PROFILES],
             "profile:items_job",
-            llm=True,
+            ("themes",),
+            True,
         ),
         Step(
             "moods",

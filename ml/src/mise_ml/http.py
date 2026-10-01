@@ -32,6 +32,8 @@ IDENTIFIED_HOSTS = {
     "query.wikidata.org",
     "commons.wikimedia.org",
     "en.wikisource.org",
+    "en.wikipedia.org",
+    "lrclib.net",
 }
 # The Art Institute of Chicago asks for this header on its API.
 HOST_HEADERS = {

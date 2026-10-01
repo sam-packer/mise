@@ -26,6 +26,7 @@ from mise_ml.config import (
 )
 from mise_ml.data import (
     Catalog,
+    fidelity_at_k,
     load_catalog,
     load_eval_sets,
     load_eval_texts,
@@ -494,6 +495,19 @@ def run() -> dict[str, Any]:
                 "judged": int(mask.sum()),
                 "recall@10": float(selected.mean()) if len(selected) else None,
             }
+    # Judge-free: the share of the teacher's top 10 per category that the student also finds.
+    fidelity = fidelity_at_k(
+        student.query[:n_eval],
+        student.items,
+        teacher.query[:n_eval],
+        teacher.items,
+        catalog.categories,
+    )
+    report["student"]["fidelity@10"] = float(fidelity.mean()) if n_eval else None
+    report["student"]["fidelity_by_set"] = {
+        str(set_name): float(fidelity[set_names == set_name].mean())
+        for set_name in sorted(set(set_names))
+    }
     known = {r["key"] for r in iter_jsonl(JUDGMENTS)}
     # Check only the depth used by the metric.
     # The deeper judge pool covers near-tied items that floating-point noise can reorder.
@@ -536,12 +550,17 @@ def run() -> dict[str, Any]:
     for set_name in sorted(set(set_names)):
         results = [report[name]["judged_by_set"][set_name] for name in systems]
         log.info(
-            "judged set %s (%d/%d): teacher %s, student %s, baseline %s",
+            "judged set %s (%d/%d): teacher %s, student %s, baseline %s; student fidelity %s",
             set_name,
             results[0]["judged"],
             results[0]["feelings"],
             *(cell(result["recall@10"], 5) for result in results),
+            cell(report["student"]["fidelity_by_set"][set_name], 5),
         )
+    log.info(
+        "student fidelity@10 (teacher's top 10 per category): %s",
+        cell(report["student"]["fidelity@10"], 5),
+    )
     for name, usage in report["student"]["room_usage"].items():
         log.info(
             "student %s: %d distinct; top share %s",

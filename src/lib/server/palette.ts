@@ -2,8 +2,8 @@
 import { fromHex } from '$lib/color/oklab';
 import type { OKLab, Palette } from '$lib/mood/types';
 
-/** The KV key of a feeling's palette. The feeling itself is under the bare code. */
-export const paletteKey = (code: string) => `palette:${code}`;
+/** The PALETTES key of a feeling's palette under one bundle. A new model gives the feeling new colors. */
+export const paletteKey = (bundle: string, code: string) => `${bundle}:${code}`;
 
 const HEX = /^#[0-9a-f]{6}$/i;
 

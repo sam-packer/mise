@@ -16,6 +16,7 @@ KEYS = {
     "listenbrainz": (("LISTENBRAINZ_TOKEN",), "songs: the top recordings of each artist"),
     "lastfm": (("LASTFM_API_KEY",), "songs: scene artists and listener tags"),
     "smithsonian": (("SMITHSONIAN_API_KEY",), "optional: Smithsonian Open Access art"),
+    "openai": (("OPENAI_API_KEY",), "refine: the profile grader"),
 }
 
 
@@ -95,3 +96,7 @@ def listenbrainz() -> dict[str, str]:
 
 def lastfm() -> dict[str, str]:
     return {"api_key": env("LASTFM_API_KEY")}
+
+
+def openai() -> dict[str, str]:
+    return {"Authorization": f"Bearer {env('OPENAI_API_KEY')}"}

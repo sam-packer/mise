@@ -215,7 +215,10 @@
 		pointer-events: auto;
 	}
 
-	/* Solid ink with ground-colored text: a clear control, readable over the wall that scrolls under it. */
+	/*
+	 * Solid ink with ground-colored text: a clear control, readable over the wall that scrolls under it.
+	 * A pill, so it matches the shape of the path beside it.
+	 */
 	.close {
 		position: fixed;
 		top: max(1.3vw, 10px);
@@ -226,8 +229,9 @@
 		gap: 0.55rem;
 		min-width: 44px;
 		min-height: 44px;
-		padding: 0 0.85rem 0 0.95rem;
+		padding: 0 1rem 0 1.1rem;
 		border: 0;
+		border-radius: 999px;
 		background: var(--ink);
 		color: var(--ground);
 		font: inherit;

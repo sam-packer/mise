@@ -2,6 +2,7 @@
 
 import hashlib
 import random
+import re
 import unicodedata
 from dataclasses import dataclass
 from typing import Any
@@ -67,31 +68,71 @@ def load_distill_texts(exclude: list[str]) -> list[str]:
         if distill_rejection(text, evals, seen) is None:
             texts.append(text)
             seen.add(normalize_feeling(text))
-    # Keep clean originals and add one deterministic typo to about one in ten texts.
-    for text in texts.copy():
-        if hash_fraction("typo:" + text) >= 0.1:
-            continue
-        noisy = typo_feeling(text)
-        if distill_rejection(noisy, evals, seen) is None:
-            texts.append(noisy)
-            seen.add(normalize_feeling(noisy))
     return texts
 
 
-def typo_feeling(text: str) -> str:
-    """Swap, drop, or double a letter without changing spaces or punctuation."""
-    seed = int.from_bytes(hashlib.sha256(f"{SEED}:typo:{text}".encode()).digest()[:8])
+# Casual spellings that people type. Each pattern matches whole words in any case.
+# Phrases come before the contractions that they contain.
+CASUAL = (
+    (re.compile(r"\bi don['’]t know\b", re.I), "idk"),
+    (re.compile(r"\bto be honest\b", re.I), "tbh"),
+    (re.compile(r"\bright now\b", re.I), "rn"),
+    (re.compile(r"\bwant to\b", re.I), "wanna"),
+    (re.compile(r"\bgoing to\b", re.I), "gonna"),
+    (re.compile(r"\bgot to\b", re.I), "gotta"),
+    (re.compile(r"\btrying to\b", re.I), "tryna"),
+    (re.compile(r"\bkind of\b", re.I), "kinda"),
+    (re.compile(r"\bbecause\b", re.I), "bc"),
+    (
+        re.compile(r"\b(i|you|we|they|he|she|it|that|what|there)['’](m|re|ve|ll|d|s)\b", re.I),
+        r"\1\2",
+    ),
+    (
+        re.compile(r"\b(can|don|won|isn|didn|doesn|wasn|aren|couldn|wouldn|shouldn)['’]t\b", re.I),
+        r"\1t",
+    ),
+    (re.compile(r"\byou\b", re.I), "u"),
+    (re.compile(r"\bvery\b", re.I), "v"),
+    (re.compile(r"\b(\w{3,})ing\b", re.I), r"\1in"),
+)
+
+
+def typo_feeling(text: str, salt: str = "") -> str:
+    """Type the feeling as a hurried person does: lower case, casual spellings, 1-2 letter slips.
+
+    The result depends only on the text and the salt, so each salt gives one fixed variant.
+    """
+    seed = int.from_bytes(hashlib.sha256(f"{SEED}:typo:{salt}:{text}".encode()).digest()[:8])
     rng = random.Random(seed)
+    if rng.random() < 0.5:
+        text = text.lower()
+    # Apply each casual spelling that matches, each with an even chance.
+    for pattern, repl in CASUAL:
+        if pattern.search(text) and rng.random() < 0.5:
+            text = pattern.sub(repl, text)
+    for _ in range(rng.choice((1, 1, 2))):
+        text = letter_slip(text, rng)
+    return text
+
+
+def letter_slip(text: str, rng: random.Random) -> str:
+    """Swap, drop, double, or repeat a letter without changing spaces or punctuation."""
     letters = [i for i, c in enumerate(text) if c.isascii() and c.isalpha()]
     if not letters:
         return text
     swaps = [i for i in letters if i + 1 in letters and text[i] != text[i + 1]]
-    operation = rng.choice(["drop", "double", *(["swap"] if swaps else [])])
+    operation = rng.choice(["drop", "double", "repeat", *(["swap"] if swaps else [])])
     i = rng.choice(swaps if operation == "swap" else letters)
     if operation == "swap":
         return text[:i] + text[i + 1] + text[i] + text[i + 2 :]
     if operation == "drop":
         return text[:i] + text[i + 1 :]
+    if operation == "repeat":
+        # A stretched vowel, as in "sooo" or "huuurts".
+        vowels = [j for j in letters if text[j] in "aeiouy"]
+        if vowels:
+            i = rng.choice(vowels)
+            return text[:i] + text[i] * rng.randint(2, 4) + text[i:]
     return text[:i] + text[i] + text[i:]
 
 
@@ -273,6 +314,27 @@ def recall_scores(
     pos_sim = sims[np.arange(len(pos)), pos]
     rank = (sims > pos_sim[:, None]).sum(axis=1)
     return (rank < k).astype(np.float64)
+
+
+def fidelity_at_k(
+    query_emb: np.ndarray,
+    item_emb: np.ndarray,
+    teacher_query: np.ndarray,
+    teacher_items: np.ndarray,
+    item_categories: np.ndarray,
+    k: int = 10,
+) -> np.ndarray:
+    """Per query: the share of the teacher's top k in each category that a model also ranks in
+    its top k, averaged over the categories."""
+    sims = query_emb @ item_emb.T
+    teacher_sims = teacher_query @ teacher_items.T
+    shares = []
+    for c in np.unique(item_categories):
+        idx = np.flatnonzero(item_categories == c)
+        mine = np.argpartition(-sims[:, idx], k, axis=1)[:, :k]
+        theirs = np.argpartition(-teacher_sims[:, idx], k, axis=1)[:, :k]
+        shares.append([len(np.intersect1d(a, b)) / k for a, b in zip(mine, theirs, strict=True)])
+    return np.asarray(shares).mean(axis=0)
 
 
 def recall_at_k(

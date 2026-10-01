@@ -147,7 +147,7 @@
 	}
 
 	/*
-	 * The one rounded shape on the page: a pill of blurred ground, so the path reads as one object
+	 * A pill of blurred ground, so the path reads as one object
 	 * that floats over the room. It sits on the ground and the light, never on an image.
 	 */
 	.pill {
