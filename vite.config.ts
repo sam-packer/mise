@@ -11,6 +11,9 @@ export default defineConfig({
 	// Leave the preview image renderer to the runtime: the dev server loads its Node build, and
 	// Wrangler bundles its workerd build, with the WebAssembly modules, into the worker.
 	ssr: { external: ['@cf-wasm/og', '@cf-wasm/resvg', '@cf-wasm/satori'] },
+	// The ML project holds over 100,000 files, and a training run writes logs all the time.
+	// The app never imports from it, so the dev server does not watch it.
+	server: { watch: { ignored: ['**/ml/**'] } },
 	plugins: [
 		tailwindcss(),
 		sveltekit({

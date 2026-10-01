@@ -9,6 +9,7 @@ import { copyFile, cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'nod
 import path from 'node:path';
 import { createEncoder, type EncoderIO } from '../src/lib/mood/engine';
 import { buildNameData } from '../src/lib/mood/name-data';
+import { writeSamples } from './build-samples';
 import {
 	CATEGORIES,
 	LIGHTS,
@@ -51,7 +52,6 @@ type Resolved = Pick<Item, 'links' | 'text' | 'preview' | 'album'> & { imageUrl?
 type AnchorSources = {
 	lights: Record<string, string[]>;
 	typefaces: Record<string, string[]>;
-	scents: Record<string, string[]>;
 };
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -508,10 +508,10 @@ async function main() {
 			phrase: p.phrase,
 			value: p.hex.map(hexToOklab) as Palette
 		})),
-		...(['lights', 'typefaces', 'scents'] as const).flatMap((group) =>
+		...(['lights', 'typefaces'] as const).flatMap((group) =>
 			Object.entries(anchorSources[group]).flatMap(([id, phrases]) =>
 				phrases.map((phrase): Anchor => ({
-					kind: group === 'lights' ? 'light' : group === 'typefaces' ? 'typeface' : 'scent',
+					kind: group === 'lights' ? 'light' : 'typeface',
 					phrase,
 					value: id
 				}))
@@ -600,8 +600,7 @@ async function main() {
 	if (JSON.stringify(vocab.lights) !== JSON.stringify(LIGHTS)) errors.push('vocab lights differ');
 	const need: [string, string[], number][] = [
 		['light', [...vocab.lights], 4],
-		['typeface', vocab.typefaces.map((t) => t.id), 2],
-		['scent', vocab.scents.map((s) => s.id), 2]
+		['typeface', vocab.typefaces.map((t) => t.id), 2]
 	];
 	for (const [kind, ids, min] of need) {
 		const known = new Set(ids);
@@ -626,9 +625,9 @@ async function main() {
 	const counts = CATEGORIES.map((c) => `${c} ${items.filter((i) => i.category === c).length}`);
 	console.log(`\nitems: ${items.length} (${counts.join(', ')})`);
 	console.log(
-		`anchors: ${anchors.length} (palette ${paletteCount}, light ${anchors.filter((a) => a.kind === 'light').length}, typeface ${anchors.filter((a) => a.kind === 'typeface').length}, scent ${anchors.filter((a) => a.kind === 'scent').length})`
+		`anchors: ${anchors.length} (palette ${paletteCount}, light ${anchors.filter((a) => a.kind === 'light').length}, typeface ${anchors.filter((a) => a.kind === 'typeface').length})`
 	);
-	console.log(`vocab: ${vocab.typefaces.length} typefaces, ${vocab.scents.length} scents`);
+	console.log(`vocab: ${vocab.typefaces.length} typefaces`);
 	console.log(
 		`size: model ${mib(await dirSize(path.join(OUT, 'model')))}, img ${mib(await dirSize(path.join(OUT, 'img')))}, vectors ${mib(vecBytes)}, anchors.bin ${mib(ancBytes)}, total ${mib(await dirSize(OUT))}`
 	);
@@ -638,6 +637,7 @@ async function main() {
 		process.exit(1);
 	}
 	console.log('validation passed');
+	await writeSamples(OUT);
 	const target = path.join(ROOT, 'static', 'bundle');
 	await rm(target, { recursive: true, force: true });
 	await cp(OUT, target, { recursive: true });

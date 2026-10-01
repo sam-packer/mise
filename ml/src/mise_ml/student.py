@@ -25,7 +25,7 @@ from mise_ml.vocab import load_vocab
 
 log = get(__name__)
 STUDENT_DIR = MODELS / "student"
-OUTPUT_NAMES = ("embedding", "palette", "light", "typeface", "scent")
+OUTPUT_NAMES = ("embedding", "palette", "light", "typeface")
 
 
 class Student(nn.Module):
@@ -34,7 +34,7 @@ class Student(nn.Module):
     def __init__(
         self,
         encoder: PreTrainedModel,
-        sizes: tuple[int, int, int],
+        sizes: tuple[int, int],
         head_hidden: int,
         dims: int = 384,
     ) -> None:
@@ -66,8 +66,8 @@ class Student(nn.Module):
         self, input_ids: torch.Tensor, attention_mask: torch.Tensor, token_type_ids: torch.Tensor
     ) -> tuple[torch.Tensor, ...]:
         pooled = self.pool(input_ids, attention_mask, token_type_ids)
-        palette, light, typeface, scent = self.heads(pooled)
-        return F.normalize(self.projection(pooled), dim=-1), palette, light, typeface, scent
+        palette, light, typeface = self.heads(pooled)
+        return F.normalize(self.projection(pooled), dim=-1), palette, light, typeface
 
 
 def save_student(model: Student, tokenizer: PreTrainedTokenizerBase, meta: dict) -> None:
@@ -226,7 +226,7 @@ def run() -> None:
     tq = t["query_emb"].float().to(dev)
     ti = t["item_emb"].float().to(dev)
     t_palette = t["palette"].float().to(dev)
-    t_choices = [t[k].float().to(dev) for k in ("light", "typeface", "scent")]
+    t_choices = [t[k].float().to(dev) for k in ("light", "typeface")]
     n_items = len(catalog.items)
     item_categories = torch.as_tensor(catalog.categories, device=dev)
     n_categories = int(catalog.categories.max()) + 1
@@ -282,7 +282,7 @@ def run() -> None:
             cand, picked = item_candidates(tq[b] @ ti.T, p, by_category, cfg)
             queries = query_tokens.rows(b)
             with torch.autocast(dev, dtype=torch.bfloat16):
-                q_emb, palette, light, face, scent = model(**queries)
+                q_emb, palette, light, face = model(**queries)
                 i_emb = embed_items(model, item_tokens, cand)
             s = q_emb.float() @ i_emb.float().T / tau
             teacher_sims = tq[b] @ ti[cand].T / tau
@@ -306,7 +306,7 @@ def run() -> None:
             )
             loss_choice = cfg.choice_weight * sum(
                 kl_logits(out.float(), tc[b], cfg.choice_temperature)
-                for out, tc in zip((light, face, scent), t_choices, strict=True)
+                for out, tc in zip((light, face), t_choices, strict=True)
             )
             loss = loss_kl + loss_nce + loss_pal + loss_choice
             opt.zero_grad(set_to_none=True)

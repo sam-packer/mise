@@ -1,6 +1,7 @@
 <script lang="ts">
 	// Link a song to each music service that has it. Each name opens that service directly.
 	import type { Item } from '$lib/mood/types';
+	import Chevron from './Chevron.svelte';
 
 	type Platform = 'spotify' | 'apple' | 'deezer' | 'youtube';
 	const PLATFORMS: Platform[] = ['spotify', 'apple', 'deezer', 'youtube'];
@@ -29,7 +30,7 @@
 		</ul>
 	{:else}
 		<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external link -->
-		<a href={links.primary} target="_blank" rel="noopener">the song →</a>
+		<a href={links.primary} target="_blank" rel="noopener">the song<Chevron /></a>
 	{/if}
 </div>
 

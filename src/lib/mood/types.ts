@@ -35,7 +35,6 @@ export type Manifest = {
 			palette?: string;
 			light?: string;
 			typeface?: string;
-			scent?: string;
 		};
 	};
 	files: {
@@ -48,7 +47,7 @@ export type Manifest = {
 	};
 	heads: {
 		kind: 'anchors' | 'onnx';
-		corrections?: Record<'light' | 'typeface' | 'scent', { prior: number[]; tau: number }>;
+		corrections?: Record<'light' | 'typeface', { prior: number[]; tau: number }>;
 	};
 	counts: { items: number };
 };
@@ -66,17 +65,15 @@ export const LIGHTS = [
 export type Light = (typeof LIGHTS)[number];
 
 export type Typeface = { id: string; family: string; axes: string };
-type Scent = { id: string; text: string };
 
 export type Vocab = {
 	lights: Light[];
 	typefaces: Typeface[];
-	scents: Scent[];
 };
 
 export type Anchor =
 	| { kind: 'palette'; phrase: string; value: [OKLab, OKLab, OKLab, OKLab, OKLab] }
-	| { kind: 'light' | 'typeface' | 'scent'; phrase: string; value: string };
+	| { kind: 'light' | 'typeface'; phrase: string; value: string };
 
 export type Palette = [OKLab, OKLab, OKLab, OKLab, OKLab];
 
@@ -86,7 +83,6 @@ export type Mood = {
 	palette: Palette;
 	light: Light;
 	typeface: Typeface;
-	scent: Scent;
 	/** Inference time in milliseconds. */
 	ms: number;
 
@@ -99,7 +95,7 @@ export type Mood = {
 };
 
 /** One work as a place of its own: the mood of its vibe line, and the works closest to it. */
-export type World = Pick<Mood, 'palette' | 'light' | 'typeface' | 'scent'> & {
+export type World = Pick<Mood, 'palette' | 'light' | 'typeface'> & {
 	item: Item;
 	/** Nearest works, with the categories mixed. They exclude the work, its creator, and the path so far. */
 	neighbors: Item[];
@@ -108,5 +104,5 @@ export type World = Pick<Mood, 'palette' | 'light' | 'typeface' | 'scent'> & {
 export type MatchResult = {
 	picks: Item[];
 	anchor: Item | null;
-	heads?: { palette: Palette; light: string; typeface: string; scent: string };
+	heads?: { palette: Palette; light: string; typeface: string };
 };

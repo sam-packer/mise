@@ -12,6 +12,7 @@
 	import { BUNDLE, feelingCode, normalize, pathCode, shared } from '$lib/code';
 	import type { Item, Mood, OKLab, Palette, World } from '$lib/mood/types';
 	import { infer, ready, start, world as requestWorld } from '$lib/mood/client';
+	import { loadSamples, sample } from '$lib/mood/samples';
 	import { lightStrength, neutralTokens, paletteFavicon, paletteToTokens } from '$lib/color/oklab';
 	import { applyTokens, tweenTokens } from '$lib/color/tween';
 	import { loadTypeface, type LoadedFace } from '$lib/components/typeface';
@@ -125,7 +126,6 @@
 		scene ? lightStrength(paletteToTokens(scene.palette, scene.light), scene.light) : 1
 	);
 	const settled = $derived(mood !== null && text.trim() === mood.query);
-	const scentDelay = 1300;
 
 	/** How long a travel waits for the next world's typeface, in milliseconds. */
 	const FACE_WAIT = 400;
@@ -149,6 +149,7 @@
 		reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
 		applyTokens(neutralTokens(matchMedia('(prefers-color-scheme: dark)').matches));
 		start(bundleBase);
+		loadSamples(bundleBase);
 		ready.then(
 			() => (modelReady = true),
 			() => {}
@@ -200,17 +201,23 @@
 		}
 
 		text = q;
-		if (!modelReady) waiting = true;
-		let m: Mood;
-		try {
-			m = await infer(q);
-		} catch (cause) {
-			if (my !== seq) return;
-			waiting = false;
-			error = message(cause);
-			return;
-		}
+		// A sample feeling has its room in the bundle, so it does not wait for the model.
+		const room = await sample(q);
 		if (my !== seq) return;
+		let m: Mood;
+		if (room) m = room.mood;
+		else {
+			if (!modelReady) waiting = true;
+			try {
+				m = await infer(q);
+			} catch (cause) {
+				if (my !== seq) return;
+				waiting = false;
+				error = message(cause);
+				return;
+			}
+			if (my !== seq) return;
+		}
 		waiting = false;
 		if (mood) {
 			leaving = true;
@@ -287,6 +294,19 @@
 		return vt.finished.catch(() => {});
 	}
 
+	/**
+	 * Build the world at the end of a path. A first step from a sample feeling opens the world from
+	 * the sample's file, so a tile on a sample's wall does not wait for the model.
+	 */
+	async function loadWorld(ids: string[]): Promise<World> {
+		const id = ids[ids.length - 1];
+		if (ids.length === 1) {
+			const room = await sample(urlMood);
+			if (room && Object.hasOwn(room.worlds, id)) return room.worlds[id];
+		}
+		return requestWorld(id, ids);
+	}
+
 	// Load every world on the path that is not in memory, in order, for example after a link to a path
 	// opens or the browser returns to a page whose history holds a path.
 	$effect(() => {
@@ -295,7 +315,7 @@
 			const k = pathKey(ids);
 			if (worlds.has(k) || loading.has(k)) return;
 			loading.add(k);
-			requestWorld(ids[i], ids)
+			loadWorld(ids)
 				.then(
 					(w) => worlds.set(k, w),
 					(cause) => {
@@ -369,7 +389,7 @@
 		let w: World;
 		let f: LoadedFace | null;
 		try {
-			[code, w] = await Promise.all([share(ids), worlds.get(k) ?? requestWorld(item.id, ids)]);
+			[code, w] = await Promise.all([share(ids), worlds.get(k) ?? loadWorld(ids)]);
 			// Give the typeface a moment, so the title does not change font during the transition.
 			f = await Promise.race([
 				loadTypeface(w.typeface, glyphs(w)).catch(() => null),
@@ -583,16 +603,6 @@
 					onopen={travel}
 				/>
 			{/key}
-			{#key `${mood.query}\n${mood.scent.id}`}
-				<div class="scent" class:leaving style:--delay="{scentDelay}ms">
-					<p class="label">scent</p>
-					<p class="note-text" aria-label={mood.scent.text}>
-						{#each mood.scent.text.split('') as ch, i (i)}
-							<span style:--i={i} aria-hidden="true">{ch}</span>
-						{/each}
-					</p>
-				</div>
-			{/key}
 		{/if}
 	</div>
 
@@ -665,6 +675,11 @@
 		display: flex;
 		flex: 1;
 		flex-direction: column;
+	}
+
+	/* Keep room under the wall for the links at the foot of the page. */
+	.shown .scene {
+		padding-bottom: 4rem;
 	}
 
 	/* Out of view and out of the flow, but still rendered, so its animations never start again. */
@@ -853,42 +868,6 @@
 		color: var(--ink-soft);
 	}
 
-	.scent {
-		margin: 0.75rem auto 0;
-		padding: 0 max(2.5vw, 12px) 4rem;
-		text-align: center;
-		transition: opacity 200ms ease-out;
-	}
-
-	.scent p {
-		margin: 0;
-	}
-
-	.scent .label {
-		color: var(--ink-soft);
-		font-size: 0.95rem;
-		font-style: normal;
-		font-variant-caps: all-small-caps;
-		letter-spacing: 0.12em;
-		animation: letter 700ms var(--ease) both;
-		animation-delay: calc(var(--delay) - 300ms);
-	}
-
-	.note-text {
-		font-size: 1.05rem;
-		white-space: pre-wrap;
-	}
-
-	.scent.leaving {
-		opacity: 0;
-	}
-
-	.note-text span {
-		opacity: 0;
-		animation: letter 500ms var(--ease) both;
-		animation-delay: calc(var(--delay) + var(--i) * 30ms);
-	}
-
 	.breath {
 		position: fixed;
 		inset: 0;
@@ -984,10 +963,6 @@
 		.shown .mark:focus-visible .swatch i {
 			transform: none;
 			transition: none;
-		}
-
-		.note-text span {
-			animation-delay: var(--delay);
 		}
 
 		.breath {

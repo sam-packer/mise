@@ -93,6 +93,8 @@
 		width: 100%;
 		aspect-ratio: var(--w) / var(--h);
 		overflow: hidden;
+		/* A poem sizes its type to the tile, so a large tile shows larger type. */
+		container-type: inline-size;
 		transition:
 			transform 500ms var(--ease),
 			box-shadow 500ms var(--ease);
@@ -123,16 +125,21 @@
 		opacity: 1;
 	}
 
+	/* The block is as wide as its longest line and sits in the middle of the tile. The lines stay
+	   aligned left, as the poet set them. */
 	.poem {
 		box-sizing: border-box;
+		width: fit-content;
+		max-width: 100%;
 		height: 100%;
-		margin: 0;
-		padding: clamp(14px, 6%, 32px) clamp(16px, 7%, 40px);
+		margin: 0 auto;
+		padding: clamp(14px, 6cqi, 56px) clamp(16px, 7cqi, 64px);
 		overflow: hidden;
 		color: var(--paper-ink);
 		font-family: var(--mood-font, var(--serif));
 		font-style: var(--mood-style, italic);
-		font-size: clamp(0.8rem, 1.1vw + 0.3rem, 1.15rem);
+		/* About 10 lines fill a 3:2 tile at any width. The fade at the bottom hides the rest. */
+		font-size: clamp(0.8rem, 3.8cqi, 1.9rem);
 		line-height: 1.5;
 		white-space: pre-line;
 		mask-image: linear-gradient(to bottom, black 55%, transparent 96%);

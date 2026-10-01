@@ -4,9 +4,6 @@ name = "mise-ml"
 version = "0.1.0"
 description = "Catalog pipeline and teacher-student mood model for mise"
 readme = "README.md"
-authors = [
-    { name = "Telesphoreo", email = "me@telesphoreo.me" }
-]
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "boto3>=1.43.103",
@@ -17,6 +14,7 @@ dependencies = [
     "onnx>=1.23.0",
     "onnxruntime>=1.30.0",
     "onnxscript>=0.7.2",
+    "openai>=3.22.1",
     "pandas>=3.0.6",
     "pillow>=12.3.0",
     "python-dotenv>=1.2.3",

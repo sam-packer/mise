@@ -30,7 +30,10 @@
 </script>
 
 <svelte:head>
-	<link rel="canonical" href={url} />
+	<!-- An error page is not a page to index, so it names no canonical URL. -->
+	{#if !page.error}
+		<link rel="canonical" href={url} />
+	{/if}
 	{#if !ownIcon}
 		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 	{/if}

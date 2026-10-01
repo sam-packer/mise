@@ -57,7 +57,6 @@ for (const query of queries) {
 	console.log(`  palette   ${mood.palette.map(oklabToHex).join(' ')}`);
 	console.log(`  light     ${mood.light}`);
 	console.log(`  typeface  ${mood.typeface.family}`);
-	console.log(`  scent     ${mood.scent.text}`);
 	for (const item of mood.picks) {
 		console.log(`  ${item.category.padEnd(9)} ${item.title}, ${item.creator} (${item.year})`);
 	}

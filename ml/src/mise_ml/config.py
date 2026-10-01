@@ -132,8 +132,8 @@ class ResolveConfig:
             # Wikimedia asks for serial API requests; there is no fixed limit.
             "en.wikisource.org": 0.25,
             "en.wikipedia.org": 0.25,
-            # LRCLIB publishes no limit; 1 request/s.
-            "lrclib.net": 1.0,
+            # LRCLIB publishes no limit; 4 requests/s.
+            "lrclib.net": 0.25,
             "api.artic.edu": 1.0,
             "openaccess-api.clevelandart.org": 0.5,
             "openaccess-cdn.clevelandart.org": 0.1,

@@ -21,7 +21,8 @@ Add `--help` to any command for its details. Add `--plan` to see what it would d
 
 - An NVIDIA GPU with 32 GB of memory. The defaults suit an RTX 5090.
 - About 60 GB of free disk, [uv](https://docs.astral.sh/uv/), and [Bun](https://bun.sh) (the export
-  step runs the app's TypeScript search code).
+  step runs the app's TypeScript search code and engine). Run `bun install` in the repository root
+  first.
 - Four free API keys and an OpenAI key in `ml/.env`. Copy [.env.example](.env.example) to `.env` and follow its
   comments. Git ignores `.env`. A variable already set in your shell wins over the file.
 
@@ -150,7 +151,7 @@ for its schema, so the model can't return a broken answer. It runs six jobs:
 | items   | the work's main emotion as a vibe, a description, and three feelings a person might type |
 | moods   | about 6,000 invented feelings, with scene, first-person, and heartbreak hints |
 | pat     | a feeling for each named palette in the PAT data set                                    |
-| labels  | five colors, a light, a typeface, and a scent for about 30,000 feelings                 |
+| labels  | five colors, a light, and a typeface for about 30,000 feelings                 |
 | distill | up to 40,000 feelings across 30 styles, with no labels |
 
 The items prompt is neutral on purpose. Blind audits by Claude showed that a word in the prompt
@@ -213,7 +214,7 @@ descriptions.
 
 1. **train-teacher.** The frozen Qwen3-Embedding-8B encodes every text once. Small heads learn
    to rank works for a feeling (InfoNCE: the matching work must score above the other works in the
-   batch), and to predict the palette, light, typeface, and scent. 6 epochs at a learning rate of
+   batch), and to predict the palette, light, and typeface. 6 epochs at a learning rate of
    3e-4, with warmup and a cosine decay. The run keeps the epoch with the best validation score.
 2. **train-student.** MiniLM learns from the teacher. For each feeling it copies the teacher's
    ranking of works inside each category (the teacher's top 4 per category, with a strong KL
@@ -226,13 +227,18 @@ descriptions.
 3. **export** writes one ONNX file with the encoder and all heads, then quantizes it to int8 (8-bit
    weights instead of 32-bit). It tries a few quantization recipes and keeps the one with the best
    validation score under 24 MiB. It also writes the item vectors as 16-bit floats and the name
-   data for the "in the key of" matcher.
+   data for the "in the key of" matcher. Last, it runs `../scripts/build-samples.ts` on the
+   finished bundle. That script runs each sample feeling of the app (`../src/lib/examples.ts`)
+   through the browser's engine and ONNX Runtime Web. It writes `samples/<code>.json` for each
+   sample: the mood, and the world behind each of its tiles. `samples/index.json` gives the file
+   and the palette of each sample. The page shows a sample's room from its file before the model
+   loads. A change to the samples or to the app's search code runs export again.
 4. **eval-judge** and **eval** score the models (see below).
 5. **install** copies the bundle to `../static/bundle/`, but only when the ship gate passes.
 
 `train` never uploads anything.
 
-Export also saves training-label priors for light, typeface, and scent in the manifest's `heads`
+Export also saves training-label priors for light and typeface in the manifest's `heads`
 object. It adds one count per choice so each prior stays positive. For each head, it selects the
 largest correction strength from 0, 0.25, 0.5, and 0.75 that loses at most two percentage points
 of choice accuracy on validation feelings. The browser subtracts `tau * log(prior)` from each
@@ -261,7 +267,7 @@ The ship gate needs all of these to pass:
 
 The report gives a 95% confidence interval for each gap. It reports judged recall for each set
 for all three models. The ship gate uses all eval feelings together. The report also gives the
-number of distinct student lights, typefaces, and scents, and the share of each head's most
+number of distinct student lights and typefaces, and the share of each head's most
 common choice on eval feelings.
 
 `eval_feelings.jsonl` holds one JSON object per line, like
@@ -280,6 +286,7 @@ to label the new lines, then `uv run train` to update the judgments and report.
 - All other files go to `bundles/<date>-<hash>/`. The prefix hash covers the file contents, so a
   release never changes after upload. Files are cached for a year.
 - The manifest uploads last, so a release is never half there.
+- The sample files hold copies of items, so their image links change to the public URLs too.
 - At the end, `publish` writes the new URL into `../src/lib/bundle.ts`.
 
 Then commit `src/lib/bundle.ts` and run `bun run deploy` from the repository root.
@@ -341,7 +348,7 @@ Git ignores `data/` and `out/`.
 ## Configuration
 
 Every setting is a dataclass in `src/mise_ml/config.py`. Change a value there to change a run. The
-list of lights, typefaces, and scents is `../scripts/stub/vocab.json`.
+list of lights and typefaces is `../scripts/stub/vocab.json`.
 
 ## Licenses
 

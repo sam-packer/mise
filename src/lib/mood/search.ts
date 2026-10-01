@@ -223,7 +223,7 @@ function createAnchorHeads(anchors: Anchor[], anchorVectors: Float32Array, dims:
 				? (palettes[0].map((c) => [...c]) as Palette)
 				: blendPalettes(palettes, weights);
 
-		const best = (kind: 'light' | 'typeface' | 'scent') => {
+		const best = (kind: 'light' | 'typeface') => {
 			let id = '';
 			let bestScore = -Infinity;
 			for (const s of scored) {
@@ -234,7 +234,7 @@ function createAnchorHeads(anchors: Anchor[], anchorVectors: Float32Array, dims:
 			}
 			return id;
 		};
-		return { palette, light: best('light'), typeface: best('typeface'), scent: best('scent') };
+		return { palette, light: best('light'), typeface: best('typeface') };
 	};
 }
 

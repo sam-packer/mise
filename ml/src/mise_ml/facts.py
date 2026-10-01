@@ -50,8 +50,9 @@ WORKERS = 4
 
 
 def bare(title: str) -> str:
-    """The title without parenthetical parts, for matching."""
-    return re.sub(r"\s*[\(\[][^)\]]*[\)\]]", "", title).strip()
+    """The title without parenthetical parts, for matching. A title that is all in brackets,
+    such as "(something)", keeps the text inside them."""
+    return re.sub(r"\s*[\(\[][^)\]]*[\)\]]", "", title).strip() or title.strip(" ()[]")
 
 
 def sections(text: str) -> list[tuple[str, str]]:

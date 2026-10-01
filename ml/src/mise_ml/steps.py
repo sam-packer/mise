@@ -100,7 +100,7 @@ def labels() -> Path:
 def query_inputs() -> list[StampInput]:
     return [
         *catalog_inputs(),
-        selected(labels(), "key", "palette", "light", "typeface", "scent"),
+        selected(labels(), "key", "palette", "light", "typeface"),
         selected(c.PAT, "phrase", "rgb"),
         selected(c.PAT_SENTENCES, "key", "text"),
         selected(c.EVAL_FEELINGS, "text"),
@@ -424,9 +424,20 @@ STEPS = {
                 *query_inputs(),
                 *images(),
                 c.REPO_ROOT / "scripts" / "build-name-data.ts",
+                c.REPO_ROOT / "scripts" / "build-samples.ts",
+                c.REPO_ROOT / "src" / "lib" / "examples.ts",
+                c.REPO_ROOT / "src" / "lib" / "code.ts",
                 *[
                     c.REPO_ROOT / "src" / "lib" / "mood" / name
-                    for name in ("name-data.ts", "types.ts", "anchor-search.ts", "search.ts")
+                    for name in (
+                        "name-data.ts",
+                        "types.ts",
+                        "anchor-search.ts",
+                        "search.ts",
+                        "engine.ts",
+                        "fp16.ts",
+                        "samples.ts",
+                    )
                 ],
                 public_items(),
                 constants("SEED", "CATEGORIES"),

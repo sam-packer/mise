@@ -24,7 +24,7 @@ OUTPUTS = MODELS / "teacher_outputs.pt"
 
 
 class Teacher(nn.Module):
-    def __init__(self, d_in: int, cfg: TeacherConfig, sizes: tuple[int, int, int]) -> None:
+    def __init__(self, d_in: int, cfg: TeacherConfig, sizes: tuple[int, int]) -> None:
         super().__init__()
         self.query = Mlp(d_in, cfg.hidden, cfg.dims, cfg.dropout)
         self.item = Mlp(d_in, cfg.hidden, cfg.dims, cfg.dropout)
@@ -87,7 +87,7 @@ class Trainer:
         self.pos = t(self.qs.pos)
         self.palette = t(self.qs.palette)
         self.has_palette = t(self.qs.has_palette)
-        self.choices = [t(self.qs.light), t(self.qs.typeface), t(self.qs.scent)]
+        self.choices = [t(self.qs.light), t(self.qs.typeface)]
         self.model = Teacher(self.fi.shape[1], cfg, self.vocab.sizes()).to(dev)
 
     def losses(self, b: torch.Tensor, full_softmax: bool = False) -> dict[str, torch.Tensor]:
@@ -108,7 +108,7 @@ class Trainer:
                 palette[m], self.palette[b][m], cfg.lightness_weight
             )
         for name, logits, labels in zip(
-            ("light", "typeface", "scent"), logits_by_head, self.choices, strict=True
+            ("light", "typeface"), logits_by_head, self.choices, strict=True
         ):
             y = labels[b]
             m = y >= 0
@@ -208,7 +208,7 @@ class Trainer:
         self.model.eval()
         rows = torch.as_tensor(self.qs.where("train", "val", "distill"), device="cuda")
         x = self.fq[rows]
-        palette, light, face, scent = (
+        palette, light, face = (
             torch.cat(parts)
             for parts in zip(
                 *(self.model.heads(x[i : i + 8192]) for i in range(0, len(x), 8192)), strict=True
@@ -225,7 +225,6 @@ class Trainer:
                 "palette": palette.cpu(),
                 "light": light.cpu(),
                 "typeface": face.cpu(),
-                "scent": scent.cpu(),
                 "temperature": self.cfg.temperature,
                 "vocab": self.vocab.digest,
             },

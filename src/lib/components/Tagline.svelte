@@ -1,8 +1,10 @@
 <script lang="ts">
-	// Show the brand line under the mark. Each word sits on one color of a palette: the palette that
-	// the model made for the example feeling in the field.
+	// Show the brand line under the mark. Each word sits on one color of a palette: the palette of
+	// the example feeling in the field, from the bundle's sample rooms.
+	import { onMount } from 'svelte';
 	import { fromHex, hex, textOn } from '$lib/color/oklab';
-	import { EXAMPLE_PALETTES } from '$lib/example-palettes';
+	import { samplePalettes } from '$lib/mood/samples';
+	import type { Palette } from '$lib/mood/types';
 
 	let {
 		example = '',
@@ -19,15 +21,18 @@
 
 	const WORDS = ['every', 'feeling', 'has', 'a', 'world.'];
 	/** The colors of the logo files, for the first paint and for an example without a palette. */
-	const BRAND = '#4f6e73 #c58e6e #e3c7a8 #b98a93 #3f3340';
+	const BRAND = '#4f6e73 #c58e6e #e3c7a8 #b98a93 #3f3340'.split(' ').map(fromHex);
+
+	let palettes = $state<Record<string, Palette>>({});
+
+	onMount(() => {
+		samplePalettes.then((p) => (palettes = p));
+	});
 
 	// Light to dark, left to right, as on the brand swatches. The text on each block comes from the
 	// same palette and meets WCAG AA.
 	const blocks = $derived.by(() => {
-		const palette = (EXAMPLE_PALETTES[example] ?? BRAND)
-			.split(' ')
-			.map(fromHex)
-			.sort((a, b) => b[0] - a[0]);
+		const palette = [...(palettes[example] ?? BRAND)].sort((a, b) => b[0] - a[0]);
 		return palette.map((color) => ({ fill: hex(color), text: hex(textOn(color, palette)) }));
 	});
 </script>

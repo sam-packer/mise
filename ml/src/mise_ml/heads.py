@@ -40,14 +40,11 @@ def kl_logits(student: torch.Tensor, teacher: torch.Tensor, temperature: float) 
 
 
 class ChoiceHeads(nn.Module):
-    def __init__(self, d_in: int, hidden: int, sizes: tuple[int, int, int], dropout: float) -> None:
+    def __init__(self, d_in: int, hidden: int, sizes: tuple[int, int], dropout: float) -> None:
         super().__init__()
         self.palette = Mlp(d_in, hidden, 15, dropout)
         self.light = Mlp(d_in, hidden, sizes[0], dropout)
         self.typeface = Mlp(d_in, hidden, sizes[1], dropout)
-        self.scent = Mlp(d_in, hidden, sizes[2], dropout)
 
-    def forward(
-        self, x: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        return decode_palette(self.palette(x)), self.light(x), self.typeface(x), self.scent(x)
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        return decode_palette(self.palette(x)), self.light(x), self.typeface(x)

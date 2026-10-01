@@ -191,7 +191,6 @@ class Query:
     palette: np.ndarray | None = None
     light: int = -1
     typeface: int = -1
-    scent: int = -1
     split: str = "train"
 
 
@@ -203,7 +202,6 @@ class QuerySet:
     has_palette: np.ndarray
     light: np.ndarray
     typeface: np.ndarray
-    scent: np.ndarray
     split: np.ndarray
 
     def where(self, *splits: str) -> np.ndarray:
@@ -231,7 +229,6 @@ def load_queries(
 
     light_ix = {x: i for i, x in enumerate(vocab.lights)}
     face_ix = {x: i for i, x in enumerate(vocab.typeface_ids)}
-    scent_ix = {x: i for i, x in enumerate(vocab.scent_ids)}
     for r in iter_jsonl(labels_path(vocab)):
         lab = hex_palette_to_oklab(r["palette"])
         if lab is None:
@@ -240,7 +237,6 @@ def load_queries(
         q.palette = lab
         q.light = light_ix.get(r["light"], -1)
         q.typeface = face_ix.get(r["typeface"], -1)
-        q.scent = scent_ix.get(r["scent"], -1)
 
     pat = {r["phrase"]: r["rgb"] for r in iter_jsonl(PAT)}
     for r in iter_jsonl(PAT_SENTENCES):
@@ -267,7 +263,7 @@ def load_queries(
             if q.split == "eval"
             or q.pos >= 0
             or q.palette is not None
-            or any(label >= 0 for label in (q.light, q.typeface, q.scent))
+            or any(label >= 0 for label in (q.light, q.typeface))
         ),
         key=lambda q: q.text,
     )
@@ -293,7 +289,6 @@ def load_queries(
         has_palette=np.array([q.palette is not None for q in rows]),
         light=np.array([q.light for q in rows], dtype=np.int64),
         typeface=np.array([q.typeface for q in rows], dtype=np.int64),
-        scent=np.array([q.scent for q in rows], dtype=np.int64),
         split=np.array([q.split for q in rows]),
     )
 

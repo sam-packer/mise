@@ -3,6 +3,7 @@
 	// wider screen, and a button for other ones.
 	import { onMount } from 'svelte';
 	import { fade } from 'svelte/transition';
+	import { sample } from '$lib/mood/samples';
 
 	let {
 		examples,
@@ -70,6 +71,19 @@
 	});
 
 	$effect(() => onexample?.(near ?? shown[0] ?? ''));
+
+	// Load the rooms of the samples on screen while the page is idle, so a tap shows its room at once.
+	$effect(() => {
+		const texts = shown;
+		const load = () => texts.forEach((text) => void sample(text));
+		// Safari has no requestIdleCallback.
+		if ('requestIdleCallback' in window) {
+			const id = requestIdleCallback(load, { timeout: 2000 });
+			return () => cancelIdleCallback(id);
+		}
+		const id = setTimeout(load, 500);
+		return () => clearTimeout(id);
+	});
 
 	function refresh() {
 		start = (start + shown.length) % order.length;

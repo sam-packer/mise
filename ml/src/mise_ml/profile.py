@@ -90,7 +90,6 @@ ground and covers most of the page. c2 is the main ink or accent. c3 to c5 are s
 tones. Choose colors for the atmosphere of the moment, not only the literal objects in it.
 - light: the room light that fits the moment.
 - typeface: the typeface that fits the voice of the moment.
-- scent: the scent note that fits the moment.
 Use only ids from these lists.
 
 """
@@ -1129,7 +1128,7 @@ def pat_job() -> JobSpec:
     )
 
 
-# labels: palette, light, typeface, scent for each feeling
+# labels: palette, light, and typeface for each feeling
 
 
 def label_pool(cfg: ProfileConfig) -> list[str]:
@@ -1150,7 +1149,6 @@ def label_schema(vocab: Vocab, count: int) -> dict[str, Any]:
                     **{f"c{i}": HEX for i in range(1, 6)},
                     "light": {"type": "string", "enum": vocab.lights},
                     "typeface": {"type": "string", "enum": vocab.typeface_ids},
-                    "scent": {"type": "string", "enum": vocab.scent_ids},
                 },
                 count,
             )
@@ -1176,7 +1174,7 @@ def labels_job() -> JobSpec:
         palette = [row[f"c{i}"] for i in range(1, 6)]
         if any(parse_hex(c) is None for c in palette):
             return None
-        return {k: row[k] for k in ("light", "typeface", "scent")} | {"palette": palette}
+        return {k: row[k] for k in ("light", "typeface")} | {"palette": palette}
 
     def parse(keys: list[str], data: dict[str, Any]) -> list[Record]:
         return parse_numbered(keys, data["labels"], make)

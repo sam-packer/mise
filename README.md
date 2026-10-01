@@ -5,8 +5,7 @@ Live at [mise.art](https://mise.art).
 Type how you feel in one sentence, like "a snowy december and i just made warm hot chocolate". mise
 answers with a wall of things that match it: two artworks, two films, two songs, two poems, and two
 books.
-The whole page takes on the feeling too. Its colors, its light, and its typeface change, and a line
-at the bottom names a scent.
+The whole page takes on the feeling too. Its colors, its light, and its typeface change.
 
 ## Who it is for
 
@@ -23,8 +22,8 @@ You can describe that feeling in a sentence, and mise gives you a place to start
 1. Open the site. Type a feeling in the text box, or click one of the sample feelings under it.
    Click the refresh button to see other samples.
 2. Press Enter. A soft pulse shows while the model loads. The page fades to the new palette, ten
-   tiles rise in (two of each: artworks, films, songs, poems, and books), and a scent writes itself
-   out below them.
+   tiles rise in (two of each: artworks, films, songs, poems, and books). A sample feeling does not
+   wait for the model. Its room is ready before the model loads.
 3. Click a tile to travel into that work's world. The page takes on the work's own palette, light,
    and typeface, and the works nearest to it fill the wall. A song plays a 30-second preview, and
    each work links to its source, such as IMDb, Hardcover, a music service, or the museum page.
@@ -63,7 +62,7 @@ The code is small and split by job:
 | `src/lib/mood/`       | the search engine: the web worker, the model call, and the catalog search        |
 | `src/lib/server/`     | the preview image: its layout, its font, and the palette check                   |
 | `src/lib/color/`      | OKLab color math and the palette fade                                            |
-| `scripts/`            | a small sample bundle for local work, and a command line search                  |
+| `scripts/`            | a small sample bundle for local work, a command line search, the sample rooms    |
 | `ml/`                 | the pipeline that builds the catalog and trains the model                        |
 
 ## APIs
@@ -95,8 +94,16 @@ sources. mise generates the feelings and mood descriptions.
 
 The search runs in your browser. A small language model (23 MB) turns your sentence into a list of
 numbers and compares it with the numbers for each work in the catalog. The same model also picks the
-palette, the light, the typeface, and the scent. After the first load, a search takes a fraction of
-a second. The server only stores the sentence and its palette for the share link.
+palette, the light, and the typeface. After the first load, a search takes a fraction of a second. The server only stores the sentence and its palette for the share link.
+
+The sample feelings under the text box do not need the model. When the pipeline exports a bundle,
+`scripts/build-samples.ts` runs each sample through the same engine and runtime as the browser. It
+writes one small file per sample into the bundle's `samples/` folder: the mood, and the world behind
+each of its ten tiles. While the page is idle, it downloads the file of each sample on screen (about
+16 KB). A click on a sample, or the same text typed in, shows the room from that file at once. A
+click on one of its tiles opens that world at once too. A deeper step, or any other feeling, uses the
+model. If a file is missing or does not load, the page uses the model. The tagline under the logo
+takes its colors from the same files.
 
 ## Run it locally
 
@@ -134,8 +141,8 @@ to the screen width, and the small controls keep a touch target of at least 44 p
 ## Known limitations
 
 - The first visit is heavy. The model, the vectors, and the catalog are about 40 to 50 MB before
-  compression. On a slow phone connection the first search can take a while. Later visits use the
-  browser cache.
+  compression. On a slow phone connection the first typed feeling can take a while. The sample
+  feelings open at once. Later visits use the browser cache.
 - The catalog is a snapshot of the source collections. Run the [model pipeline](ml/README.md)
   to select newer works. The next build targets 15,993 works; the published bundle can have fewer.
 - An AI model labeled the catalog. A local language model wrote the mood descriptions and palettes

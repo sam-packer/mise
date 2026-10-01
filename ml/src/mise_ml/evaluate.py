@@ -132,7 +132,7 @@ def student_outputs(texts: list[str], catalog: Catalog) -> tuple[Outputs, list[f
         rows.append(out)
     heads = json.loads((BUNDLE / "manifest.json").read_text(encoding="utf-8"))["heads"]
     choices = []
-    for name in ("light", "typeface", "scent"):
+    for name in ("light", "typeface"):
         logits = np.concatenate([r[name] for r in rows])
         correction = heads.get("corrections", {}).get(name)
         if correction:
@@ -158,7 +158,7 @@ def baseline_outputs(texts: list[str], catalog: Catalog) -> Outputs:
     tokenizer = AutoTokenizer.from_pretrained(cfg.backbone, revision=cfg.revision)
     model = Student(
         AutoModel.from_pretrained(cfg.backbone, revision=cfg.revision, attn_implementation="sdpa"),
-        (1, 1, 1),
+        (1, 1),
         8,
     ).cuda()
     model.projection = torch.nn.Identity()
@@ -392,7 +392,7 @@ def label_metrics(out: Outputs, rows: np.ndarray, qs: Any, offset: int) -> dict[
         pred = out.palette[offset : offset + len(rows)][m]
         metrics["palette_dE"] = float(np.linalg.norm(pred - qs.palette[rows][m], axis=-1).mean())
     for name, labels, pred in zip(
-        ("light", "typeface", "scent"), (qs.light, qs.typeface, qs.scent), out.choices, strict=True
+        ("light", "typeface"), (qs.light, qs.typeface), out.choices, strict=True
     ):
         y = labels[rows]
         has = y >= 0
@@ -453,7 +453,7 @@ def run() -> dict[str, Any]:
         "threads": 1,
     }
     report["student"]["room_usage"] = {}
-    for name, logits in zip(("light", "typeface", "scent"), student.choices, strict=True):
+    for name, logits in zip(("light", "typeface"), student.choices, strict=True):
         counts = np.bincount(logits[:n_eval].argmax(-1), minlength=logits.shape[1])
         report["student"]["room_usage"][name] = {
             "distinct": int(np.count_nonzero(counts)),
@@ -534,17 +534,14 @@ def run() -> dict[str, Any]:
             return f"{'—':>{width}}"
         return f"{value:>{width}.{digits}f}"
 
-    log.info(
-        f"{'':8} {'recall@10':>10} {'judged':>8} {'palette dE':>11} "
-        f"{'light':>6} {'type':>6} {'scent':>6}"
-    )
+    log.info(f"{'':8} {'recall@10':>10} {'judged':>8} {'palette dE':>11} {'light':>6} {'type':>6}")
     for name in ("teacher", "student", "baseline"):
         r = report[name]
         e = r["eval"] or r["heldout"]
         log.info(
             f"{name:8} {cell(r['recall@10_heldout'], 10)} {cell(r['recall@10_judged'], 8)} "
             f"{cell(e.get('palette_dE'), 11, 4)} {cell(e.get('light_acc'), 6)} "
-            f"{cell(e.get('typeface_acc'), 6)} {cell(e.get('scent_acc'), 6)}"
+            f"{cell(e.get('typeface_acc'), 6)}"
         )
     log.info("baseline = untrained student backbone; it has no palette or choice heads")
     for set_name in sorted(set(set_names)):

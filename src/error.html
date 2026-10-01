@@ -1,0 +1,217 @@
+<!doctype html>
+<!-- SvelteKit shows this page when the root layout or the error page fails. It must work alone. -->
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+		<meta name="color-scheme" content="light dark" />
+		<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+		<meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)" />
+		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+		<title>something went wrong — mise</title>
+		<style>
+			/* Copy the tokens of layout.css, because this page loads no stylesheet. */
+			:root {
+				color-scheme: light dark;
+				--serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+				--ease: cubic-bezier(0.22, 1, 0.36, 1);
+				--ground: light-dark(#fff, #09090b);
+				--ink: light-dark(oklch(0.32 0 0), oklch(0.86 0 0));
+				--ink-soft: light-dark(oklch(0.48 0 0), oklch(0.7 0 0));
+				--mid: light-dark(oklch(0.94 0 0), oklch(0.25 0 0));
+			}
+
+			html {
+				background: var(--ground);
+				overflow-x: hidden;
+			}
+
+			body {
+				display: flex;
+				min-height: 100dvh;
+				margin: 0;
+				padding: 5rem max(2.5vw, 12px);
+				box-sizing: border-box;
+				background: var(--ground);
+				color: var(--ink);
+				font-family: var(--serif);
+				font-style: italic;
+				line-height: 1.5;
+				-webkit-font-smoothing: antialiased;
+				text-rendering: optimizeLegibility;
+			}
+
+			main {
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				width: min(100%, 40rem);
+				margin: auto;
+				text-align: center;
+				animation: rise 900ms var(--ease) 100ms both;
+			}
+
+			.kicker {
+				margin: 0 0 1rem;
+				max-width: 100%;
+				color: var(--ink-soft);
+				font-size: 0.85rem;
+				font-style: normal;
+				font-variant-caps: all-small-caps;
+				letter-spacing: 0.12em;
+				overflow-wrap: anywhere;
+			}
+
+			h1 {
+				margin: 0;
+				font-size: clamp(1.75rem, 2.6vw + 0.9rem, 3.1rem);
+				font-weight: 400;
+				line-height: 1.2;
+				text-wrap: balance;
+			}
+
+			.home {
+				position: relative;
+				display: inline-flex;
+				align-items: center;
+				min-height: 44px;
+				margin-top: 2rem;
+				padding: 1.25rem 0.25rem 0.5rem;
+				box-sizing: border-box;
+				color: var(--ink-soft);
+				font-size: 0.95rem;
+				font-style: normal;
+				font-variant-caps: all-small-caps;
+				letter-spacing: 0.12em;
+				text-decoration: none;
+				transition: color 300ms var(--ease);
+			}
+
+			/* A short hairline gives a pause between the line and the way home. */
+			.home::before {
+				content: '';
+				position: absolute;
+				top: 0;
+				left: 50%;
+				width: 2.5rem;
+				height: 1px;
+				background: color-mix(in oklab, var(--ink) 18%, transparent);
+				transform: translateX(-50%);
+			}
+
+			.home:hover,
+			.home:focus-visible {
+				color: var(--ink);
+			}
+
+			.home:focus-visible {
+				outline: 1px solid var(--ink);
+				outline-offset: 2px;
+			}
+
+			/* The same drawn chevron as Chevron.svelte. */
+			.chevron {
+				flex: none;
+				width: 0.85em;
+				height: 0.85em;
+				margin-left: 0.15em;
+				fill: none;
+				stroke: currentColor;
+				stroke-width: 1.5;
+				stroke-linecap: round;
+				stroke-linejoin: round;
+			}
+
+			.mark {
+				position: absolute;
+				top: 0;
+				left: 0;
+				display: flex;
+				align-items: center;
+				gap: 0.7rem;
+				min-height: 44px;
+				padding: max(1.3vw, 10px) max(2.5vw, 12px);
+				box-sizing: border-box;
+				color: var(--ink);
+				text-decoration: none;
+			}
+
+			.mark:focus-visible {
+				outline: none;
+			}
+
+			.word {
+				font-size: 1.9rem;
+				line-height: 1;
+				letter-spacing: 0.015em;
+				color: var(--ink-soft);
+				transition: color 400ms var(--ease);
+			}
+
+			.mark:hover .word,
+			.mark:focus-visible .word {
+				color: var(--ink);
+			}
+
+			.mark:focus-visible .word {
+				text-decoration: underline 1px;
+				text-underline-offset: 0.2em;
+			}
+
+			.swatch {
+				display: flex;
+				flex: none;
+				height: 1.5rem;
+			}
+
+			.swatch i {
+				width: 0.56rem;
+				background: var(--mid);
+			}
+
+			.swatch i:first-child {
+				background: var(--ground);
+				box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ink) 25%, transparent);
+			}
+
+			.swatch i:last-child {
+				background: var(--ink);
+			}
+
+			@keyframes rise {
+				from {
+					opacity: 0;
+					transform: translateY(12px);
+				}
+			}
+
+			@media (prefers-reduced-motion: reduce) {
+				main {
+					animation-name: appear;
+				}
+			}
+
+			@keyframes appear {
+				from {
+					opacity: 0;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<main>
+			<p class="kicker">%sveltekit.status% · %sveltekit.error.message%</p>
+			<h1>something went wrong in this world.</h1>
+			<a class="home" href="/"
+				>start over<svg class="chevron" viewBox="0 0 16 16" aria-hidden="true">
+					<path d="M6 3.5 10.5 8 6 12.5" /></svg
+			></a>
+		</main>
+
+		<!-- Place the mark after the message so users reach the way home first when they press Tab. -->
+		<a class="mark" href="/" aria-label="mise, start over">
+			<span class="swatch" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+			<span class="word">mise</span>
+		</a>
+	</body>
+</html>

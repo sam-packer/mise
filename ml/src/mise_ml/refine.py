@@ -12,13 +12,12 @@ download does not try it again. ledger.jsonl keeps every grade with its round an
 import base64
 import json
 import threading
-import time
 from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-import httpx
+from openai import OpenAI
 
 from mise_ml import keys
 from mise_ml.config import (
@@ -37,7 +36,6 @@ from mise_ml.profile import item_image, item_prompt, item_records
 from mise_ml.util import append_jsonl, iter_jsonl, sort_jsonl, write_jsonl
 
 log = get(__name__)
-URL = "https://api.openai.com/v1/responses"
 
 # The rubric that Claude, Opus, Sonnet, Luna, Sol, and Astra used in the grader comparison.
 SYSTEM = """You grade one profile of a work that a labeler wrote for a mood app.
@@ -88,7 +86,9 @@ class Grader:
 
     def __init__(self, cfg: RefineConfig) -> None:
         self.cfg = cfg
-        self.http = httpx.Client(timeout=600, headers=keys.openai())
+        # The client reads OPENAI_API_KEY. It retries rate limits, server errors, and connection
+        # errors with backoff.
+        self.client = OpenAI(max_retries=6, timeout=600)
         self.lock = threading.Lock()
         self.cache: dict[str, dict[str, Any]] = {}
         if GRADES.is_file():
@@ -122,37 +122,16 @@ class Grader:
         body, request = self.request(record, profile)
         if request in self.cache:
             return self.cache[request]
-        response = None
-        for attempt in range(6):
-            try:
-                response = self.http.post(URL, json=body)
-            except httpx.TransportError as e:
-                log.debug(f"{record['id']}: {type(e).__name__}; retry")
-            else:
-                # Rate limits and server errors pass; any other error is a bug or a bad key.
-                if response.status_code == 200 or (
-                    response.status_code != 429 and response.status_code < 500
-                ):
-                    break
-            time.sleep(2**attempt)
-        if response is None:
-            raise RuntimeError(f"{record['id']}: the grader could not be reached")
-        response.raise_for_status()
-        data = response.json()
-        if data.get("status") != "completed":
-            raise RuntimeError(f"{record['id']}: grader response is {data.get('status')}")
-        text = next(
-            c["text"]
-            for item in data["output"]
-            if item.get("type") == "message"
-            for c in item["content"]
-            if c.get("type") == "output_text"
-        )
-        answer = json.loads(text)
+        response = self.client.responses.create(**body)
+        if response.status != "completed":
+            raise RuntimeError(f"{record['id']}: grader response is {response.status}")
+        answer = json.loads(response.output_text)
         with self.lock:
-            self.usage.update(
-                {k: data.get("usage", {}).get(k, 0) for k in ("input_tokens", "output_tokens")}
-            )
+            if response.usage:
+                self.usage.update(
+                    input_tokens=response.usage.input_tokens,
+                    output_tokens=response.usage.output_tokens,
+                )
             self.cache[request] = answer
             append_jsonl(GRADES, [{"request": request, "answer": answer}])
         return answer

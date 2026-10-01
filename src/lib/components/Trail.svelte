@@ -1,6 +1,7 @@
 <script lang="ts">
 	// Show the path from the feeling to the world on screen. A long path folds its middle steps.
 	import type { Item } from '$lib/mood/types';
+	import Chevron from './Chevron.svelte';
 
 	let {
 		feeling,
@@ -73,6 +74,10 @@
 	}}
 />
 
+{#snippet arrow()}
+	<span class="arrow"><Chevron /></span>
+{/snippet}
+
 <nav class="trail" aria-label="your path" bind:this={nav} {onfocusout} {@attach watch}>
 	<ol class="pill" {@attach toEnd}>
 		<li class="first">
@@ -86,7 +91,7 @@
 		</li>
 		{#if folded}
 			<li>
-				<span class="arrow" aria-hidden="true">→</span>
+				{@render arrow()}
 				<button
 					type="button"
 					class="step more"
@@ -100,14 +105,14 @@
 		{/if}
 		{#each tail as step, i (step.id)}
 			<li>
-				<span class="arrow" aria-hidden="true">→</span>
+				{@render arrow()}
 				<button type="button" class="step" title={step.title} onclick={() => go(hidden + i + 1)}
 					>{step.title}</button
 				>
 			</li>
 		{/each}
 		<li aria-current="step">
-			<span class="arrow" aria-hidden="true">→</span>
+			{@render arrow()}
 			<span class="step here" title={current}>{current}</span>
 		</li>
 	</ol>
@@ -188,8 +193,15 @@
 	}
 
 	.arrow {
+		display: flex;
+		flex: none;
 		color: var(--ink-soft);
-		font-style: normal;
+		opacity: 0.7;
+	}
+
+	/* Between two steps, the chevron sits centered. It does not lean toward the text before it. */
+	.arrow :global(.chevron) {
+		margin-left: 0;
 	}
 
 	.step {
@@ -294,17 +306,16 @@
 		line-height: 1.35;
 		text-align: left;
 		cursor: pointer;
-		transition: color 200ms var(--ease);
+		transition:
+			color 200ms var(--ease),
+			background-color 200ms var(--ease);
 	}
 
+	/* A tint fills the whole row on hover, the way an option in a select lights up. */
 	button.row:hover,
 	button.row:focus-visible {
+		background: color-mix(in oklab, var(--ink) 9%, transparent);
 		color: var(--ink);
-	}
-
-	button.row:hover .name {
-		text-decoration: underline 1px;
-		text-underline-offset: 0.25em;
 	}
 
 	button.row:focus-visible {
@@ -312,7 +323,9 @@
 		outline-offset: -1px;
 	}
 
+	/* The world on screen keeps a fainter tint, like the selected option. */
 	.row.here {
+		background: color-mix(in oklab, var(--ink) 5%, transparent);
 		color: var(--ink);
 		cursor: default;
 	}

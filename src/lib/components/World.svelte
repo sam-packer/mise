@@ -2,6 +2,7 @@
 	// Show one work as its own world: the work in the middle, its path above, its neighbors below.
 	import type { Item, World } from '$lib/mood/types';
 	import type { LoadedFace } from './typeface';
+	import Chevron from './Chevron.svelte';
 	import SongLinks from './SongLinks.svelte';
 	import Wall from './Wall.svelte';
 	import Trail from './Trail.svelte';
@@ -124,7 +125,6 @@
 			</p>
 
 			<p class="vibe">{item.vibe}</p>
-			<p class="scent"><span class="kicker">scent</span> {world.scent.text}</p>
 
 			{#if canPlay}
 				<audio
@@ -157,10 +157,10 @@
 					<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external link -->
 					<a href={item.links.primary} target="_blank" rel="noopener">
 						{item.category === 'art'
-							? 'see it at the museum →'
+							? 'see it at the museum'
 							: item.category === 'poem'
-								? 'read more →'
-								: 'more about it →'}
+								? 'read more'
+								: 'more about it'}<Chevron />
 					</a>
 				{/if}
 			</div>
@@ -435,16 +435,6 @@
 		font-size: 1.2rem;
 		line-height: 1.45;
 		text-wrap: pretty;
-	}
-
-	.meta .scent {
-		margin-top: 0.9rem;
-		color: var(--ink-soft);
-		font-size: 0.95rem;
-	}
-
-	.scent .kicker {
-		margin-right: 0.35rem;
 	}
 
 	.player {

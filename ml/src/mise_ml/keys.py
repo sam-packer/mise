@@ -96,7 +96,3 @@ def listenbrainz() -> dict[str, str]:
 
 def lastfm() -> dict[str, str]:
     return {"api_key": env("LASTFM_API_KEY")}
-
-
-def openai() -> dict[str, str]:
-    return {"Authorization": f"Bearer {env('OPENAI_API_KEY')}"}

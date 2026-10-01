@@ -173,6 +173,7 @@ def prepare(cfg: dict[str, str]) -> tuple[dict, dict[str, Path | bytes], dict[st
     # Images: key by content, and point items.json at the public URL.
     images: dict[str, Path] = {}
     by_file: dict[Path, str] = {}
+    urls: dict[str, str] = {}
     for item in progress(items, desc="hash images", unit="item"):
         if not item["image"]:
             continue
@@ -183,7 +184,8 @@ def prepare(cfg: dict[str, str]) -> tuple[dict, dict[str, Path | bytes], dict[st
             by_file[path] = f"img/{hashlib.sha256(path.read_bytes()).hexdigest()[:20]}.webp"
         key = by_file[path]
         images[key] = path
-        item["image"]["src"] = f"{cfg['public_url']}/{key}"
+        urls[item["image"]["src"]] = f"{cfg['public_url']}/{key}"
+        item["image"]["src"] = urls[item["image"]["src"]]
 
     # Publish records with their content-addressed image URLs.
     files: dict[str, Path | bytes] = {
@@ -192,7 +194,28 @@ def prepare(cfg: dict[str, str]) -> tuple[dict, dict[str, Path | bytes], dict[st
     files[manifest["files"]["items"]["path"]] = json.dumps(
         items, ensure_ascii=False, separators=(",", ":")
     ).encode()
+    # The sample rooms hold copies of items, so they get the same image URLs.
+    for name, path in public.items():
+        if name.startswith("samples/") and name != "samples/index.json":
+            files[name] = json.dumps(
+                repoint(json.loads(path.read_text(encoding="utf-8")), urls),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode()
     return manifest, files, images
+
+
+def repoint(value: Any, urls: dict[str, str]) -> Any:
+    """Replace each item's local image src under `value` with its public URL."""
+    if isinstance(value, list):
+        return [repoint(v, urls) for v in value]
+    if not isinstance(value, dict):
+        return value
+    out = {k: repoint(v, urls) for k, v in value.items()}
+    image = out.get("image")
+    if isinstance(image, dict) and image.get("src") in urls:
+        out["image"] = {**image, "src": urls[image["src"]]}
+    return out
 
 
 def plan() -> list[str]:

@@ -23,25 +23,19 @@ LIGHT_NOTES = {
 class Vocab:
     lights: list[str]
     typefaces: list[dict[str, str]]
-    scents: list[dict[str, str]]
     digest: str
 
     @property
     def typeface_ids(self) -> list[str]:
         return [t["id"] for t in self.typefaces]
 
-    @property
-    def scent_ids(self) -> list[str]:
-        return [s["id"] for s in self.scents]
-
-    def sizes(self) -> tuple[int, int, int]:
-        return len(self.lights), len(self.typefaces), len(self.scents)
+    def sizes(self) -> tuple[int, int]:
+        return len(self.lights), len(self.typefaces)
 
     def prompt_block(self) -> str:
         lights = "\n".join(f"- {x}: {LIGHT_NOTES.get(x, x)}" for x in self.lights)
         faces = "\n".join(f"- {t['id']}: {t['family']}" for t in self.typefaces)
-        scents = "\n".join(f"- {s['id']}: {s['text']}" for s in self.scents)
-        return f"LIGHTS\n{lights}\n\nTYPEFACES\n{faces}\n\nSCENTS\n{scents}"
+        return f"LIGHTS\n{lights}\n\nTYPEFACES\n{faces}"
 
 
 def load_vocab() -> Vocab:
@@ -52,7 +46,6 @@ def load_vocab() -> Vocab:
     return Vocab(
         lights=list(data["lights"]),
         typefaces=list(data["typefaces"]),
-        scents=list(data["scents"]),
         digest=hashlib.sha1(raw).hexdigest(),
     )
 

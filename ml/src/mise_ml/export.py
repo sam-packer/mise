@@ -287,7 +287,7 @@ def calibrate_heads(
 ) -> dict[str, dict[str, Any]]:
     """Fit training-label priors and choose each correction on validation feelings."""
     qs = load_queries(catalog, vocab, TeacherConfig())
-    names = ("light", "typeface", "scent")
+    names = ("light", "typeface")
     train = qs.where("train")
     val = qs.where("val")
     val = val[np.any([getattr(qs, name)[val] >= 0 for name in names], axis=0)]
@@ -355,18 +355,22 @@ def common_words(tokenizer: PreTrainedTokenizerBase, items: list[dict[str, Any]]
     )
 
 
+def bun() -> str:
+    path = shutil.which("bun")
+    if not path:
+        raise SystemExit("install Bun before exporting the browser bundle")
+    return path
+
+
 def write_name_data(bundle: Path, vectors: np.ndarray, words: list[str]) -> None:
     """Choose representatives with the shared search code before fp16 conversion."""
-    bun = shutil.which("bun")
-    if not bun:
-        raise SystemExit("install Bun before exporting the browser bundle")
     with TemporaryDirectory(prefix="mise-names-") as directory:
         tmp = Path(directory)
         (tmp / "vectors.bin").write_bytes(vectors.astype("<f4").tobytes())
         write_json(tmp / "words.json", words)
         subprocess.run(
             [
-                bun,
+                bun(),
                 "--no-env-file",
                 str(REPO_ROOT / "scripts" / "build-name-data.ts"),
                 str(bundle / "items.json"),
@@ -377,6 +381,15 @@ def write_name_data(bundle: Path, vectors: np.ndarray, words: list[str]) -> None
             cwd=REPO_ROOT,
             check=True,
         )
+
+
+def write_samples(bundle: Path) -> None:
+    """Run the app's sample feelings through the finished bundle with the browser engine."""
+    subprocess.run(
+        [bun(), "--no-env-file", str(REPO_ROOT / "scripts" / "build-samples.ts"), str(bundle)],
+        cwd=REPO_ROOT,
+        check=True,
+    )
 
 
 def write_bundle(
@@ -447,6 +460,7 @@ def write_bundle(
         "counts": {"items": len(items)},
     }
     write_json(BUNDLE / "manifest.json", manifest)
+    write_samples(BUNDLE)
     counts = Counter(it["category"] for it in items)
     size = sum(p.stat().st_size for p in BUNDLE.rglob("*") if p.is_file())
     log.info(
@@ -467,7 +481,6 @@ def check_outputs(
         "palette": (1, 5, 3),
         "light": (1, sizes[0]),
         "typeface": (1, sizes[1]),
-        "scent": (1, sizes[2]),
     }
     for name, shape in expected.items():
         if out[name].shape != shape:

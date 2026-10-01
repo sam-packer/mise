@@ -148,7 +148,6 @@ export async function createMoodEngine(io: EngineIO): Promise<MoodEngine> {
 		names.representatives
 	);
 	const typefaces = new Map(vocab.typefaces.map((t) => [t.id, t]));
-	const scents = new Map(vocab.scents.map((s) => [s.id, s]));
 
 	function onnxHeads(outputs: ORT.InferenceSession.ReturnType) {
 		const names = manifest.encoder.outputs;
@@ -156,7 +155,7 @@ export async function createMoodEngine(io: EngineIO): Promise<MoodEngine> {
 			if (!name || !outputs[name]) throw new Error(`missing model output: ${name}`);
 			return outputs[name].data as Float32Array;
 		};
-		const choice = (name: 'light' | 'typeface' | 'scent') => {
+		const choice = (name: 'light' | 'typeface') => {
 			const logits = read(names[name]);
 			const correction = manifest.heads.corrections?.[name];
 			if (!correction) return argmax(logits);
@@ -172,19 +171,17 @@ export async function createMoodEngine(io: EngineIO): Promise<MoodEngine> {
 		return {
 			palette,
 			light: vocab.lights[choice('light')],
-			typeface: vocab.typefaces[choice('typeface')].id,
-			scent: vocab.scents[choice('scent')].id
+			typeface: vocab.typefaces[choice('typeface')].id
 		};
 	}
 
 	function toRoom(
 		heads: NonNullable<MatchResult['heads']>
-	): Pick<World, 'palette' | 'light' | 'typeface' | 'scent'> {
+	): Pick<World, 'palette' | 'light' | 'typeface'> {
 		return {
 			palette: heads.palette,
 			light: heads.light as Light,
-			typeface: typefaces.get(heads.typeface)!,
-			scent: scents.get(heads.scent)!
+			typeface: typefaces.get(heads.typeface)!
 		};
 	}
 
