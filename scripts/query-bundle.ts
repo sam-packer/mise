@@ -4,7 +4,7 @@ import * as ortNode from 'onnxruntime-node';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createMoodEngine, type EngineIO } from '../src/lib/mood/engine';
-import { CATEGORIES, type OKLab } from '../src/lib/mood/types';
+import type { OKLab } from '../src/lib/mood/types';
 
 const BUNDLE = path.resolve(import.meta.dirname, '..', 'static', 'bundle');
 
@@ -58,11 +58,8 @@ for (const query of queries) {
 	console.log(`  light     ${mood.light}`);
 	console.log(`  typeface  ${mood.typeface.family}`);
 	console.log(`  scent     ${mood.scent.text}`);
-	for (const c of CATEGORIES) {
-		const item = mood.picks[c];
-		console.log(
-			`  ${c.padEnd(9)} ${item ? `${item.title}, ${item.creator} (${item.year})` : 'none'}`
-		);
+	for (const item of mood.picks) {
+		console.log(`  ${item.category.padEnd(9)} ${item.title}, ${item.creator} (${item.year})`);
 	}
 	console.log(`  ms        ${mood.ms.toFixed(1)}`);
 }

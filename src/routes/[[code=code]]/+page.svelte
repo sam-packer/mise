@@ -10,14 +10,7 @@
 	import { resolve } from '$app/paths';
 	import { BUNDLE_URL } from '$lib/bundle';
 	import { feelingCode, normalize, pathCode, shared } from '$lib/code';
-	import {
-		CATEGORIES,
-		type Item,
-		type Mood,
-		type OKLab,
-		type Palette,
-		type World
-	} from '$lib/mood/types';
+	import type { Item, Mood, OKLab, Palette, World } from '$lib/mood/types';
 	import { infer, ready, start, world as requestWorld } from '$lib/mood/client';
 	import { lightStrength, neutralTokens, paletteFavicon, paletteToTokens } from '$lib/color/oklab';
 	import { applyTokens, tweenTokens } from '$lib/color/tween';
@@ -127,10 +120,6 @@
 	const arriving = $derived(target.length > 0 && !world && !error);
 	const scene = $derived(shown?.world ?? mood);
 	const focus = $derived(pending ?? left);
-	const picks = $derived.by(() => {
-		const m = mood;
-		return m ? CATEGORIES.flatMap((c) => (m.picks[c] ? [m.picks[c]] : [])) : [];
-	});
 	const favicon = $derived(paletteFavicon(scene ? scene.palette : NEUTRAL));
 	const strength = $derived(
 		scene ? lightStrength(paletteToTokens(scene.palette, scene.light), scene.light) : 1
@@ -204,7 +193,7 @@
 			waiting = false;
 			face = null;
 			text = '';
-			// Release the focus retained by goto so example rotation can resume.
+			// Release the focus retained by goto so the samples show again.
 			lineRef?.blur();
 			void tweenTokens(neutralTokens(matchMedia('(prefers-color-scheme: dark)').matches));
 			return;
@@ -234,7 +223,7 @@
 		left = null;
 		leaving = false;
 		mood = m;
-		loadFace(my, m, m.picks.poem?.text ?? '');
+		loadFace(my, m, m.picks.map((p) => p.text ?? '').join(''));
 		void savePalette(q, m.palette);
 	}
 
@@ -586,7 +575,13 @@
 
 		{#if mood}
 			{#key mood.query}
-				<Wall items={picks} label="picks" {leaving} active={shown ? null : focus} onopen={travel} />
+				<Wall
+					items={mood.picks}
+					label="picks"
+					{leaving}
+					active={shown ? null : focus}
+					onopen={travel}
+				/>
 			{/key}
 			{#key `${mood.query}\n${mood.scent.id}`}
 				<div class="scent" class:leaving style:--delay="{scentDelay}ms">

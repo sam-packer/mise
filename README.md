@@ -3,7 +3,8 @@
 Live at [mise.art](https://mise.art).
 
 Type how you feel in one sentence, like "a snowy december and i just made warm hot chocolate". mise
-answers with a small wall of things that match it: an artwork, a film, a song, a poem, and a book.
+answers with a wall of things that match it: two artworks, two films, two songs, two poems, and two
+books.
 The whole page takes on the feeling too. Its colors, its light, and its typeface change, and a line
 at the bottom names a scent.
 
@@ -19,10 +20,11 @@ You can describe that feeling in a sentence, and mise gives you a place to start
 
 ## How it works for the user
 
-1. Open the site. A sample feeling rotates in the text box. Press Tab to use it, or type your own.
-2. Press Enter. A soft pulse shows while the model loads. The page fades to the new palette, five
-   tiles rise in (an artwork, a film, a song, a poem, and a book), and a scent writes itself out
-   below them.
+1. Open the site. Type a feeling in the text box, or click one of the sample feelings under it.
+   Click the refresh button to see other samples.
+2. Press Enter. A soft pulse shows while the model loads. The page fades to the new palette, ten
+   tiles rise in (two of each: artworks, films, songs, poems, and books), and a scent writes itself
+   out below them.
 3. Click a tile to travel into that work's world. The page takes on the work's own palette, light,
    and typeface, and the works nearest to it fill the wall. A song plays a 30-second preview, and
    each work links to its source, such as IMDb, Hardcover, a music service, or the museum page.

@@ -90,7 +90,8 @@ export type Mood = {
 	/** Inference time in milliseconds. */
 	ms: number;
 
-	picks: Record<Category, Item>;
+	/** The works closest to the feeling, in category order. */
+	picks: Item[];
 	/**
 	 * The catalog item named in the query, or null. Its vector guides the picks, which exclude the item itself.
 	 */
@@ -105,7 +106,7 @@ export type World = Pick<Mood, 'palette' | 'light' | 'typeface' | 'scent'> & {
 };
 
 export type MatchResult = {
-	picks: Record<Category, Item>;
+	picks: Item[];
 	anchor: Item | null;
 	heads?: { palette: Palette; light: string; typeface: string; scent: string };
 };

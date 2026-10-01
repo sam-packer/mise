@@ -109,16 +109,6 @@
 					height={item.image.h}
 					decoding="async"
 				/>
-				{#if canPlay && !previewFailed}
-					<button
-						type="button"
-						class="art"
-						onclick={toggle}
-						aria-label={paused ? 'play preview' : 'pause preview'}
-					>
-						<span class="badge" aria-hidden="true"><i class="icon" class:paused></i></span>
-					</button>
-				{/if}
 			{:else}
 				<p class="text">{item.text}</p>
 			{/if}
@@ -333,40 +323,6 @@
 		width: auto;
 		height: auto;
 		object-fit: contain;
-	}
-
-	/* The whole cover plays the preview. The badge in its corner shows that it can. */
-	.art {
-		position: absolute;
-		inset: 0;
-		display: flex;
-		align-items: flex-end;
-		justify-content: flex-end;
-		padding: clamp(0.75rem, 2vw, 1.25rem);
-		border: 0;
-		background: none;
-		cursor: pointer;
-	}
-
-	.art:focus-visible {
-		outline: 2px solid var(--ink);
-		outline-offset: -6px;
-	}
-
-	/* Solid ink like the close control, so the icon keeps its contrast over any cover. */
-	.badge {
-		display: grid;
-		place-items: center;
-		width: 3rem;
-		height: 3rem;
-		background: var(--ink);
-		color: var(--ground);
-		transition: transform 400ms var(--ease);
-	}
-
-	.art:hover .badge,
-	.art:focus-visible .badge {
-		transform: scale(1.06);
 	}
 
 	/* A drawn play triangle, or two pause bars, so the icon takes the ink color. */
@@ -644,15 +600,6 @@
 	@media (prefers-reduced-motion: reduce) {
 		.meta {
 			animation-name: appear;
-		}
-
-		.badge {
-			transition: none;
-		}
-
-		.art:hover .badge,
-		.art:focus-visible .badge {
-			transform: none;
 		}
 	}
 </style>

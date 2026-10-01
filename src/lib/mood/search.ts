@@ -24,6 +24,8 @@ const PALETTE_DOMINANT = 0.7;
 /** Neighbors of a work in its own category and in each other category. */
 const WORLD_SAME = 2;
 const WORLD_OTHER = 2;
+/** Picks of a feeling in each category: as many as a world shows. */
+const PICKS_EACH = 2;
 
 /** Average hue on a circle and chroma separately to prevent distinct hues from producing grey. */
 function blendPalettes(palettes: Palette[], weights: number[]): Palette {
@@ -111,16 +113,14 @@ export function createSearch(
 		return found;
 	}
 
-	function pick(q: Float32Array, anchor: Item | null): Record<Category, Item> {
+	function pick(q: Float32Array, anchor: Item | null): Item[] {
 		const near = nearest(
 			q,
-			() => 1,
+			() => PICKS_EACH,
 			(i) =>
 				anchor !== null && (items[i].creator === anchor.creator || items[i].title === anchor.title)
 		);
-		const picks = {} as Record<Category, Item>;
-		for (const category of CATEGORIES) if (near[category][0]) picks[category] = near[category][0];
-		return picks;
+		return CATEGORIES.flatMap((c) => near[c]);
 	}
 
 	const anchorHeads = createAnchorHeads(anchors, anchorVectors, dims);

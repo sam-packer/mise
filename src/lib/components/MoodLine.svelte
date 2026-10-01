@@ -1,8 +1,9 @@
 <script lang="ts">
-	// Collect feeling text and offer rotating examples before the page requests a mood.
+	// Collect feeling text, and offer sample feelings under the line before the page shows a mood.
 	import { onMount } from 'svelte';
 	import { fade } from 'svelte/transition';
 	import { MAX_FEELING } from '$lib/code';
+	import Examples from './Examples.svelte';
 
 	let {
 		value = $bindable(''),
@@ -23,38 +24,22 @@
 		/** The model is still loading. */
 		waiting?: boolean;
 		onsubmit: (text: string) => void;
-		/** The example on screen changed. */
+		/** The sample feeling that the tagline shows changed. */
 		onexample?: (text: string) => void;
 		ref?: HTMLTextAreaElement | null;
 	} = $props();
 
+	/** The empty line says what to do and what comes back. */
+	const PLACEHOLDER = 'describe a moment. get its art, songs, and stories.';
+
 	const id = $props.id();
-	let order = $state<string[]>([]);
-	let index = $state(0);
 	let focused = $state(false);
 	let coarse = $state(false);
-	const example = $derived(order.length ? order[index % order.length] : '');
 	const empty = $derived(value === '');
 
-	// Shuffle after mounting to avoid a mismatch between server HTML and browser state.
 	onMount(() => {
 		coarse = matchMedia('(pointer: coarse)').matches;
-		const shuffled = [...examples];
-		for (let i = shuffled.length - 1; i > 0; i--) {
-			const j = Math.floor(Math.random() * (i + 1));
-			[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-		}
-		order = shuffled;
 	});
-
-	// Pause examples while the field has focus, so users can press Tab without selecting a fading sentence.
-	$effect(() => {
-		if (!empty || focused || !order.length) return;
-		const timer = setInterval(() => (index += 1), 4000);
-		return () => clearInterval(timer);
-	});
-
-	$effect(() => onexample?.(example));
 
 	/** A short answer to a command, shown in place of the hint. */
 	let notice = $state('');
@@ -68,20 +53,18 @@
 	const hint = $derived.by(() => {
 		if (notice) return notice;
 		if (waiting) return 'getting the room ready';
-		if (coarse) return empty && focused ? 'tap to use this' : '';
-		if (!focused) return empty || settled ? '' : 'enter to see it';
-		if (empty) return 'tab to use this · enter to see it';
+		if (coarse || empty) return '';
+		if (!focused) return settled ? '' : 'enter to see it';
 		return settled ? 'type to change it · esc to clear' : 'enter to see it';
 	});
 
-	function use() {
-		value = example;
-		ref?.focus({ preventScroll: true });
+	function pick(text: string) {
+		value = text;
+		onsubmit(text);
 	}
 
 	function clear() {
 		value = '';
-		index += 1;
 		ref?.focus({ preventScroll: true });
 	}
 
@@ -99,17 +82,10 @@
 	}
 
 	function onkeydown(e: KeyboardEvent) {
-		// Keep Tab in the field to fill in the example, or while an edit is not submitted. Shift+Tab always leaves.
-		if (e.key === 'Tab' && !e.shiftKey) {
-			if (empty && example) {
-				e.preventDefault();
-				use();
-				return;
-			}
-			if (!empty && !settled) {
-				e.preventDefault();
-				return;
-			}
+		// Keep Tab in the field while an edit is not submitted. Shift+Tab always leaves.
+		if (e.key === 'Tab' && !e.shiftKey && !empty && !settled) {
+			e.preventDefault();
+			return;
 		}
 		if (e.key === 'Escape' && settled) {
 			e.preventDefault();
@@ -135,8 +111,7 @@
 			value = '';
 			return;
 		}
-		if (empty) value = example;
-		onsubmit(value);
+		if (!empty) onsubmit(value);
 	}
 </script>
 
@@ -161,26 +136,13 @@
 			autocapitalize="off"
 			spellcheck="false"
 			enterkeyhint="go"
-			placeholder={example}
+			placeholder={PLACEHOLDER}
 			{onmousedown}
 			{onfocus}
 			{onkeydown}
 			oninput={() => (notice = '')}></textarea>
-		{#if empty && example}
-			<!-- Prevent blur so users can select an example without closing the touch keyboard. -->
-			<div
-				class="ghost"
-				class:tappable={coarse && focused}
-				aria-hidden="true"
-				onmousedown={(e) => e.preventDefault()}
-				onclick={use}
-			>
-				{#key example}
-					<span in:fade={{ duration: 700 }} out:fade={{ duration: 500 }}
-						><i class="caret"></i>{example}</span
-					>
-				{/key}
-			</div>
+		{#if empty}
+			<div class="ghost" aria-hidden="true"><span><i class="caret"></i>{PLACEHOLDER}</span></div>
 		{/if}
 	</div>
 	<div class="edge" aria-hidden="true"></div>
@@ -208,6 +170,10 @@
 				{hint}
 			</p>
 		{/key}
+	{:else if empty && !boxed}
+		<div class="samples" transition:fade={{ duration: 250 }}>
+			<Examples {examples} onpick={pick} {onexample} />
+		</div>
 	{/if}
 </div>
 
@@ -287,11 +253,6 @@
 		pointer-events: none;
 		color: var(--ink-soft);
 		user-select: none;
-	}
-
-	.ghost.tappable {
-		pointer-events: auto;
-		cursor: pointer;
 	}
 
 	.caret {
@@ -403,6 +364,16 @@
 		letter-spacing: 0.12em;
 		text-align: center;
 		pointer-events: none;
+	}
+
+	/* The samples take the hint's place under the field, wider than the field and out of the flow. */
+	.samples {
+		position: absolute;
+		top: calc(100% + 1.6rem);
+		left: 50%;
+		width: min(100vw - 2 * max(2.5vw, 12px), 64rem);
+		transform: translateX(-50%);
+		cursor: auto;
 	}
 
 	@keyframes blink {

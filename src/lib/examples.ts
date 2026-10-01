@@ -1,4 +1,4 @@
-// Ghost suggestions for the empty line: scenes and feelings, never bare mood words. Some are short,
+// Sample feelings under the empty line: scenes and feelings, never bare mood words. Some are short,
 // casual, and first person, to show that a feeling does not need to be written perfectly.
 
 export const EXAMPLES = [
