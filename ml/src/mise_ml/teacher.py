@@ -2,25 +2,34 @@
 
 import dataclasses
 import gc
+import json
+import logging
 import time
+from typing import Any
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
 
-from mise_ml.config import ML_ROOT, MODELS, SEED, TeacherConfig
-from mise_ml.data import load_catalog, load_queries, recall_at_k
+from mise_ml.config import ML_ROOT, MODELS, SEED, TEACHER_PARAMS, TUNING_SET, TeacherConfig
+from mise_ml.data import QuerySet, load_catalog, load_queries, recall_at_k
 from mise_ml.features import ITEM_TEMPLATE, QUERY_TEMPLATE, FeatureStore, shared_encoder
 from mise_ml.heads import ChoiceHeads, Mlp, palette_loss
 from mise_ml.log import elapsed, get, num, progress
+from mise_ml.rated import brief as rated_brief
+from mise_ml.rated import load_rated, rated_scores
 from mise_ml.training import cosine_schedule
-from mise_ml.util import make_deterministic
+from mise_ml.util import make_deterministic, write_json
 from mise_ml.vocab import load_vocab
 
 log = get(__name__)
 CHECKPOINT = MODELS / "teacher.pt"
 OUTPUTS = MODELS / "teacher_outputs.pt"
+# On an RTX 5090 an epoch takes about 0.6 s at batch 1024, 1.0 s at 512, and 1.9 s at 256.
+# With 21.5 epochs on average, a trial takes about 25 s, so 50 trials take about 21 min.
+TRIAL_SECONDS = 25
+TRIALS = 50
 
 
 class Teacher(nn.Module):
@@ -29,12 +38,21 @@ class Teacher(nn.Module):
         self.query = Mlp(d_in, cfg.hidden, cfg.dims, cfg.dropout)
         self.item = Mlp(d_in, cfg.hidden, cfg.dims, cfg.dropout)
         self.heads = ChoiceHeads(d_in, 512, sizes, cfg.dropout)
+        self.raw_weight = cfg.raw_weight
+
+    def embed(self, head: nn.Module, x: torch.Tensor) -> torch.Tensor:
+        """Join the head and raw vectors, so a dot product mixes the two cosines by raw_weight."""
+        e = F.normalize(head(x), dim=-1)
+        if not self.raw_weight:
+            return e
+        r = self.raw_weight
+        return torch.cat([(1 - r) ** 0.5 * e, r**0.5 * F.normalize(x, dim=-1)], -1)
 
     def embed_queries(self, x: torch.Tensor) -> torch.Tensor:
-        return F.normalize(self.query(x), dim=-1)
+        return self.embed(self.query, x)
 
     def embed_items(self, x: torch.Tensor) -> torch.Tensor:
-        return F.normalize(self.item(x), dim=-1)
+        return self.embed(self.item, x)
 
 
 def query_store(cfg: TeacherConfig) -> FeatureStore:
@@ -58,9 +76,34 @@ def in_chunks(fn, x: torch.Tensor, size: int = 8192) -> torch.Tensor:
     return torch.cat([fn(x[i : i + size]) for i in range(0, len(x), size)])
 
 
+def drop_near_eval(qs: QuerySet, fq: torch.Tensor, threshold: float) -> None:
+    """Mark as "dropped" the train, val, and distill texts whose Qwen query features (`fq`, one
+    row per qs text) have a cosine of at least `threshold` with any eval feeling. load_queries
+    removes only exact copies, so rewordings such as "i am" for "i'm" otherwise train on the rated
+    feelings."""
+    evals = fq[torch.as_tensor(qs.where("eval"), device=fq.device)]
+    rows = qs.where("train", "val", "distill")
+    near = np.zeros(len(qs.texts), dtype=bool)
+    if len(evals) and len(rows):
+        # The cached features are L2-normalized, so a dot product is the cosine.
+        best = in_chunks(
+            lambda x: (x @ evals.T).max(1).values, fq[torch.as_tensor(rows, device=fq.device)]
+        )
+        near[rows] = (best >= threshold).cpu().numpy()
+    counts = ", ".join(
+        f"{s} {num(int((near & (qs.split == s)).sum()))}" for s in ("train", "val", "distill")
+    )
+    log.info(
+        f"dropped {num(int(near.sum()))} training texts with a query cosine >= {threshold} to "
+        f"one of {num(len(evals))} eval feelings ({counts})"
+    )
+    qs.split = np.where(near, "dropped", qs.split)
+
+
 class Trainer:
+    """Load the queries and cached features once, then train heads for one config or many."""
+
     def __init__(self, cfg: TeacherConfig) -> None:
-        self.cfg = cfg
         self.vocab = load_vocab()
         self.catalog = load_catalog()
         self.qs = load_queries(self.catalog, self.vocab, cfg, include_distill=True)
@@ -77,6 +120,11 @@ class Trainer:
             item_store(cfg).get(self.catalog.texts), dtype=torch.float32, device=dev
         )
         self.fq = torch.tensor(query_store(cfg).get(self.qs.texts), dtype=torch.float32, device=dev)
+        drop_near_eval(self.qs, self.fq, cfg.near_eval_cosine)
+        self.tuning = load_rated(TUNING_SET, self.catalog)
+        self.tuning_fq = torch.tensor(
+            query_store(cfg).get(self.tuning.feelings), dtype=torch.float32, device=dev
+        )
         shared_encoder.cache_clear()
         gc.collect()
         torch.cuda.empty_cache()
@@ -88,7 +136,13 @@ class Trainer:
         self.palette = t(self.qs.palette)
         self.has_palette = t(self.qs.has_palette)
         self.choices = [t(self.qs.light), t(self.qs.typeface)]
-        self.model = Teacher(self.fi.shape[1], cfg, self.vocab.sizes()).to(dev)
+        self.build(cfg)
+
+    def build(self, cfg: TeacherConfig) -> None:
+        """Start fresh heads for cfg. The fixed seed gives equal configs equal runs."""
+        self.cfg = cfg
+        torch.manual_seed(SEED)
+        self.model = Teacher(self.fi.shape[1], cfg, self.vocab.sizes()).cuda()
 
     def losses(self, b: torch.Tensor, full_softmax: bool = False) -> dict[str, torch.Tensor]:
         cfg = self.cfg
@@ -113,8 +167,10 @@ class Trainer:
             y = labels[b]
             m = y >= 0
             if m.any():
+                # Validation uses no smoothing, so val losses of two configs compare.
+                smoothing = cfg.label_smoothing if self.model.training else 0.0
                 out[name] = cfg.choice_weight * F.cross_entropy(
-                    logits[m], y[m], label_smoothing=cfg.label_smoothing
+                    logits[m], y[m], label_smoothing=smoothing
                 )
         return out
 
@@ -127,9 +183,13 @@ class Trainer:
                 parts.setdefault(k, []).append(v.item())
         metrics = {k: float(np.mean(v)) for k, v in parts.items()}
         metrics["loss"] = sum(metrics.values())
+        items = in_chunks(self.model.embed_items, self.fi).cpu().numpy()
+        tuning_q = in_chunks(self.model.embed_queries, self.tuning_fq).cpu().numpy()
+        metrics.update(
+            {f"tuning_{k}": v for k, v in rated_scores(self.tuning, tuning_q, items).items()}
+        )
         r = rows[self.pos[rows] >= 0]
         if len(r):
-            items = in_chunks(self.model.embed_items, self.fi).cpu().numpy()
             q = in_chunks(self.model.embed_queries, self.fq[r]).cpu().numpy()
             metrics["recall@10"] = recall_at_k(
                 q, self.pos[r].cpu().numpy(), items, self.catalog.categories
@@ -137,8 +197,13 @@ class Trainer:
         self.model.train()
         return metrics
 
-    def train(self) -> None:
+    def train(self, save: bool = True) -> dict[str, float]:
+        """Return the val metrics of the epoch with the best tuning-set objective.
+
+        With save, write that epoch to the checkpoint. Without it (a search trial), log at DEBUG.
+        """
         cfg = self.cfg
+        level = logging.INFO if save else logging.DEBUG
         train = torch.as_tensor(self.qs.where("train"), device="cuda")
         val = torch.as_tensor(self.qs.where("val"), device="cuda")
         train_pos = train[self.pos[train] >= 0]
@@ -146,10 +211,11 @@ class Trainer:
         steps = cfg.epochs * -(-len(train) // cfg.batch_size)
         sched = cosine_schedule(opt, steps, cfg.warmup_ratio)
         gen = torch.Generator(device="cuda").manual_seed(SEED)
-        best, best_epoch = -1.0, -1
-        log.info(
-            f"training heads: {cfg.epochs} epochs, batch {cfg.batch_size}, lr {cfg.lr}, "
-            f"{num(len(train))} train rows ({num(len(train_pos))} with an item)"
+        best, best_epoch, best_metrics = -1.0, -1, {}
+        log.log(
+            level,
+            f"training heads: {cfg.epochs} epochs, batch {cfg.batch_size}, lr {cfg.lr:.3g}, "
+            f"{num(len(train))} train rows ({num(len(train_pos))} with an item)",
         )
         start_all = time.perf_counter()
         for epoch in range(cfg.epochs):
@@ -171,21 +237,26 @@ class Trainer:
                         loss=f"{total / i:.4f}", lr=f"{sched.get_last_lr()[0]:.2e}", refresh=False
                     )
             metrics = self.validate(val)
-            improved = metrics["recall@10"] > best
+            improved = metrics["tuning_objective"] > best
             if improved:
-                best, best_epoch = metrics["recall@10"], epoch + 1
-                self.save()
-            log.info(
+                best, best_epoch, best_metrics = metrics["tuning_objective"], epoch + 1, metrics
+                if save:
+                    self.save()
+            log.log(
+                level,
                 f"epoch {epoch + 1}/{cfg.epochs} ({elapsed(start)}): train loss "
                 f"{total / max(i, 1):.4f}; val loss {metrics['loss']:.4f}, "
-                f"recall@10 {metrics.get('recall@10', float('nan')):.3f}; "
-                f"best {best:.4f} (epoch {best_epoch}){', saved' if improved else ''}"
+                f"recall@10 {metrics.get('recall@10', float('nan')):.3f}; tuning "
+                f"{rated_brief(tuned(metrics))}; best {best:.4f} (epoch {best_epoch})"
+                f"{', saved' if improved and save else ''}",
             )
             log.debug("epoch %d val parts: %s", epoch + 1, metrics)
-        log.info(
-            f"training done in {elapsed(start_all)}: best val recall@10 {best:.4f} at epoch "
-            f"{best_epoch} -> {CHECKPOINT.relative_to(ML_ROOT).as_posix()}"
-        )
+        if save:
+            log.info(
+                f"training done in {elapsed(start_all)}: best tuning objective {best:.4f} at epoch "
+                f"{best_epoch} -> {CHECKPOINT.relative_to(ML_ROOT).as_posix()}"
+            )
+        return best_metrics
 
     def save(self) -> None:
         MODELS.mkdir(parents=True, exist_ok=True)
@@ -236,10 +307,107 @@ class Trainer:
         )
 
 
+def tuned(metrics: dict[str, float]) -> dict[str, float]:
+    """The tuning-set scores inside a metrics dict, without the prefix."""
+    return {k.removeprefix("tuning_"): v for k, v in metrics.items() if k.startswith("tuning_")}
+
+
+def brief(params: dict[str, Any]) -> str:
+    return ", ".join(
+        f"{k} {v:.3g}" if isinstance(v, float) else f"{k} {v}" for k, v in params.items()
+    )
+
+
+def tune(trainer: Trainer, trials: int = TRIALS) -> dict[str, Any]:
+    """Search the head settings on the tuning set and write the best to TEACHER_PARAMS.
+
+    Trial 1 is the default config, so the last line compares the best trial with it.
+    Trials do not write a checkpoint. No pruner: trials have different epoch counts and
+    LR schedules, so the objective at one epoch does not compare across trials.
+    """
+    import optuna
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    base = TeacherConfig()
+    best = -1.0
+
+    def objective(trial: optuna.Trial) -> float:
+        nonlocal best
+        params = {
+            "lr": trial.suggest_float("lr", 1e-4, 3e-3, log=True),
+            "weight_decay": trial.suggest_float("weight_decay", 1e-4, 0.1, log=True),
+            "dropout": trial.suggest_float("dropout", 0.0, 0.5),
+            "epochs": trial.suggest_int("epochs", 3, 40),
+            "hidden": trial.suggest_categorical("hidden", [512, 1024, 2048]),
+            "batch_size": trial.suggest_categorical("batch_size", [256, 512, 1024]),
+            "temperature": trial.suggest_float("temperature", 0.02, 0.1),
+            "label_smoothing": trial.suggest_float("label_smoothing", 0.0, 0.2),
+            "warmup_ratio": trial.suggest_float("warmup_ratio", 0.0, 0.15),
+            "raw_weight": trial.suggest_float("raw_weight", 0.0, 1.0),
+        }
+        start = time.perf_counter()
+        trainer.build(dataclasses.replace(base, **params))
+        metrics = trainer.train(save=False)
+        trial.set_user_attr("metrics", metrics)
+        best = max(best, metrics["tuning_objective"])
+        log.info(
+            f"trial {trial.number + 1}/{trials} ({elapsed(start)}): {brief(params)}; tuning "
+            f"{rated_brief(tuned(metrics))}; val recall@10 {metrics['recall@10']:.4f}; "
+            f"best {best:.4f}"
+        )
+        return metrics["tuning_objective"]
+
+    start = time.perf_counter()
+    log.info(
+        f"searching head settings: {trials} trials on the tuning set; a trial takes about "
+        f"{TRIAL_SECONDS} s, so the search takes about {trials * TRIAL_SECONDS // 60} min"
+    )
+    study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=SEED))
+    study.enqueue_trial(
+        {
+            k: getattr(base, k)
+            for k in (
+                "lr",
+                "weight_decay",
+                "dropout",
+                "epochs",
+                "hidden",
+                "batch_size",
+                "temperature",
+                "label_smoothing",
+                "warmup_ratio",
+                "raw_weight",
+            )
+        }
+    )
+    study.optimize(objective, n_trials=trials)
+    default, top = study.trials[0], study.best_trial
+    log.info(
+        f"search done in {elapsed(start)}: trial {top.number + 1} tuning objective "
+        f"{top.value:.4f} vs default {default.value:.4f}; {brief(top.params)}"
+    )
+    log.info(
+        "val losses, best vs default: "
+        + ", ".join(
+            f"{k} {top.user_attrs['metrics'].get(k, float('nan')):.4f} vs "
+            f"{default.user_attrs['metrics'].get(k, float('nan')):.4f}"
+            for k in ("palette", "light", "typeface")
+        )
+    )
+    write_json(TEACHER_PARAMS, top.params)
+    log.info(f"teacher settings -> {TEACHER_PARAMS.relative_to(ML_ROOT).as_posix()}")
+    return top.params
+
+
 def run() -> None:
     start = time.perf_counter()
     make_deterministic(SEED)
     trainer = Trainer(TeacherConfig())
+    if TEACHER_PARAMS.is_file():
+        params = json.loads(TEACHER_PARAMS.read_text(encoding="utf-8"))
+    else:
+        params = tune(trainer)
+    trainer.build(dataclasses.replace(TeacherConfig(), **params))
     trainer.train()
     trainer.write_outputs()
     log.info(f"done in {elapsed(start)}")

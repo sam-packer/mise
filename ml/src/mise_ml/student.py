@@ -1,4 +1,7 @@
-"""Distill the teacher's predictions into a text encoder and heads for the browser."""
+"""Distill the teacher's predictions into a feeling encoder and heads for the browser.
+
+The catalog side is fixed: the teacher's item vectors in a space of the student's dims.
+"""
 
 import dataclasses
 import inspect
@@ -13,15 +16,17 @@ import torch.nn.functional as F
 from torch import nn
 from transformers import AutoModel, AutoTokenizer, PreTrainedModel, PreTrainedTokenizerBase
 
-from mise_ml.config import ML_ROOT, MODELS, SEED, StudentConfig
-from mise_ml.data import fidelity_at_k, load_catalog, recall_at_k, typo_feeling
+from mise_ml.config import ML_ROOT, MODELS, SEED, TUNING_SET, StudentConfig
+from mise_ml.data import fidelity_at_k, load_catalog, load_eval_texts, recall_at_k, typo_feeling
 from mise_ml.heads import ChoiceHeads, kl_logits, palette_loss
 from mise_ml.inference import encode_batches
 from mise_ml.log import elapsed, get, num, progress
+from mise_ml.rated import brief, load_rated, rated_scores
 from mise_ml.teacher import OUTPUTS as TEACHER_OUTPUTS
 from mise_ml.training import cosine_schedule
 from mise_ml.util import hash_fraction, make_deterministic
 from mise_ml.vocab import load_vocab
+from mise_ml.wordpiece import prune
 
 log = get(__name__)
 STUDENT_DIR = MODELS / "student"
@@ -70,13 +75,23 @@ class Student(nn.Module):
         return F.normalize(self.projection(pooled), dim=-1), palette, light, typeface
 
 
-def save_student(model: Student, tokenizer: PreTrainedTokenizerBase, meta: dict) -> None:
-    STUDENT_DIR.mkdir(parents=True, exist_ok=True)
-    model.encoder.save_pretrained(STUDENT_DIR / "encoder")
-    tokenizer.save_pretrained(STUDENT_DIR / "encoder")
-    torch.save(model.heads.state_dict(), STUDENT_DIR / "heads.pt")
-    torch.save(model.projection.state_dict(), STUDENT_DIR / "projection.pt")
-    (STUDENT_DIR / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+def item_space(item_emb: torch.Tensor, dims: int) -> torch.Tensor:
+    """The (teacher dims x dims) map onto the top right singular vectors of the teacher's item
+    vectors: the subspace that best keeps the teacher's item inner products. On the tuning set the
+    teacher scored 0.630 in it and 0.641 in full; raw Qwen vectors cut to 384 dims scored 0.577."""
+    _, _, v = torch.linalg.svd(item_emb.double().cpu(), full_matrices=False)
+    return v[:dims].T.float()
+
+
+def save_student(
+    model: Student, tokenizer: PreTrainedTokenizerBase, meta: dict, path: Path = STUDENT_DIR
+) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    model.encoder.save_pretrained(path / "encoder")
+    tokenizer.save_pretrained(path / "encoder")
+    torch.save(model.heads.state_dict(), path / "heads.pt")
+    torch.save(model.projection.state_dict(), path / "projection.pt")
+    (path / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 
 def load_student(path: Path = STUDENT_DIR) -> tuple[Student, PreTrainedTokenizerBase, dict]:
@@ -189,22 +204,13 @@ def noisy_texts(texts: list[str], rows: np.ndarray, share: float, epoch: int) ->
     return noisy
 
 
-def embed_items(model: "Student", tokens: Pretokenized, cand: torch.Tensor, chunks: int = 4):
-    """Item embeddings in `cand` order, encoded in length-sorted chunks so short texts are not
-    padded to the longest one in the step."""
-    order = tokens.lengths[cand].argsort()
-    parts = [model.embed(**tokens.rows(cand[idx])) for idx in order.chunk(chunks)]
-    back = torch.empty_like(order)
-    back[order] = torch.arange(len(order), device=order.device)
-    return torch.cat(parts)[back]
-
-
-def run() -> None:
-    cfg = StudentConfig()
+def run(cfg: StudentConfig | None = None, out: Path = STUDENT_DIR) -> None:
+    cfg = cfg or StudentConfig()
     make_deterministic(SEED)
     torch.backends.cuda.matmul.fp32_precision = "tf32"
     vocab = load_vocab()
     catalog = load_catalog()
+    tuning = load_rated(TUNING_SET, catalog)
     t = torch.load(TEACHER_OUTPUTS, weights_only=False)
     if t["vocab"] != vocab.digest:
         raise SystemExit("vocab changed since train-teacher; rerun uv run train")
@@ -216,15 +222,24 @@ def run() -> None:
     encoder = AutoModel.from_pretrained(
         cfg.backbone, revision=cfg.revision, attn_implementation="sdpa"
     )
+    texts: list[str] = t["texts"]
+    if cfg.prune_vocab:
+        full = len(tokenizer)
+        corpus = [*texts, *load_eval_texts(), *tuning.feelings, *catalog.texts]
+        tokenizer = prune(tokenizer, encoder, corpus, cfg.prune_keep_below)
+        log.info(f"vocabulary pruned from {num(full)} to {num(len(tokenizer))} tokens")
     model = Student(encoder, vocab.sizes(), cfg.head_hidden, cfg.dims).to(dev)
 
     split = np.array(t["split"])
     train = np.flatnonzero(np.isin(split, ("train", "distill")))
     val = np.flatnonzero(split == "val")
-    texts: list[str] = t["texts"]
     pos = t["pos"].to(dev)
-    tq = t["query_emb"].float().to(dev)
-    ti = t["item_emb"].float().to(dev)
+    # The student encodes feelings only. The catalog vectors are the teacher's item vectors in a
+    # fixed space of the student's dims; they ship as vectors.bin and get no gradient.
+    space = item_space(t["item_emb"], cfg.dims).to(dev)
+    # Round to fp16 as vectors.bin does, so training, selection, and eval score the shipped values.
+    items = F.normalize(t["item_emb"].float().to(dev) @ space, dim=-1).half().float()
+    tq = F.normalize(t["query_emb"].float().to(dev) @ space, dim=-1)
     t_palette = t["palette"].float().to(dev)
     t_choices = [t[k].float().to(dev) for k in ("light", "typeface")]
     n_items = len(catalog.items)
@@ -244,7 +259,6 @@ def run() -> None:
     rng = np.random.default_rng(SEED)
     best, best_epoch = -1.0, -1
     tau = cfg.temperature
-    item_tokens = Pretokenized(tokenizer, catalog.texts, cfg.item_max_length, dev)
     log.info(
         f"reading teacher outputs: {num(len(texts))} queries "
         f"({num(int((split == 'train').sum()))} train, "
@@ -255,13 +269,17 @@ def run() -> None:
         f"training: {cfg.epochs} epochs x {num(steps_per_epoch)} steps, batch {cfg.batch_size}, "
         f"encoder lr {cfg.encoder_lr}, head lr {cfg.head_lr}; items per step: per query and "
         f"category the teacher's top {cfg.teacher_topk}, plus positives and "
-        f"{cfg.random_items} random; KL weight {cfg.kl_weight}; typing noise on "
-        f"{cfg.typo_share:.0%} of train rows"
+        f"{cfg.random_items} random; KL weight {cfg.kl_weight}; regression weight "
+        f"{cfg.regression_weight}; typing noise on {cfg.typo_share:.0%} of train rows"
     )
     log.info(
-        "one epoch = one pass over train + distill rows; validation uses val rows only; "
-        "the best epoch has the highest val fidelity (overlap with the teacher's top 10 per "
-        "category)"
+        f"fixed item space: the teacher's {t['item_emb'].shape[1]}-dim item vectors on their "
+        f"top {cfg.dims} singular vectors"
+    )
+    item_emb = items.cpu().numpy()
+    log.info(
+        "one epoch = one pass over train + distill rows; the best epoch has the highest "
+        "tuning-set objective (mean of within-feeling AUC and Spearman on rated pairs)"
     )
     start_all = time.perf_counter()
 
@@ -279,13 +297,13 @@ def run() -> None:
                 order[step * cfg.batch_size : (step + 1) * cfg.batch_size], device=dev
             )
             p = pos[b]
-            cand, picked = item_candidates(tq[b] @ ti.T, p, by_category, cfg)
+            cand, picked = item_candidates(tq[b] @ items.T, p, by_category, cfg)
             queries = query_tokens.rows(b)
             with torch.autocast(dev, dtype=torch.bfloat16):
                 q_emb, palette, light, face = model(**queries)
-                i_emb = embed_items(model, item_tokens, cand)
-            s = q_emb.float() @ i_emb.float().T / tau
-            teacher_sims = tq[b] @ ti[cand].T / tau
+            q_emb = q_emb.float()
+            s = q_emb @ items[cand].T / tau
+            teacher_sims = tq[b] @ items[cand].T / tau
             loss_kl = cfg.kl_weight * category_kl(
                 s, teacher_sims, item_categories[cand], n_categories
             )
@@ -308,7 +326,9 @@ def run() -> None:
                 kl_logits(out.float(), tc[b], cfg.choice_temperature)
                 for out, tc in zip((light, face), t_choices, strict=True)
             )
-            loss = loss_kl + loss_nce + loss_pal + loss_choice
+            # The teacher's own feeling vector in the item space is a direct target.
+            loss_reg = cfg.regression_weight * (1 - (q_emb * tq[b]).sum(-1)).mean()
+            loss = loss_kl + loss_nce + loss_reg + loss_pal + loss_choice
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -320,11 +340,11 @@ def run() -> None:
                     loss=f"{running / (step + 1):.3f}",
                     kl=f"{loss_kl.item():.3f}",
                     nce=f"{loss_nce.item():.3f}",
+                    reg=f"{loss_reg.item():.3f}",
                     lr=f"{sched.get_last_lr()[0]:.1e}",
                     refresh=False,
                 )
 
-        item_emb = encode_texts(model, tokenizer, catalog.texts, cfg.item_max_length)
         q = encode_texts(model, tokenizer, [texts[i] for i in val], cfg.max_length)
         teacher_q = t["query_emb"].float().numpy()
         teacher_items = t["item_emb"].float().numpy()
@@ -337,9 +357,11 @@ def run() -> None:
         teacher_recall = recall_at_k(
             teacher_q[val][has_pos], val_pos, teacher_items, catalog.categories
         )
-        improved = fidelity > best
+        tuning_q = encode_texts(model, tokenizer, tuning.feelings, cfg.max_length)
+        scores = rated_scores(tuning, tuning_q, item_emb)
+        improved = scores["objective"] > best
         if improved:
-            best, best_epoch = fidelity, epoch + 1
+            best, best_epoch = scores["objective"], epoch + 1
             save_student(
                 model,
                 tokenizer,
@@ -352,18 +374,21 @@ def run() -> None:
                     "cfg": dataclasses.asdict(cfg),
                     "val_recall@10": recall,
                     "val_fidelity@10": fidelity,
+                    "tuning": scores,
                 },
+                out,
             )
+            np.save(out / "items.npy", item_emb.astype(np.float16))
         log.info(
             f"epoch {epoch + 1}/{cfg.epochs} ({elapsed(start)}): train loss "
-            f"{running / steps_per_epoch:.4f}; val fidelity@10 {fidelity:.3f}; val recall@10 "
-            f"{recall:.3f} (teacher {teacher_recall:.3f}); best fidelity {best:.3f} "
-            f"(epoch {best_epoch})" + (", saved" if improved else "")
+            f"{running / steps_per_epoch:.4f}; tuning {brief(scores)}; val fidelity@10 "
+            f"{fidelity:.3f}; val recall@10 {recall:.3f} (teacher {teacher_recall:.3f}); "
+            f"best tuning {best:.4f} (epoch {best_epoch})" + (", saved" if improved else "")
         )
         if epoch + 1 - best_epoch >= cfg.patience:
-            log.info("early stop: no fidelity improvement for %d epochs", cfg.patience)
+            log.info("early stop: no tuning-set improvement for %d epochs", cfg.patience)
             break
     log.info(
-        f"done in {elapsed(start_all)}: best val fidelity@10 {best:.3f} at epoch {best_epoch} -> "
-        f"{STUDENT_DIR.relative_to(ML_ROOT).as_posix()}"
+        f"done in {elapsed(start_all)}: best tuning objective {best:.4f} at epoch {best_epoch} -> "
+        f"{out.relative_to(ML_ROOT).as_posix()}"
     )

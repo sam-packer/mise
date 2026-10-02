@@ -7,7 +7,6 @@ They read data and metadata only; they never load a model or contact a service.
 import dataclasses
 import hashlib
 import importlib
-import inspect
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -21,7 +20,6 @@ from mise_ml.util import iter_jsonl
 SOURCE = Path(__file__).resolve().parent
 STUDENT = c.MODELS / "student"
 TARGET = c.REPO_ROOT / "static" / "bundle"
-JUDGE_POOL = c.MODELS / "judge-pool.json"
 
 
 @dataclass(frozen=True)
@@ -131,6 +129,15 @@ def item_inputs() -> list[StampInput]:
     ]
 
 
+def leak_inputs() -> list[StampInput]:
+    # The block lists depend on the prompts and decoding settings, not on catalog changes.
+    from mise_ml.llm import Job
+    from mise_ml.profile import item_records, leak_prints
+
+    job = Job("leaks", c.LEAK_BLOCK, c.ProfileConfig())
+    return [content(SOURCE / "profile.py", leak_prints(item_records(), job), "leak prompts")]
+
+
 def theme_inputs() -> list[StampInput]:
     if not c.FACTS.is_file():
         return [c.FACTS]
@@ -171,6 +178,7 @@ def student_files() -> list[Path]:
             "meta.json",
             "heads.pt",
             "projection.pt",
+            "items.npy",
             "encoder/model.safetensors",
             "encoder/config.json",
             "encoder/tokenizer.json",
@@ -206,6 +214,21 @@ def bundle_files(root: Path = c.BUNDLE) -> list[Path]:
         )
     ]
     return sorted(set(required + files(root)))
+
+
+def gate_files(root: Path) -> list[Path]:
+    """The bundle files that eval reads to run the graph and rank the catalog."""
+    return [
+        root / name
+        for name in (
+            "manifest.json",
+            "vectors.bin",
+            "model/model.onnx",
+            "model/config.json",
+            "model/tokenizer.json",
+            "model/tokenizer_config.json",
+        )
+    ]
 
 
 def source_outputs() -> list[Path]:
@@ -258,8 +281,8 @@ class Step:
         return getattr(importlib.import_module(f"mise_ml.{module}"), function)()
 
 
-COMMON = ("data", "color", "vocab", "util", "heads", "training", "inference")
-PROFILE = ("profile", "llm", "data", "color", "vocab", "util")
+COMMON = ("data", "color", "vocab", "util", "heads", "training", "inference", "rated")
+PROFILE = ("profile", "llm", "audit", "data", "color", "vocab", "util")
 
 # Every command, including the individually resumable LLM jobs, uses this graph.
 STEPS = {
@@ -335,15 +358,27 @@ STEPS = {
             ("facts",),
             True,
         ),
+        # Label a sample first and block the prompt words that leak into it.
+        Step(
+            "leaks",
+            "label",
+            leak_inputs,
+            c.ProfileConfig,
+            PROFILE,
+            lambda: [c.LEAK_BLOCK],
+            "profile:leaks_job",
+            ("themes",),
+            True,
+        ),
         Step(
             "items",
             "label",
-            item_inputs,
+            lambda: [*item_inputs(), c.LEAK_BLOCK],
             c.ProfileConfig,
             PROFILE,
             lambda: [c.PROFILES],
             "profile:items_job",
-            ("themes",),
+            ("themes", "leaks"),
             True,
         ),
         Step(
@@ -392,13 +427,30 @@ STEPS = {
             "profile:distill_job",
             llm=True,
         ),
+        # A cheap check of the profiles before training. It warns and never fails.
+        Step(
+            "audit",
+            "train",
+            lambda: [*catalog_inputs(False), constants("CATEGORIES"), c.LEAK_BLOCK],
+            Settings,
+            ("audit", "data", "util"),
+            lambda: [c.DATA_AUDIT],
+            "audit:run",
+        ),
         Step(
             "train-teacher",
             "train",
-            lambda: [*query_inputs(), selected(c.DISTILL, "text"), constants("SEED", "CATEGORIES")],
+            lambda: [
+                *query_inputs(),
+                selected(c.DISTILL, "text"),
+                c.TUNING_SET,
+                constants("SEED", "CATEGORIES"),
+            ],
             c.TeacherConfig,
             (*COMMON, "teacher", "features"),
-            lambda: [c.MODELS / "teacher.pt", c.MODELS / "teacher_outputs.pt"],
+            # The step writes the params file when it searches, so the file is an output.
+            # A changed or missing file runs the step again.
+            lambda: [c.MODELS / "teacher.pt", c.MODELS / "teacher_outputs.pt", c.TEACHER_PARAMS],
             "teacher:run",
         ),
         Step(
@@ -408,10 +460,13 @@ STEPS = {
                 c.MODELS / "teacher_outputs.pt",
                 *catalog_inputs(False),
                 c.VOCAB_PATH,
+                c.TUNING_SET,
+                # Vocabulary pruning keeps the tokens of the eval feelings.
+                selected(c.EVAL_FEELINGS, "text"),
                 constants("SEED", "CATEGORIES"),
             ],
             c.StudentConfig,
-            (*COMMON, "student"),
+            (*COMMON, "student", "wordpiece"),
             student_files,
             "student:run",
             ("train-teacher",),
@@ -440,55 +495,37 @@ STEPS = {
                     )
                 ],
                 public_items(),
+                c.TUNING_SET,
                 constants("SEED", "CATEGORIES"),
             ],
             lambda: settings(c.ExportConfig, c.TeacherConfig),
-            (*COMMON, "student", "export"),
+            # Room calibration drops the texts near an eval feeling with the teacher's rule.
+            (*COMMON, "student", "export", "teacher", "features"),
             lambda: [*bundle_files(), *images(c.BUNDLE / "img")],
             "export:run",
             ("train-student",),
-        ),
-        Step(
-            "judge",
-            "train",
-            lambda: [
-                *catalog_inputs(False),
-                c.CATALOG,
-                c.RESOLVED,
-                c.EVAL_FEELINGS,
-                c.MODELS / "teacher.pt",
-                *student_files(),
-                c.BUNDLE / "model" / "model.onnx",
-                c.BUNDLE / "vectors.bin",
-                c.BUNDLE / "manifest.json",
-                constants("SEED", "CATEGORIES"),
-            ],
-            c.ProfileConfig,
-            (*COMMON, "evaluate", "export", "student", "teacher", "features", "profile", "llm"),
-            lambda: [c.JUDGMENTS, JUDGE_POOL],
-            "evaluate:judge",
-            ("train-teacher", "export"),
-            True,
         ),
         Step(
             "eval",
             "train",
             lambda: [
                 *query_inputs(),
-                c.JUDGMENTS,
                 c.MODELS / "teacher.pt",
                 *student_files(),
-                c.BUNDLE / "model" / "model.onnx",
-                c.BUNDLE / "vectors.bin",
-                c.BUNDLE / "manifest.json",
+                *gate_files(c.BUNDLE),
+                # The ship gate compares the new student with the installed bundle.
+                *gate_files(TARGET),
+                TARGET / "items.json",
                 selected(c.EVAL_FEELINGS, "text", "set"),
+                c.TUNING_SET,
+                c.GOLD_SET,
                 constants("SEED", "CATEGORIES"),
             ],
             c.TeacherConfig,
             (*COMMON, "evaluate", "export", "student", "teacher", "features"),
-            lambda: [c.EVAL_REPORT],
+            lambda: [c.EVAL_REPORT, c.EVAL_FAILURES],
             "evaluate:run",
-            ("judge", "export", "train-teacher"),
+            ("export", "train-teacher"),
         ),
         Step(
             "install",
@@ -515,29 +552,3 @@ STEPS = {
 
 def command_steps(command: str) -> list[Step]:
     return [step for step in STEPS.values() if step.command == command]
-
-
-def judge_pool_state() -> dict[str, Any]:
-    """Ranking does not depend on the labeler's model, prompts, or batch settings."""
-    from mise_ml import evaluate
-
-    step = STEPS["judge"]
-    ranking = content(
-        SOURCE / "evaluate.py",
-        [
-            inspect.getsource(fn)
-            for fn in (
-                evaluate.Outputs,
-                evaluate.teacher_outputs,
-                evaluate.student_outputs,
-                evaluate.baseline_outputs,
-                evaluate.top_by_category,
-            )
-        ],
-        "ranking functions",
-    )
-    return snapshot(
-        [*step.inputs(), ranking],
-        settings(pool_per_system=c.ProfileConfig().judge_pool_per_system),
-        [SOURCE / f"{m}.py" for m in step.modules if m not in ("evaluate", "profile", "llm")],
-    )

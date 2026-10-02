@@ -64,15 +64,10 @@ class Run:
         from mise_ml.profile import lazy_llm
 
         state = step.state()
-        if step.llm and step.name != "judge":
+        if step.llm:
             spec = step.call()
             plan = inspect_job(spec)
             current = not plan.requests and not plan.output_changed
-        elif step.name == "judge":
-            from mise_ml.plan import judge_plan
-
-            plan, _, verified = judge_plan()
-            current = verified and not plan.requests and not plan.output_changed
         else:
             current = step.name != "publish" and pv.is_current(step.name, state, step.outputs())
         if current:
@@ -82,7 +77,7 @@ class Run:
             return None
         log.info("%s: will run", step.name)
         start = time.perf_counter()
-        if step.llm and step.name != "judge":
+        if step.llm:
             if self.llm is None:
                 self.llm = lazy_llm(ProfileConfig())
             spec.run(self.llm)
@@ -114,6 +109,12 @@ def command(name: str) -> None:
             action="store_true",
             help="Show what would run and why, without writes or model loads.",
         )
+    if name == "train":
+        parser.add_argument(
+            "--tune",
+            action="store_true",
+            help="Search new teacher settings and replace teacher_params.json.",
+        )
     if name == "label":
         parser.add_argument(
             "--prune",
@@ -126,7 +127,11 @@ def command(name: str) -> None:
         sys.dont_write_bytecode = True
         from mise_ml.plan import show
 
-        show(name, prune=getattr(args, "prune", False) and not args.plan)
+        show(
+            name,
+            prune=getattr(args, "prune", False) and not args.plan,
+            tune=getattr(args, "tune", False),
+        )
         return
     os.environ.setdefault("PYTORCH_ALLOC_CONF", "roundup_power2_divisions:4")
     from mise_ml.config import EVAL_REPORT
@@ -142,6 +147,12 @@ def command(name: str) -> None:
                 from mise_ml.util import make_deterministic
 
                 make_deterministic(SEED, warn_only=True)
+            if getattr(args, "tune", False):
+                from mise_ml.config import TEACHER_PARAMS
+
+                # Without the file, train-teacher searches and writes a new one.
+                TEACHER_PARAMS.unlink(missing_ok=True)
+                log.info("removed teacher_params.json; train-teacher searches new settings")
             if name == "refine":
                 from mise_ml.refine import loop
                 from mise_ml.steps import STEPS

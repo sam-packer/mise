@@ -17,6 +17,9 @@ BUNDLE = OUT / "bundle"
 SOURCES = ML_ROOT / "sources.toml"
 VOCAB_PATH = REPO_ROOT / "scripts" / "stub" / "vocab.json"
 EVAL_FEELINGS = ML_ROOT / "eval_feelings.jsonl"
+# Rated pairs over eval feelings. The tuning set selects settings; the gold set only reports.
+TUNING_SET = ML_ROOT / "tuning_set.jsonl"
+GOLD_SET = ML_ROOT / "gold_set.jsonl"
 MET_CSV = RAW / "met" / "MetObjects.csv"
 
 CATALOG = CURATED / "catalog.jsonl"
@@ -34,15 +37,23 @@ PROFILES = CURATED / "profiles.jsonl"
 # only the theme sentence that the labeler writes from them reaches a profile.
 FACTS = CURATED / "facts.jsonl"
 THEMES = CURATED / "themes.jsonl"
+# Per category, the prompt words that leak into the leaks job's sample profiles. The items job
+# rejects a profile that uses one.
+LEAK_BLOCK = CURATED / "leak_block.jsonl"
 # One line per graded profile: the refine round, the grade, and kept or dropped.
 LEDGER = CURATED / "ledger.jsonl"
 GRADES = CACHE / "grades.jsonl"
 MOODS = CURATED / "moods.jsonl"
 DISTILL = CURATED / "distill.jsonl"
 PAT_SENTENCES = CURATED / "pat_sentences.jsonl"
-JUDGMENTS = CURATED / "judgments.jsonl"
 EVAL_REPORT = OUT / "eval_report.json"
+# The student's worst tuning pairs, for a person to read.
+EVAL_FAILURES = OUT / "eval_failures.md"
+# The words that too many profiles of one category share.
+DATA_AUDIT = OUT / "data_audit.json"
 RUN_JSON = OUT / "run.json"
+# The TeacherConfig values from the last Optuna search. Git tracks this file.
+TEACHER_PARAMS = ML_ROOT / "teacher_params.json"
 
 SEED = 1337
 CATEGORIES = ("art", "film", "song", "poem", "book")
@@ -170,14 +181,13 @@ class ProfileConfig:
     batch_size: int = 40
     image_batch_size: int = 8
     # Text batches also hold at most this many tokens: rows x (longest prompt + new tokens).
-    # Long judge prompts then get fewer rows, and short ones keep the full batch.
+    # Long prompts then get fewer rows, and short ones keep the full batch.
     batch_token_budget: int = 100_000
     synthetic_moods: int = 6000
     moods_per_request: int = 25
     label_queries: int = 30000
     labels_per_request: int = 10
     pat_per_request: int = 25
-    judge_pool_per_system: int = 20
     distill_feelings: int = 40000
     distill_per_request: int = 20
     # Extra requests that each name a few idioms or slang terms, so the LLM does not repeat
@@ -192,7 +202,10 @@ class RefineConfig:
     # The grader. In tests against Claude, Opus, and Astra it was the most consistent grader.
     model: str = "gpt-6.1-sol"
     reasoning_effort: str = "medium"
-    workers: int = 8
+    # A grade takes about 7 s, almost all of it reasoning, and counts about 1,000 tokens against
+    # the 2M tokens-per-minute limit. At the old 1M limit, 128 requests at a time hit it and 80
+    # stayed near 65% of it, so 160 stay near 65% of the 2M limit.
+    workers: int = 160
     # A profile fails when its emotion grade (0-3) is below this; refine drops the work.
     min_emotion: int = 2
     # The first download plus at most two refills. The last round drops failures without a
@@ -206,6 +219,9 @@ class TeacherConfig:
     revision: str = "1d8ad4ca9b3dd8059ad90a75d4983776a23d44af"
     max_length: int = 256
     dims: int = 384
+    # The share of the raw Qwen cosine in the teacher's similarity; the heads learn what the raw
+    # features miss.
+    raw_weight: float = 0.5
     hidden: int = 1024
     dropout: float = 0.1
     epochs: int = 6
@@ -220,6 +236,9 @@ class TeacherConfig:
     label_smoothing: float = 0.1
     val_fraction: float = 0.05
     heldout_paraphrase_fraction: float = 0.1
+    # Training texts at or above this Qwen query cosine to an eval feeling are dropped. A read of
+    # the pairs in each band showed rewordings of the same feeling from 0.88 up.
+    near_eval_cosine: float = 0.88
 
 
 @dataclass(frozen=True)
@@ -227,12 +246,13 @@ class StudentConfig:
     backbone: str = "sentence-transformers/all-MiniLM-L6-v2"
     revision: str = "1110a243fdf4706b3f48f1d95db1a4f5529b4d41"
     max_length: int = 96
+    # The student encodes feelings only; only the untrained baseline in eval encodes catalog texts.
     item_max_length: int = 128
     dims: int = 384
     head_hidden: int = 256
-    epochs: int = 16
-    # Epochs without a better val fidelity before the run stops.
-    patience: int = 3
+    epochs: int = 40
+    # Epochs without a better tuning-set objective before the run stops.
+    patience: int = 10
     batch_size: int = 64
     encoder_lr: float = 3e-5
     head_lr: float = 1e-3
@@ -251,10 +271,22 @@ class StudentConfig:
     # fidelity 0.22, 0.25, 0.26 in 2-epoch tests.
     kl_weight: float = 16.0
     infonce_weight: float = 1.0
+    # Cosine loss to the teacher's feeling vector in the fixed item space. Weights 0, 1, 4, 16 gave
+    # tuning objectives 0.548, 0.552, 0.559, 0.565 in 8-epoch tests.
+    regression_weight: float = 16.0
     palette_weight: float = 3.0
     lightness_weight: float = 0.5
     choice_weight: float = 0.5
     choice_temperature: float = 2.0
+    # Keep only the vocabulary tokens of the training, eval, and catalog texts, every character
+    # piece, and the regular tokens with an id below prune_keep_below. The other rows of the word
+    # embeddings leave the model. Needs a WordPiece tokenizer.
+    prune_vocab: bool = False
+    prune_keep_below: int = 8000
+
+
+# The 12-layer encoder with the same hidden size and tokenizer as the default backbone.
+MINILM_L12 = ("sentence-transformers/all-MiniLM-L12-v2", "a50ef00143b4d5391434df20ae11632588ac25be")
 
 
 @dataclass(frozen=True)

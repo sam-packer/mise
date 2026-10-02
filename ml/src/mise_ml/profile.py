@@ -1,16 +1,19 @@
 """Define resumable LLM jobs for item profiles, mood queries, and visual labels."""
 
 import functools
+import json
 import random
 import re
 from collections import Counter
 from typing import Any
 
+from mise_ml.audit import LEAK_GAIN, LEAK_P, LEAK_RATIO, SKIP, leaks
 from mise_ml.color import parse_hex
 from mise_ml.config import (
     DISTILL,
     FACTS,
     IMG,
+    LEAK_BLOCK,
     MOODS,
     PAT,
     PAT_SENTENCES,
@@ -63,6 +66,87 @@ emotion. Use details from the work only when they carry the emotion.
 - q1, q2, q3: three different feelings that a real person could type into the app when this \
 work is a good answer. Write them the way people type: plain, first person or a simple \
 situation, 6 to 30 words. Each feeling must fit the work's main emotion."""
+
+EXAMPLE_SLOT = "{examples}"
+# The pilot prompts (out/pilot/prompts.py) ask for a specific emotion, with three quoted examples.
+# ITEM_SYSTEM stays as the pilot's baseline; the prompts share its "Write:" tail.
+ITEM_HEAD = f"""You write short mood profiles of works for mise. In mise, a person types how \
+they feel, and the app answers with an artwork, a film, a book, a poem, and a song.
+
+You get the facts about one work. Describe the emotion that most people feel from this work.
+
+Accuracy comes first.
+- Use your own knowledge of the work together with the facts.
+- If the work is joyful, funny, or warm, say so. Do not make it darker or more dramatic \
+than it is.
+- If you do not know the work and the facts do not show its emotion, write only what the facts \
+support. Do not invent lyrics, sounds, colors, figures, or events.
+
+Name the emotion of this work in precise, concrete words, for example {EXAMPLE_SLOT}. \
+Do not use a broad mood word when a more exact emotion fits this work."""
+ITEM_AVOID = """
+Avoid these broad words unless nothing more precise fits: quiet, calm, peaceful, tense, dark, \
+heavy, deep, warm, gentle."""
+ITEM_TAIL = ITEM_SYSTEM[ITEM_SYSTEM.index("\n\nWrite:") :]
+FIXED_EXAMPLES = '"solemn dignity", "wistful longing", or "awe at vast scale"'
+ITEM_V1 = ITEM_HEAD.replace(EXAMPLE_SLOT, FIXED_EXAMPLES) + ITEM_TAIL
+ITEM_V2 = ITEM_HEAD.replace(EXAMPLE_SLOT, FIXED_EXAMPLES) + ITEM_AVOID + ITEM_TAIL
+# The item system prompt of each category, as the pilot chose them. A prompt with the
+# EXAMPLE_SLOT gets EXAMPLE_COUNT phrases from its category's pool in ITEM_EXAMPLES.
+ITEM_SYSTEMS = {
+    "art": ITEM_V2,
+    "poem": ITEM_HEAD + ITEM_AVOID + ITEM_TAIL,
+    "song": ITEM_V1,
+    "film": ITEM_V2,
+    "book": ITEM_V1,
+}
+EXAMPLE_COUNT = 3
+# Every phrase has its own head word, none is an umbrella word, and the pool spans the range.
+POEM_EXAMPLES = (
+    "giddy delight",
+    "mischievous glee",
+    "seething resentment",
+    "jittery dread",
+    "tender devotion",
+    "eerie unease",
+    "triumphant swagger",
+    "raw bereavement",
+    "bitter disillusion",
+    "dumbstruck wonder",
+    "restless yearning",
+    "cringing embarrassment",
+    "bittersweet homesickness",
+    "cold menace",
+    "deadpan absurdity",
+    "lazy sunlit contentment",
+    "devout reverence",
+    "smug satisfaction",
+    "frantic panic",
+    "sly flirtation",
+    "righteous fury",
+    "abandoned desolation",
+    "proud defiance",
+    "sheepish relief",
+    "feverish obsession",
+    "drowsy coziness",
+    "haunted guilt",
+    "rowdy camaraderie",
+    "aching regret",
+    "breathless anticipation",
+)
+ITEM_EXAMPLES: dict[str, tuple[str, ...]] = {
+    "art": (),
+    "poem": POEM_EXAMPLES,
+    "song": (),
+    "film": (),
+    "book": (),
+}
+# The leaks job labels this many works of each category twice: with the current prompts and with
+# the neutral BASELINE_SYSTEM. A prompt word that the current prompt puts into the profiles (see
+# audit.leaks) goes on the category's block list, and the items job discourages it.
+LEAK_SAMPLE = {"art": 70, "poem": 40, "book": 40, "song": 25, "film": 25}
+BASELINE_SYSTEM = ITEM_SYSTEM
+BASELINE_KEY = "baseline:"
 
 MOODS_SYSTEM = f"""You write feelings that people type into mise, a mood app.
 
@@ -279,6 +363,20 @@ def item_prompt(r: Record) -> str:
     return "\n".join(lines)
 
 
+def item_system(r: Record) -> str:
+    """The category's system prompt, with this work's quoted example phrases in the slot."""
+    system = ITEM_SYSTEMS[r["category"]]
+    if EXAMPLE_SLOT not in system:
+        return system
+    pool = ITEM_EXAMPLES[r["category"]]
+    if len(pool) < EXAMPLE_COUNT:
+        raise ValueError(f"{r['category']} has fewer than {EXAMPLE_COUNT} example phrases")
+    # The pilot's selection, so the labels reproduce the pilot's distribution.
+    picks = random.Random(int(sha(f"examples:{r['id']}")[:8], 16)).sample(pool, EXAMPLE_COUNT)
+    quoted = [f'"{p}"' for p in picks]
+    return system.replace(EXAMPLE_SLOT, ", ".join(quoted[:-1]) + f", or {quoted[-1]}")
+
+
 def item_records() -> dict[str, Record]:
     """Resolved works by id, with the song facts that the labeler and the grader read."""
     facts = {r["id"]: r for r in iter_jsonl(FACTS)} if FACTS.is_file() else {}
@@ -296,7 +394,7 @@ def item_records() -> dict[str, Record]:
 
 def item_fields(r: Record) -> dict[str, Any]:
     # Digest the rendered values: omitted fields and ignored descriptions stay omitted.
-    fields = {"category": r["category"], "title": r["title"]}
+    fields = {"category": r["category"], "title": r["title"], "system": sha(item_system(r))}
     fields.update(
         {
             k: r[k]
@@ -400,7 +498,7 @@ FUNCTION_WORDS = frozenset(
 FEELING_TEXT = {"type": "string", "pattern": f"^{PROSE_WORD}( {PROSE_WORD}){{5,29}}$"}
 ITEM_GENERATION_SCHEMA = obj(
     {
-        "vibe": {"type": "string", "pattern": f"^{WORD}( {WORD}){{0,11}}$"},
+        "vibe": {"type": "string", "pattern": f"^{WORD}( {WORD}){{0,9}}$"},
         "description": {"type": "string", "pattern": f"^{PROSE_WORD}( {PROSE_WORD}){{0,89}}$"},
         "q1": FEELING_TEXT,
         "q2": FEELING_TEXT,
@@ -409,12 +507,14 @@ ITEM_GENERATION_SCHEMA = obj(
 )
 
 
-def parse_item(keys: list[str], data: dict[str, Any]) -> list[Record]:
+def parse_item(
+    keys: list[str], data: dict[str, Any], blocked: re.Pattern[str] | None = None
+) -> list[Record]:
     if any(copies_instruction(data[k]) for k in ITEM_SCHEMA["properties"]):
         raise ValueError("answer copies prompt instructions instead of describing the work")
     vibe = normalized(data["vibe"]).rstrip(".")
-    if not 1 <= word_count(vibe) <= 12:
-        raise ValueError("vibe must contain 1 to 12 words")
+    if not 1 <= word_count(vibe) <= 10:
+        raise ValueError("vibe must contain 1 to 10 words")
     # The grammar cannot forbid a dangling last word, so trim it ("a secret kept for a" becomes
     # "a secret kept") rather than fail the key.
     words = vibe.rstrip(",").split()
@@ -446,6 +546,13 @@ def parse_item(keys: list[str], data: dict[str, Any]) -> list[Record]:
         )
     if len(set(queries)) != 3:
         raise ValueError("q1, q2, and q3 must be three different feelings")
+    # Last, so an answer that fails only this check passes every other check.
+    if blocked and (match := blocked.search(f"{data['vibe']} {data['description']}")):
+        # Name the word: a general reason lets the retry use it again.
+        raise ValueError(
+            f"{match.group().lower()!r} is overused in this catalog; use it only if no other "
+            "word fits this work, otherwise describe the emotion in other words"
+        )
     return [
         {
             "key": keys[0],
@@ -456,38 +563,175 @@ def parse_item(keys: list[str], data: dict[str, Any]) -> list[Record]:
     ]
 
 
+def item_request(r: Record, system: str | None = None) -> Request:
+    return Request(
+        system or item_system(r),
+        item_prompt(r),
+        ITEM_SCHEMA,
+        400,
+        item_image(r),
+        generation_schema=ITEM_GENERATION_SCHEMA,
+        seed=int(sha(r["id"])[:8], 16),
+        per_key_system=True,
+    )
+
+
+def item_print(r: Record, *extra: Any, system: str | None = None) -> str:
+    # The signature leaves out the per-work system prompt, so the fingerprint covers it.
+    request = item_request(r, system)
+    image = sha256_file(request.image) if request.image else ""
+    return sha(json.dumps([request.system, request.user, image, request.seed, *extra]))
+
+
+def leak_prompt(category: str) -> str:
+    """The category's items prompt with its whole example pool, for leak detection."""
+    return ITEM_SYSTEMS[category].replace(EXAMPLE_SLOT, " ".join(ITEM_EXAMPLES[category]))
+
+
+def leak_sample(items: dict[str, Record]) -> list[str]:
+    # Rank by a hash of the id: a dropped work changes only its own place in the sample.
+    keys = []
+    for category, n in LEAK_SAMPLE.items():
+        ids = [k for k, r in items.items() if r["category"] == category]
+        keys += sorted(ids, key=lambda k: sha(f"leak:{k}"))[:n]
+    return keys
+
+
+def leak_prints(items: dict[str, Record], job: Job) -> dict[str, str]:
+    """Per category, a digest of everything that decides its block list except the catalog:
+    its prompt and example pool, the baseline prompt, the sample size, the leak rule with its
+    word exclusions, and the model and decoding settings."""
+    signature = job.signature(item_request(next(iter(items.values()))))
+    return {
+        category: sha(
+            json.dumps(
+                [
+                    ITEM_SYSTEMS[category],
+                    ITEM_EXAMPLES[category],
+                    EXAMPLE_COUNT,
+                    BASELINE_SYSTEM,
+                    n,
+                    LEAK_GAIN,
+                    LEAK_RATIO,
+                    LEAK_P,
+                    sorted(SKIP),
+                    signature,
+                ]
+            )
+        )
+        for category, n in LEAK_SAMPLE.items()
+    }
+
+
+def leaks_job() -> JobSpec:
+    """Label a fixed sample with the current prompts and with the baseline prompt, and block
+    the prompt words that the current prompts put into the profiles.
+
+    A category keeps its block list while its leak_prints() digest is unchanged, so catalog
+    changes (refine drops and refills) do not change the list. When the digest changes, the job
+    draws a new sample for that category from the current catalog.
+    """
+    cfg = ProfileConfig()
+    items = item_records()
+    job = Job("leaks", LEAK_BLOCK, cfg)
+    prints = leak_prints(items, job)
+    kept = {
+        r["category"]: r
+        for r in (iter_jsonl(LEAK_BLOCK) if LEAK_BLOCK.is_file() else [])
+        if r.get("prompt") == prints.get(r["category"])
+    }
+    sample = [k for k in leak_sample(items) if items[k]["category"] not in kept]
+
+    def split(k: str) -> tuple[Record, str | None]:
+        """The work of a key, and the baseline system prompt for a baseline key."""
+        if k.startswith(BASELINE_KEY):
+            return items[k.removeprefix(BASELINE_KEY)], BASELINE_SYSTEM
+        return items[k], None
+
+    def build(keys: list[str]) -> list[Unit]:
+        return [Unit([k], item_request(*split(k))) for k in keys]
+
+    def project(rows: list[Record]) -> list[Record]:
+        texts: dict[str, list[str]] = {category: [] for category in LEAK_SAMPLE}
+        control: dict[str, list[str]] = {category: [] for category in LEAK_SAMPLE}
+        for row in rows:
+            r, baseline = split(row["key"])
+            (control if baseline else texts)[r["category"]].append(
+                f"{row['vibe']} {row['description']}"
+            )
+        found = leaks({category: leak_prompt(category) for category in texts}, texts, control)
+        accepted = {row["key"] for row in rows}
+        out = []
+        for category in texts:
+            if category in kept:
+                out.append(kept[category])
+                continue
+            ids = sorted(k for k in sample if items[k]["category"] == category)
+            row = {
+                "category": category,
+                "words": sorted(found[category]),
+                "shares": {
+                    w: {name: round(s, 4) for name, s in pair.items()}
+                    for w, pair in sorted(found[category].items())
+                },
+                "sample": ids,
+            }
+            # Freeze a list only when every sample key has an answer under both prompts. Without
+            # the digest, the next run labels the category again; Job.run stops this run.
+            if all(k in accepted and BASELINE_KEY + k in accepted for k in ids):
+                row["prompt"] = prints[category]
+            out.append(row)
+        return out
+
+    return JobSpec(
+        job,
+        sample + [BASELINE_KEY + k for k in sample],
+        build,
+        parse_item,
+        lambda k: item_print(split(k)[0], system=split(k)[1]),
+        lambda k: {
+            **item_fields(split(k)[0]),
+            **({"system": sha(BASELINE_SYSTEM)} if split(k)[1] else {}),
+        },
+        project,
+    )
+
+
+def block_pattern(words: list[str]) -> re.Pattern[str] | None:
+    """Match the words and their plural and -ly forms, ignoring case."""
+    if not words:
+        return None
+    alternatives = "|".join(map(re.escape, words))
+    return re.compile(rf"\b(?:{alternatives})(?:s|es|ly|ally)?\b", re.IGNORECASE)
+
+
 def items_job() -> JobSpec:
     cfg = ProfileConfig()
     items = item_records()
-
-    def fingerprint(k: str) -> str:
-        image = item_image(items[k])
-        return sha(item_prompt(items[k]) + (sha256_file(image) if image else ""))
+    blocked = {r["category"]: r["words"] for r in iter_jsonl(LEAK_BLOCK)}
+    patterns = {category: block_pattern(words) for category, words in blocked.items()}
 
     def build(keys: list[str]) -> list[Unit]:
-        return [
-            Unit(
-                [k],
-                Request(
-                    ITEM_SYSTEM,
-                    item_prompt(items[k]),
-                    ITEM_SCHEMA,
-                    400,
-                    item_image(items[k]),
-                    generation_schema=ITEM_GENERATION_SCHEMA,
-                    seed=int(sha(k)[:8], 16),
-                ),
-            )
-            for k in keys
-        ]
+        return [Unit([k], item_request(items[k])) for k in keys]
+
+    # A blocked word fails the first answer and the first retry. The last retry and cached
+    # answers parse without the block list, so a work keeps the word when the model still
+    # chooses it, and the block list never fails a key.
+    def strict(keys: list[str], data: dict[str, Any]) -> list[Record]:
+        return parse_item(keys, data, patterns.get(items[keys[0]]["category"]))
+
+    def blocks(k: str) -> list[str]:
+        return blocked.get(items[k]["category"], [])
 
     return JobSpec(
         Job("items", PROFILES, cfg),
         list(items),
         build,
         parse_item,
-        fingerprint,
-        lambda k: item_fields(items[k]),
+        # A change to a category's block list regenerates the works of that category.
+        lambda k: item_print(items[k], blocks(k)),
+        lambda k: {**item_fields(items[k]), "blocked": blocks(k)},
+        strict=strict,
     )
 
 

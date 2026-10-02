@@ -26,15 +26,18 @@ from mise_ml.config import (
     OUT,
     REPO_ROOT,
     SEED,
+    TUNING_SET,
     VOCAB_PATH,
     ExportConfig,
     StudentConfig,
     TeacherConfig,
 )
-from mise_ml.data import Catalog, load_catalog, load_queries, recall_at_k
+from mise_ml.data import Catalog, load_catalog, load_queries
 from mise_ml.inference import encode_batches
 from mise_ml.log import elapsed, get, num, progress
+from mise_ml.rated import RatedSet, brief, load_rated, rated_scores
 from mise_ml.student import OUTPUT_NAMES, STUDENT_DIR, Student, load_student
+from mise_ml.teacher import drop_near_eval, query_store
 from mise_ml.util import make_deterministic, sha256_file, write_json
 from mise_ml.vocab import Vocab, load_vocab
 
@@ -201,21 +204,16 @@ def quantization_recipes(fp32: Path) -> dict[str, tuple[bool, list[str]]]:
     }
 
 
-def retrieval_measurement(
-    path: Path, tokenizer, catalog: Catalog, qs, cfg: StudentConfig, split: str = "val"
-) -> tuple[float, np.ndarray]:
-    """Validation recall@10 of a graph, and its item vectors for the bundle."""
-    rows = qs.where(split)
-    rows = rows[qs.pos[rows] >= 0]
-    if not len(rows):
-        raise ValueError(f"no retrieval feelings in {split}")
+def tuning_measurement(
+    path: Path, tokenizer, items: np.ndarray, tuning: RatedSet, cfg: StudentConfig
+) -> dict[str, float]:
+    """Tuning-set scores of a graph against the fixed item vectors."""
     session = onnx_session(path, threads=4)
-    items = onnx_embed(session, tokenizer, catalog.texts, cfg.item_max_length)
     # Browser queries run alone; dynamic int8 ranges depend on the other rows in a batch.
     queries = np.concatenate(
-        [onnx_run(session, tokenizer, [qs.texts[i]], cfg.max_length)["embedding"] for i in rows]
+        [onnx_run(session, tokenizer, [f], cfg.max_length)["embedding"] for f in tuning.feelings]
     )
-    return recall_at_k(queries, qs.pos[rows], items, catalog.categories), items
+    return rated_scores(tuning, queries, items)
 
 
 def select_quantization(
@@ -223,17 +221,18 @@ def select_quantization(
     target: Path,
     tokenizer,
     catalog: Catalog,
+    items: np.ndarray,
     cfg: StudentConfig,
     export_cfg: ExportConfig,
-) -> tuple[dict, np.ndarray]:
-    """Pick the int8 recipe by validation recall. Return the measurements and the chosen graph's
-    item vectors, so the bundle does not encode the catalog again."""
-    qs = load_queries(catalog, load_vocab(), TeacherConfig())
-    reference, _ = retrieval_measurement(fp32, tokenizer, catalog, qs, cfg)
-    log.info("fp32 val recall@10 %.6f", reference)
-    measurements = {"fp32": {"val_recall@10": reference, "bytes": fp32.stat().st_size}}
+) -> dict:
+    """Pick the int8 recipe by the tuning-set objective and return the measurements. Only the
+    feeling graph varies; the item vectors are fixed."""
+    tuning = load_rated(TUNING_SET, catalog)
+    reference = tuning_measurement(fp32, tokenizer, items, tuning, cfg)
+    log.info("fp32 tuning %s", brief(reference))
+    measurements = {"fp32": {"tuning": reference, "bytes": fp32.stat().st_size}}
     best = None
-    scores: dict[str, tuple[float, np.ndarray]] = {}
+    scores: dict[str, dict[str, float]] = {}
     for name, (per_channel, exclude) in quantization_recipes(fp32).items():
         path = target.with_name(f"{name}.onnx")
         quantize(fp32, path, per_channel=per_channel, exclude=exclude)
@@ -246,28 +245,28 @@ def select_quantization(
             continue
         digest = sha256_file(path)
         if digest not in scores:
-            scores[digest] = retrieval_measurement(path, tokenizer, catalog, qs, cfg)
+            scores[digest] = tuning_measurement(path, tokenizer, items, tuning, cfg)
         else:
-            log.info("%s produces an identical graph; reuse its measured recall", name)
-        recall, vectors = scores[digest]
-        row["val_recall@10"] = recall
+            log.info("%s produces an identical graph; reuse its measured scores", name)
+        tuned = scores[digest]
+        row["tuning"] = tuned
         log.info(
-            "%s: %.2f MiB, val recall@10 %.6f, fp32 gap %.2f points",
+            "%s: %.2f MiB, tuning %s, fp32 gap %.2f points",
             name,
             size / 2**20,
-            recall,
-            (reference - recall) * 100,
+            brief(tuned),
+            (reference["objective"] - tuned["objective"]) * 100,
         )
-        rank = (recall, -size)
+        rank = (tuned["objective"], -size)
         if best is None or rank > best[0]:
-            best = (rank, name, path, vectors)
+            best = (rank, name, path)
     if best is None:
         raise RuntimeError("no quantization recipe fits the model size cap")
     shutil.copyfile(best[2], target)
     measurements["selected"] = best[1]
     write_json(target.with_suffix(".json"), measurements)
-    log.info("selected %s by validation recall@10", best[1])
-    return measurements, best[3]
+    log.info("selected %s by the tuning-set objective", best[1])
+    return measurements
 
 
 def bundle_item(item: dict[str, Any]) -> dict[str, Any]:
@@ -285,8 +284,13 @@ def calibrate_heads(
     vocab: Vocab,
     cfg: StudentConfig,
 ) -> dict[str, dict[str, Any]]:
-    """Fit training-label priors and choose each correction on validation feelings."""
-    qs = load_queries(catalog, vocab, TeacherConfig())
+    """Fit training-label priors and choose each correction on validation feelings, without the
+    texts that train-teacher drops for being near an eval feeling."""
+    teacher_cfg = TeacherConfig()
+    qs = load_queries(catalog, vocab, teacher_cfg)
+    fq = torch.tensor(query_store(teacher_cfg).get(qs.texts), dtype=torch.float32, device="cuda")
+    drop_near_eval(qs, fq, teacher_cfg.near_eval_cosine)
+    del fq
     names = ("light", "typeface")
     train = qs.where("train")
     val = qs.where("val")
@@ -399,11 +403,16 @@ def write_bundle(
     catalog: Catalog,
     student_cfg: StudentConfig,
     vectors: np.ndarray,
+    bundle: Path = BUNDLE,
+    images: bool = True,
 ) -> None:
-    """Write the public bundle. `vectors` are the catalog's item vectors from the int8 graph."""
-    if BUNDLE.exists():
-        shutil.rmtree(BUNDLE)
-    model_dir = BUNDLE / "model"
+    """Write the public bundle. `vectors` are the catalog's fixed item vectors from training.
+
+    Without `images`, the bundle has no img folder; it is then only for scoring.
+    """
+    if bundle.exists():
+        shutil.rmtree(bundle)
+    model_dir = bundle / "model"
     model_dir.mkdir(parents=True)
     shutil.copy2(model_path, model_dir / "model.onnx")
     tokenizer.save_pretrained(model_dir)
@@ -422,22 +431,23 @@ def write_bundle(
         raise SystemExit(1)
 
     session = onnx_session(model_path)
-    (BUNDLE / "vectors.bin").write_bytes(vectors.astype("<f2").tobytes())
-    (BUNDLE / "items.json").write_text(
+    (bundle / "vectors.bin").write_bytes(vectors.astype("<f2").tobytes())
+    (bundle / "items.json").write_text(
         json.dumps(items, ensure_ascii=False, separators=(",", ":")), encoding="utf-8", newline="\n"
     )
-    write_name_data(BUNDLE, vectors, common_words(tokenizer, items))
-    shutil.copy2(VOCAB_PATH, BUNDLE / "vocab.json")
+    write_name_data(bundle, vectors, common_words(tokenizer, items))
+    shutil.copy2(VOCAB_PATH, bundle / "vocab.json")
 
-    img_dir = BUNDLE / "img"
-    img_dir.mkdir()
-    for name in progress(names, desc="images", unit="file"):
-        shutil.copy2(IMG / name, img_dir / name)
+    if images:
+        img_dir = bundle / "img"
+        img_dir.mkdir()
+        for name in progress(names, desc="images", unit="file"):
+            shutil.copy2(IMG / name, img_dir / name)
 
     manifest = {
         "version": "ml-"
         + sha256_file(model_dir / "model.onnx")[:8]
-        + sha256_file(BUNDLE / "vectors.bin")[:8],
+        + sha256_file(bundle / "vectors.bin")[:8],
         "encoder": {
             "model": "model/model.onnx",
             "tokenizer": "model/",
@@ -459,15 +469,15 @@ def write_bundle(
         },
         "counts": {"items": len(items)},
     }
-    write_json(BUNDLE / "manifest.json", manifest)
-    write_samples(BUNDLE)
+    write_json(bundle / "manifest.json", manifest)
+    write_samples(bundle)
     counts = Counter(it["category"] for it in items)
-    size = sum(p.stat().st_size for p in BUNDLE.rglob("*") if p.is_file())
+    size = sum(p.stat().st_size for p in bundle.rglob("*") if p.is_file())
     log.info(
         f"bundle {manifest['version']}: {num(len(items))} items "
         f"({', '.join(f'{k} {num(v)}' for k, v in sorted(counts.items()))}), "
-        f"{num(len(names))} images, {size / 2**20:.0f} MiB -> "
-        f"{BUNDLE.relative_to(ML_ROOT).as_posix()}"
+        f"{num(len(names) if images else 0)} images, {size / 2**20:.0f} MiB -> "
+        f"{bundle.relative_to(ML_ROOT).as_posix()}"
     )
 
 
@@ -489,31 +499,38 @@ def check_outputs(
     log.info("output shapes ok: " + ", ".join(f"{k} {v}" for k, v in expected.items()))
 
 
-def run() -> None:
+def run(
+    student_dir: Path = STUDENT_DIR,
+    bundle: Path = BUNDLE,
+    work: Path = OUT / "onnx",
+    cfg: ExportConfig | None = None,
+    images: bool = True,
+) -> None:
     start = time.perf_counter()
     make_deterministic(SEED)
-    cfg = ExportConfig()
+    cfg = cfg or ExportConfig()
     vocab = load_vocab()
     catalog = load_catalog()
-    model, tokenizer, meta = load_student()
+    model, tokenizer, meta = load_student(student_dir)
     if meta["vocab"] != vocab.digest:
         raise SystemExit("vocab changed since train-student; retrain")
     if meta["item_ids"] != [it["id"] for it in catalog.items]:
         raise SystemExit("catalog changed since train-student; retrain")
     log.info(
-        f"reading {STUDENT_DIR.relative_to(ML_ROOT).as_posix()} "
-        f"(val recall@10 {meta.get('val_recall@10', float('nan')):.3f}) and "
+        f"reading {student_dir.relative_to(ML_ROOT).as_posix()} "
+        f"(tuning objective {meta['tuning']['objective']:.4f}) and "
         f"{num(len(catalog.items))} items; opset {cfg.opset}, "
         f"limit {cfg.max_model_bytes / 2**20:.0f} MiB"
     )
 
-    work = OUT / "onnx"
     fp32, int8 = work / "student.fp32.onnx", work / "student.int8.onnx"
     log.info("exporting the ONNX graph (fp32)")
     export_onnx(model, fp32, cfg.opset)
     log.info("dynamic int8 quantization")
     student_cfg = StudentConfig(**meta["cfg"])
-    _, vectors = select_quantization(fp32, int8, tokenizer, catalog, student_cfg, cfg)
+    # vectors.bin holds fp16 values; selection and the name data use exactly those values.
+    vectors = np.load(student_dir / "items.npy").astype(np.float16).astype(np.float32)
+    select_quantization(fp32, int8, tokenizer, catalog, vectors, student_cfg, cfg)
     size = int8.stat().st_size
     log.info(f"int8 model: {size / 2**20:.2f} MiB (fp32 {fp32.stat().st_size / 2**20:.1f} MiB)")
     if size > cfg.max_model_bytes:
@@ -535,5 +552,7 @@ def run() -> None:
     if cosine.min() < 0.9:
         log.warning("some int8 embeddings differ a lot from fp32 (cosine below 0.9)")
 
-    write_bundle(int8, tokenizer, STUDENT_DIR / "encoder", catalog, student_cfg, vectors)
+    write_bundle(
+        int8, tokenizer, student_dir / "encoder", catalog, student_cfg, vectors, bundle, images
+    )
     log.info(f"done in {elapsed(start)}")

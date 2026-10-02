@@ -4,8 +4,8 @@ import gc
 import json
 import statistics
 import time
-from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -15,12 +15,12 @@ from transformers import AutoModel, AutoTokenizer
 from mise_ml.config import (
     BUNDLE,
     CATALOG,
-    CATEGORIES,
+    EVAL_FAILURES,
     EVAL_REPORT,
-    JUDGMENTS,
+    GOLD_SET,
     ML_ROOT,
     SEED,
-    ProfileConfig,
+    TUNING_SET,
     StudentConfig,
     TeacherConfig,
 )
@@ -29,60 +29,34 @@ from mise_ml.data import (
     fidelity_at_k,
     load_catalog,
     load_eval_sets,
-    load_eval_texts,
     load_queries,
     recall_at_k,
-    recall_scores,
 )
 from mise_ml.export import onnx_run, onnx_session
 from mise_ml.features import shared_encoder
-from mise_ml.llm import Job, JobSpec, Record, Request, Unit, sha
+from mise_ml.install import TARGET
 from mise_ml.log import elapsed, get, num, progress
-from mise_ml.profile import (
-    chunks,
-    item_prompt,
-    lazy_llm,
-    numbered,
-    numbered_array,
-    obj,
-    parse_numbered,
-)
-from mise_ml.student import Student, encode_texts, load_student
+from mise_ml.profile import item_prompt
+from mise_ml.rated import FIT, RatedSet, brief, load_rated, rated_scores
+from mise_ml.student import Student, encode_texts
 from mise_ml.teacher import item_store, load_teacher, query_store
-from mise_ml.util import iter_jsonl, make_deterministic, write_json
+from mise_ml.util import atomic_write, iter_jsonl, make_deterministic, write_json
 from mise_ml.vocab import load_vocab
 
 log = get(__name__)
-SHIP_MARGIN = 0.05
-SEP = "\x1f"
-JUDGED_K = 10
-JUDGE_FACTS_CHARS = 700
-
-JUDGE_SYSTEM = """You judge picks for mise, a mood app. A user typed a feeling, and the app \
-shows works that should feel like it.
-
-Read the feeling as a person would. It can be short, casual, misspelled, figurative, \
-sarcastic, or mixed. Interpret idioms and slang by their meaning. For sarcasm, judge the \
-underlying feeling, not the literal claim.
-
-For each numbered work, default to fit = false. Answer true only when source evidence \
-supports the same dominant emotion as the user's feeling. Use the source facts and tags to \
-check the generated profile. The profile is an interpretation, not independent evidence. Mark a \
-pick false when it matches only a surface word, object, setting, or title but not the \
-feeling. Require the work's central feeling to match the user's specific emotional \
-experience; a broad shared mood such as sadness or unease is not enough. When source \
-facts and the profile disagree, trust the source facts. Do not invent events or feelings \
-to justify a match. Answer true only with direct evidence that the work shares the \
-dominant emotion. Answer false when the source describes a different or opposing \
-emotion, or when the match needs an unsupported interpretation. For example, 'over the \
-moon' means delight; a lonely lunar adventure is not a fit just because it involves the \
-moon. In 'beautiful morning but i cannot face getting up', exhaustion dominates; a \
-cheerful morning scene is not a fit. Judge the emotional core and tone of the work, \
-not the literal topic."""
-
-
-def judge_schema(count: int) -> dict[str, Any]:
-    return obj({"fits": numbered_array({"fit": {"type": "boolean"}}, count)})
+# The student's tuning objective must beat the untrained backbone by this much.
+SHIP_MARGIN = 0.10
+# The student may fall at most this far below the installed bundle on the shared tuning pairs.
+INSTALLED_MARGIN = 0.01
+FACTS_CHARS = 700
+# The failures report lists this many pairs of each kind. A non-fit has a rating at most NON_FIT.
+WORST = 25
+NON_FIT = 0.5
+# World fidelity samples this many works. The app shows WORLD_SAME neighbors in a work's category
+# and WORLD_OTHER in each other category (src/lib/mood/search.ts).
+WORLD_SAMPLE = 1000
+WORLD_SAME = 2
+WORLD_OTHER = 2
 
 
 @dataclass
@@ -110,27 +84,28 @@ def teacher_outputs(texts: list[str], catalog: Catalog) -> Outputs:
         )
 
 
-def student_outputs(texts: list[str], catalog: Catalog) -> tuple[Outputs, list[float]]:
-    """Read the public int8 ONNX graph and public catalog vectors."""
-    model_path = BUNDLE / "model" / "model.onnx"
+def bundle_outputs(root: Path, texts: list[str], desc: str) -> tuple[Outputs, list[float]]:
+    """Read a public bundle: its int8 ONNX graph, tokenizer, and catalog vectors."""
+    model_path = root / "model" / "model.onnx"
     if not model_path.exists():
-        raise SystemExit(f"no bundle at {BUNDLE}; run uv run train first")
-    _, tokenizer, meta = load_student()
+        raise SystemExit(f"no bundle at {root}; run uv run train first")
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    tokenizer = AutoTokenizer.from_pretrained(root / "model")
     items = (
-        np.fromfile(BUNDLE / "vectors.bin", dtype="<f2")
+        np.fromfile(root / "vectors.bin", dtype="<f2")
         .astype(np.float32)
-        .reshape(len(catalog.items), -1)
+        .reshape(-1, manifest["encoder"]["dims"])
     )
     session = onnx_session(model_path, threads=1)
-    max_tokens = meta["cfg"]["max_length"]
+    max_tokens = manifest["encoder"]["maxTokens"]
     rows, latency = [], []
     onnx_run(session, tokenizer, [texts[0]], max_tokens)
-    for text in progress(texts, desc="student (1 thread)", unit="text"):
+    for text in progress(texts, desc=f"{desc} (1 thread)", unit="text"):
         start = time.perf_counter()
         out = onnx_run(session, tokenizer, [text], max_tokens)
         latency.append((time.perf_counter() - start) * 1000)
         rows.append(out)
-    heads = json.loads((BUNDLE / "manifest.json").read_text(encoding="utf-8"))["heads"]
+    heads = manifest["heads"]
     choices = []
     for name in ("light", "typeface"):
         logits = np.concatenate([r[name] for r in rows])
@@ -149,8 +124,16 @@ def student_outputs(texts: list[str], catalog: Catalog) -> tuple[Outputs, list[f
     )
 
 
+def student_outputs(texts: list[str], catalog: Catalog) -> tuple[Outputs, list[float]]:
+    """Read the new bundle; its vectors follow the current catalog order."""
+    out, latency = bundle_outputs(BUNDLE, texts, "student")
+    if len(out.items) != len(catalog.items):
+        raise SystemExit("catalog changed since export; rerun uv run train")
+    return out, latency
+
+
 def baseline_outputs(texts: list[str], catalog: Catalog) -> Outputs:
-    """Untrained student backbone for the retrieval floor and judging pool."""
+    """Untrained student backbone for the retrieval floor and the ship gate."""
     from mise_ml.student import STUDENT_DIR
 
     saved = json.loads((STUDENT_DIR / "meta.json").read_text(encoding="utf-8"))["cfg"]
@@ -170,218 +153,99 @@ def baseline_outputs(texts: list[str], catalog: Catalog) -> Outputs:
     )
 
 
-def top_by_category(out: Outputs, catalog: Catalog, k: int) -> list[dict[str, list[int]]]:
-    sims = out.query @ out.items.T
-    result = []
-    for row in sims:
-        per_cat = {}
-        for c, name in enumerate(CATEGORIES):
-            idx = np.flatnonzero(catalog.categories == c)
-            per_cat[name] = idx[np.argsort(-row[idx])[:k]].tolist()
-        result.append(per_cat)
-    return result
-
-
-def judge() -> None:
-    """Local LLM relevance judgments for pooled items. Resumable like profile."""
-    make_deterministic(SEED, warn_only=True)
-    cfg = ProfileConfig()
-    texts = load_eval_texts()
-    if not texts:
-        raise SystemExit("no eval feelings; write eval_feelings.jsonl first")
-    catalog = load_catalog()
-    k = cfg.judge_pool_per_system
-    log.info(
-        f"judge: {num(len(texts))} eval feelings; pool = top {k} per category from the "
-        "teacher, the student, and the untrained MiniLM"
-    )
-    from mise_ml.steps import JUDGE_POOL, judge_pool_state
-
-    state = judge_pool_state()
-    saved = json.loads(JUDGE_POOL.read_text(encoding="utf-8")) if JUDGE_POOL.is_file() else None
-    if saved and saved["state"] == state:
-        keys = saved["keys"]
-    else:
-        systems = []
-        for name, fn in progress(
-            (
-                ("teacher", teacher_outputs),
-                ("student", lambda t, c: student_outputs(t, c)[0]),
-                ("baseline", baseline_outputs),
-            ),
-            desc="judge pool",
-            unit="system",
-        ):
-            log.debug(f"judge pool: ranking with the {name}")
-            systems.append(top_by_category(fn(texts, catalog), catalog, k))
-        shared_encoder.cache_clear()  # free the 8B teacher before the 9B labeler loads
-        gc.collect()
-        torch.cuda.empty_cache()
-        keys = [
-            SEP.join((text, cat, catalog.items[i]["id"]))
-            for t, text in enumerate(texts)
-            for cat in CATEGORIES
-            for i in dict.fromkeys(i for s in systems for i in s[t][cat])
-        ]
-        write_json(JUDGE_POOL, {"state": state, "keys": keys})
-    judge_job(keys).run(lazy_llm(cfg))
-    fits = sum(1 for r in iter_jsonl(JUDGMENTS) if r["fit"])
-    log.info(f"judge: {num(fits)} pairs judged a fit")
-
-
-def judge_job(keys: list[str]) -> JobSpec:
-    cfg = ProfileConfig()
+def work_facts(item_ids: list[str]) -> dict[str, str]:
+    """Source facts and the generated profile of each work, as raters read them."""
     catalog = load_catalog()
     sources = {row["id"]: row for row in iter_jsonl(CATALOG)}
-
-    def describe(key: str) -> str:
-        index = catalog.index[key.split(SEP)[2]]
+    result = {}
+    for item_id in item_ids:
+        index = catalog.index[item_id]
         resolved = catalog.items[index]
-        source = sources.get(resolved["id"], {})
+        source = sources.get(item_id, {})
         facts = {
             **source,
             **resolved,
             "signal": {**source.get("signal", {}), **resolved.get("signal", {})},
         }
-        # Cap the facts: a pool holds about 100 works per feeling, and full overviews and poems
-        # would multiply the judge's prompt tokens several times over.
-        source = item_prompt(facts)
-        if len(source) > JUDGE_FACTS_CHARS:
-            source = source[:JUDGE_FACTS_CHARS].rsplit(" ", 1)[0] + " ..."
-        return f"Source facts:\n{source}\nGenerated profile: {catalog.texts[index]}"
+        # Cap the facts: full overviews and poems make a batch of works too long to rate.
+        text = item_prompt(facts)
+        if len(text) > FACTS_CHARS:
+            text = text[:FACTS_CHARS].rsplit(" ", 1)[0] + " ..."
+        result[item_id] = f"Source facts:\n{text}\nGenerated profile: {catalog.texts[index]}"
+    return result
 
-    def prompt_for(text: str, group: list[str]) -> str:
-        return (
-            f"Feeling: {text}\n\nWorks:\n{numbered([describe(k) for k in group])}"
-            f"\n\nUser's feeling: {text}\n"
-            "For each work, compare its central emotion with this feeling. Default to false. "
-            "Answer true only when source evidence supports the same dominant emotion."
-        )
 
-    def build(pending: list[str]) -> list[Unit]:
-        groups: dict[str, list[str]] = defaultdict(list)
-        for key in pending:
-            groups[key.split(SEP)[0]].append(key)
-        units = []
-        for text, group in sorted(groups.items()):
-            for chunk in chunks(group, 20):
-                prompt = prompt_for(text, chunk)
-                units.append(
-                    Unit(
-                        chunk,
-                        Request(JUDGE_SYSTEM, prompt, judge_schema(len(chunk)), 20 * len(chunk)),
-                    )
-                )
-        return units
-
-    def parse(unit_keys: list[str], data: dict[str, Any]) -> list[Record]:
-        return parse_numbered(unit_keys, data["fits"], lambda row: {"fit": bool(row["fit"])})
-
-    def fingerprint(key: str) -> str:
-        return sha(key + prompt_for(key.split(SEP)[0], [key]))
-
-    return JobSpec(
-        Job("judge", JUDGMENTS, cfg),
-        keys,
-        build,
-        parse,
-        fingerprint,
-        lambda k: {
-            "feeling": k.split(SEP)[0],
-            "category": k.split(SEP)[1],
-            "item_id": k.split(SEP)[2],
-            "text": describe(k),
-        },
+def installed_scores(
+    tuning: RatedSet, student: Outputs, rows: list[int], catalog: Catalog
+) -> dict[str, Any] | None:
+    """Score the installed bundle and the new student on the tuning pairs whose works are in
+    both catalogs. rows holds the student's query row for each tuning feeling."""
+    if not (TARGET / "manifest.json").is_file():
+        return None
+    ids = [it["id"] for it in json.loads((TARGET / "items.json").read_text(encoding="utf-8"))]
+    index = {item_id: i for i, item_id in enumerate(ids)}
+    keep = np.asarray([catalog.items[i]["id"] in index for i in tuning.item], dtype=bool)
+    shared = replace(
+        tuning, feeling=tuning.feeling[keep], item=tuning.item[keep], rating=tuning.rating[keep]
     )
-
-
-def judged_fits(catalog: Catalog) -> dict[tuple[str, str], set[int]]:
-    fits: dict[tuple[str, str], set[int]] = defaultdict(set)
-    for r in iter_jsonl(JUDGMENTS):
-        text, cat, item_id = r["key"].split(SEP)
-        if r["fit"] and item_id in catalog.index:
-            fits[(text, cat)].add(catalog.index[item_id])
-    return fits
-
-
-def judged_scores(
-    out: Outputs,
-    texts: list[str],
-    catalog: Catalog,
-    fits: dict[tuple[str, str], set[int]],
-) -> np.ndarray:
-    tops = top_by_category(out, catalog, JUDGED_K)
-    scores = []
-    for t, text in enumerate(texts):
-        per_feeling = []
-        for cat in CATEGORIES:
-            rel = fits.get((text, cat))
-            if rel:
-                per_feeling.append(len(rel & set(tops[t][cat])) / min(len(rel), 10))
-        scores.append(float(np.mean(per_feeling)) if per_feeling else float("nan"))
-    return np.asarray(scores)
-
-
-def paired_gap(a: np.ndarray, b: np.ndarray) -> dict[str, Any]:
-    """Resample paired feelings with a fixed seed for a percentile interval."""
-    if not len(a) or not np.isfinite(a).all() or not np.isfinite(b).all():
-        return {"gap": None, "ci95": None, "feelings": len(a)}
-    differences = a - b
-    rng = np.random.default_rng(SEED)
-    means = np.empty(10000)
-    for i in range(len(means)):
-        means[i] = differences[rng.integers(0, len(a), len(a))].mean()
+    installed, _ = bundle_outputs(TARGET, tuning.feelings, "installed")
     return {
-        "gap": float(differences.mean()),
-        "ci95": np.quantile(means, [0.025, 0.975]).tolist(),
-        "feelings": len(a),
+        "pairs": int(keep.sum()),
+        "student": rated_scores(shared, student.query[rows], student.items),
+        "installed": rated_scores(
+            replace(
+                shared,
+                item=np.asarray([index[catalog.items[i]["id"]] for i in shared.item], dtype=int),
+            ),
+            installed.query,
+            installed.items,
+        ),
     }
 
 
 def ship_gate(
-    held: dict[str, np.ndarray],
-    judged: dict[str, np.ndarray],
-    n_judged: int,
-    judgments_complete: bool,
+    tuning: dict[str, dict[str, float]], installed: dict[str, Any] | None
 ) -> dict[str, Any]:
-    gaps = {
-        "teacher_student_judged": paired_gap(judged["teacher"], judged["student"]),
-        "teacher_student_heldout": paired_gap(held["teacher"], held["student"]),
-        "student_baseline_heldout": paired_gap(held["student"], held["baseline"]),
+    """Gate the bundle on the tuning set. The gold set is never part of the gate."""
+    student, baseline = tuning["student"]["objective"], tuning["baseline"]["objective"]
+    lead = student - baseline
+    checks: dict[str, Any] = {
+        "student_tuning": student,
+        "baseline_tuning": baseline,
+        "student_over_baseline": lead,
     }
     reasons = []
-    if n_judged < 100:
+    log.info("student over baseline on the tuning set: %.4f; need %.2f", lead, SHIP_MARGIN)
+    # A NaN fails every check.
+    if not lead >= SHIP_MARGIN:
         reasons.append(
-            f"judged set is too small: {n_judged} feelings with fits; at least 100 required"
+            f"student tuning objective is only {lead:.4f} above the baseline; need {SHIP_MARGIN}"
         )
-    if not judgments_complete:
-        reasons.append("judgments are missing for the current retrieval pool; run uv run train")
-    for name, result in gaps.items():
-        gap, interval = result["gap"], result["ci95"]
-        if gap is None:
-            reasons.append(f"{name}: no complete paired recall scores")
-            log.warning("%s: confidence interval unavailable", name)
-            continue
+    if installed is None:
+        checks["installed"] = f"skipped: no installed bundle at {TARGET}"
+        log.info("no installed bundle at %s; skip the installed comparison", TARGET)
+    else:
+        new, old = installed["student"]["objective"], installed["installed"]["objective"]
+        checks["installed"] = {
+            "pairs": installed["pairs"],
+            "student": new,
+            "installed": old,
+            "student_over_installed": new - old,
+        }
         log.info(
-            "%s: %.2f points, paired bootstrap 95%% CI [%.2f, %.2f]",
-            name,
-            gap * 100,
-            interval[0] * 100,
-            interval[1] * 100,
+            "installed bundle on %d shared tuning pairs: student %.4f, installed %.4f",
+            installed["pairs"],
+            new,
+            old,
         )
-        if name == "student_baseline_heldout":
-            if gap < 0.10:
-                reasons.append(f"student is only {gap * 100:.2f} points above baseline; need 10")
-        elif gap > SHIP_MARGIN:
-            reasons.append(f"{name}: student is {gap * 100:.2f} points behind; limit 5")
+        if not new - old >= -INSTALLED_MARGIN:
+            reasons.append(
+                f"student is {old - new:.4f} below the installed bundle on "
+                f"{installed['pairs']} shared tuning pairs; limit {INSTALLED_MARGIN}"
+            )
     for reason in reasons:
         log.warning(reason)
-    return {
-        "ok": not reasons,
-        "reasons": reasons,
-        "gaps": gaps,
-        "bootstrap": {"seed": SEED, "resamples": 10000, "unit": "feeling"},
-    }
+    return {"ok": not reasons, "reasons": reasons, "checks": checks}
 
 
 def label_metrics(out: Outputs, rows: np.ndarray, qs: Any, offset: int) -> dict[str, float]:
@@ -402,6 +266,89 @@ def label_metrics(out: Outputs, rows: np.ndarray, qs: Any, offset: int) -> dict[
     return metrics
 
 
+def failures(rs: RatedSet, sims: np.ndarray, catalog: Catalog) -> str:
+    """The student's worst tuning pairs as Markdown: fits that it ranks low in their feeling and
+    non-fits that it ranks high. sims holds the student's similarity of each pair."""
+    rank = np.empty(len(sims), dtype=int)
+    size = np.empty(len(sims), dtype=int)
+    for f in np.unique(rs.feeling):
+        m = np.flatnonzero(rs.feeling == f)
+        rank[m[np.argsort(-sims[m], kind="stable")]] = np.arange(1, len(m) + 1)
+        size[m] = len(m)
+    # The place of a pair among its feeling's pairs: 0 at the top, 1 at the bottom.
+    place = (rank - 1) / np.maximum(size - 1, 1)
+    fits = np.flatnonzero(rs.rating >= FIT)
+    non_fits = np.flatnonzero(rs.rating <= NON_FIT)
+    sections = (
+        (
+            "Missed fits",
+            f"rating {FIT:g} or more, lowest in their feeling",
+            fits[np.lexsort((sims[fits], -place[fits]))],
+        ),
+        (
+            "False fits",
+            f"rating {NON_FIT:g} or less, highest in their feeling",
+            non_fits[np.lexsort((-sims[non_fits], place[non_fits]))],
+        ),
+    )
+    lines = ["# The student's worst tuning pairs", ""]
+    for title, rule, pairs in sections:
+        lines += [f"## {title} ({rule})", ""]
+        for n, i in enumerate(pairs[:WORST], 1):
+            it = catalog.items[rs.item[i]]
+            lines += [
+                f"{n}. **{rs.feelings[rs.feeling[i]]}**: {it['category']}, "
+                f"{it['title']} by {it['creator']}",
+                f"   rating {rs.rating[i]:.2f}; similarity {sims[i]:.3f}; "
+                f"rank {rank[i]} of {size[i]}",
+                f"   - vibe: {it['vibe']}",
+                f"   - description: {it['description']}",
+                "",
+            ]
+    return "\n".join(lines)
+
+
+def world_neighbors(rows: np.ndarray, items: np.ndarray, catalog: Catalog) -> list[set[int]]:
+    """The app's world rule (world() in src/lib/mood/search.ts): the nearest works by item-to-item
+    similarity, WORLD_SAME in the work's category and WORLD_OTHER in each other category. Skip the
+    work, its creator, and its title, and take one work per creator in a category."""
+    creators = np.asarray([str(it["creator"]) for it in catalog.items])
+    titles = np.asarray([str(it["title"]) for it in catalog.items])
+    # The app sums in double precision, and a stable sort keeps catalog order for equal scores.
+    items = items.astype(np.float64)
+    orders = np.argsort(-(items[rows] @ items.T), axis=1, kind="stable")
+    result = []
+    for row, order in zip(rows, orders, strict=True):
+        skip = (creators == creators[row]) | (titles == titles[row])
+        need = {
+            int(cat): WORLD_SAME if cat == catalog.categories[row] else WORLD_OTHER
+            for cat in np.unique(catalog.categories)
+        }
+        seen: dict[int, set[str]] = {cat: set() for cat in need}
+        found: set[int] = set()
+        for i in order:
+            cat = int(catalog.categories[i])
+            if skip[i] or len(seen[cat]) >= need[cat] or creators[i] in seen[cat]:
+                continue
+            seen[cat].add(creators[i])
+            found.add(int(i))
+            if len(found) == sum(need.values()):
+                break
+        result.append(found)
+    return result
+
+
+def world_fidelity(
+    rows: np.ndarray, student_items: np.ndarray, teacher_items: np.ndarray, catalog: Catalog
+) -> float:
+    """The share of the teacher's world neighbors of each sampled work that the student's world
+    neighbors also contain."""
+    teacher = world_neighbors(rows, teacher_items, catalog)
+    student = world_neighbors(rows, student_items, catalog)
+    shared = sum(len(t & s) for t, s in zip(teacher, student, strict=True))
+    return shared / sum(len(t) for t in teacher)
+
+
 def run() -> dict[str, Any]:
     start = time.perf_counter()
     make_deterministic(SEED)
@@ -417,8 +364,6 @@ def run() -> dict[str, Any]:
     )
     if not len(eval_rows):
         log.warning("no eval feelings found; the report covers the held-out feelings only")
-    if not JUDGMENTS.exists():
-        log.info("no judgments yet; run `uv run train` for the judged recall@10")
 
     teacher = teacher_outputs(texts, catalog)
     student, latency = student_outputs(texts, catalog)
@@ -460,42 +405,21 @@ def run() -> dict[str, Any]:
             "top_share": float(counts.max() / n_eval) if n_eval else None,
         }
     systems = {"teacher": teacher, "student": student, "baseline": baseline}
-    held_scores = {
-        name: recall_scores(out.query[n_eval:], held_pos, out.items, catalog.categories)
-        for name, out in systems.items()
-    }
-    fits = judged_fits(catalog)
-    judged_mask = np.asarray(
-        [any(fits.get((text, cat)) for cat in CATEGORIES) for text in eval_texts], dtype=bool
-    )
-    n_judged = int(judged_mask.sum())
-    dropped = n_eval - n_judged
-    log.info("judged recall: dropped %d feelings with no fits; %d remain", dropped, n_judged)
-    report["counts"].update(judged=n_judged, judged_dropped_no_fits=dropped)
-    judged = {
-        name: judged_scores(
-            Outputs(out.query[:n_eval], out.items, out.palette, out.choices),
-            eval_texts,
-            catalog,
-            fits,
-        )[judged_mask]
-        for name, out in systems.items()
-    }
-    for name, scores in judged.items():
-        report[name]["recall@10_judged"] = float(scores.mean()) if len(scores) else float("nan")
-    eval_sets = load_eval_sets()
-    set_names = np.asarray([eval_sets[text] for text in eval_texts])
-    for name, scores in judged.items():
-        report[name]["judged_by_set"] = {}
-        for set_name in sorted(set(set_names)):
-            mask = set_names[judged_mask] == set_name
-            selected = scores[mask]
-            report[name]["judged_by_set"][str(set_name)] = {
-                "feelings": int((set_names == set_name).sum()),
-                "judged": int(mask.sum()),
-                "recall@10": float(selected.mean()) if len(selected) else None,
-            }
-    # Judge-free: the share of the teacher's top 10 per category that the student also finds.
+    # Rated pairs: the tuning set picked the settings and gates the bundle; the gold set is the
+    # independent check.
+    row = {text: i for i, text in enumerate(eval_texts)}
+    rated: dict[str, tuple[RatedSet, list[int]]] = {}
+    for set_name, path in (("tuning", TUNING_SET), ("gold", GOLD_SET)):
+        rs = load_rated(path, catalog)
+        missing = [f for f in rs.feelings if f not in row]
+        if missing:
+            raise SystemExit(f"{path.name}: {len(missing)} feelings are not eval feelings")
+        idx = [row[f] for f in rs.feelings]
+        rated[set_name] = rs, idx
+        report["counts"][set_name] = len(rs.rating)
+        for name, out in systems.items():
+            report[name][set_name] = rated_scores(rs, out.query[idx], out.items)
+    # The share of the teacher's top 10 per category that the student also finds.
     fidelity = fidelity_at_k(
         student.query[:n_eval],
         student.items,
@@ -503,30 +427,32 @@ def run() -> dict[str, Any]:
         teacher.items,
         catalog.categories,
     )
+    eval_sets = load_eval_sets()
+    set_names = np.asarray([eval_sets[text] for text in eval_texts])
     report["student"]["fidelity@10"] = float(fidelity.mean()) if n_eval else None
     report["student"]["fidelity_by_set"] = {
         str(set_name): float(fidelity[set_names == set_name].mean())
         for set_name in sorted(set(set_names))
     }
-    known = {r["key"] for r in iter_jsonl(JUDGMENTS)}
-    # Check only the depth used by the metric.
-    # The deeper judge pool covers near-tied items that floating-point noise can reorder.
-    complete = all(
-        SEP.join((text, cat, catalog.items[i]["id"])) in known
-        for out in systems.values()
-        for text, tops in zip(
-            eval_texts,
-            top_by_category(
-                Outputs(out.query[:n_eval], out.items, out.palette, out.choices),
-                catalog,
-                JUDGED_K,
-            ),
-            strict=True,
-        )
-        for cat, indices in tops.items()
-        for i in indices
+    world = np.random.default_rng(SEED).choice(
+        len(catalog.items), min(WORLD_SAMPLE, len(catalog.items)), replace=False
     )
-    report["ship"] = ship_gate(held_scores, judged, n_judged, complete)
+    report["student"]["world_fidelity"] = world_fidelity(
+        np.sort(world), student.items, teacher.items, catalog
+    )
+    tuning, tuning_rows = rated["tuning"]
+    atomic_write(
+        EVAL_FAILURES,
+        failures(
+            tuning,
+            (student.query[tuning_rows][tuning.feeling] * student.items[tuning.item]).sum(1),
+            catalog,
+        ).encode("utf-8"),
+    )
+    installed = installed_scores(tuning, student, tuning_rows, catalog)
+    report["ship"] = ship_gate(
+        {name: report[name]["tuning"] for name in ("student", "baseline")}, installed
+    )
     write_json(EVAL_REPORT, report)
 
     def cell(value: float | None, width: int, digits: int = 3) -> str:
@@ -534,29 +460,33 @@ def run() -> dict[str, Any]:
             return f"{'—':>{width}}"
         return f"{value:>{width}.{digits}f}"
 
-    log.info(f"{'':8} {'recall@10':>10} {'judged':>8} {'palette dE':>11} {'light':>6} {'type':>6}")
+    log.info(f"{'':8} {'recall@10':>10} {'palette dE':>11} {'light':>6} {'type':>6}")
     for name in ("teacher", "student", "baseline"):
         r = report[name]
         e = r["eval"] or r["heldout"]
         log.info(
-            f"{name:8} {cell(r['recall@10_heldout'], 10)} {cell(r['recall@10_judged'], 8)} "
+            f"{name:8} {cell(r['recall@10_heldout'], 10)} "
             f"{cell(e.get('palette_dE'), 11, 4)} {cell(e.get('light_acc'), 6)} "
             f"{cell(e.get('typeface_acc'), 6)}"
         )
     log.info("baseline = untrained student backbone; it has no palette or choice heads")
-    for set_name in sorted(set(set_names)):
-        results = [report[name]["judged_by_set"][set_name] for name in systems]
+    for set_name in ("tuning", "gold"):
         log.info(
-            "judged set %s (%d/%d): teacher %s, student %s, baseline %s; student fidelity %s",
+            "%s set (%d pairs): %s",
             set_name,
-            results[0]["judged"],
-            results[0]["feelings"],
-            *(cell(result["recall@10"], 5) for result in results),
-            cell(report["student"]["fidelity_by_set"][set_name], 5),
+            report["counts"][set_name],
+            "; ".join(f"{name} {brief(report[name][set_name])}" for name in systems),
         )
+    for set_name, value in report["student"]["fidelity_by_set"].items():
+        log.info("eval set %s: student fidelity@10 %s", set_name, cell(value, 5))
     log.info(
         "student fidelity@10 (teacher's top 10 per category): %s",
         cell(report["student"]["fidelity@10"], 5),
+    )
+    log.info(
+        "student world fidelity (teacher's world neighbors of %d works): %s",
+        len(world),
+        cell(report["student"]["world_fidelity"], 5),
     )
     for name, usage in report["student"]["room_usage"].items():
         log.info(

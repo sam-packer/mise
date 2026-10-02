@@ -143,25 +143,52 @@ resolved works and reuses cached API answers.
 ## label
 
 `label` runs Qwen3.5-9B on the GPU. Constrained decoding (xgrammar) makes every answer valid JSON
-for its schema, so the model can't return a broken answer. It runs six jobs:
+for its schema, so the model can't return a broken answer. It runs seven jobs:
 
 | Job     | What the LLM writes                                                                     |
 | ------- | --------------------------------------------------------------------------------------- |
 | themes  | one sentence about what a song is about and how it feels, from its checked lyrics      |
+| leaks   | item profiles for a fixed sample of 200 works, to find prompt words that leak           |
 | items   | the work's main emotion as a vibe, a description, and three feelings a person might type |
 | moods   | about 6,000 invented feelings, with scene, first-person, and heartbreak hints |
 | pat     | a feeling for each named palette in the PAT data set                                    |
 | labels  | five colors, a light, and a typeface for about 30,000 feelings                 |
 | distill | up to 40,000 feelings across 30 styles, with no labels |
 
-The items prompt is neutral on purpose. Blind audits by Claude showed that a word in the prompt
-shows up in the descriptions: "tension" made works darker, and "irony" put irony into most lyric
-themes. The prompt asks for the emotion most people feel from the work, says to keep light works
-light, and forbids invented lyrics, sounds, colors, figures, and events. For songs, the prompt also
-gets the Wikipedia text and the lyric theme from `facts`.
+Blind audits by Claude showed that a word in the prompt shows up in the descriptions: "tension"
+made works darker, and "irony" put irony into most lyric themes. The items prompt asks for the
+emotion most people feel from the work, in precise words with three quoted examples. It says to
+keep light works light, and forbids invented lyrics, sounds, colors, figures, and events. For
+songs, the prompt also gets the Wikipedia text and the lyric theme from `facts`. The **audit**
+step of `train` looks for such words in the finished profiles. It also gives the catalog shares
+of the words on the leaks block list.
 
-The items job asks for at most 10 words in a vibe. The grammar allows up to 12 so the model can
-finish the thought. Words use ASCII letters, digits, apostrophes, and hyphens, with at most 14
+The **leaks** job runs before items. It labels a fixed sample of works two times: 70 art works, 40
+poems, 40 books, 25 songs, and 25 films. A hash of the work id selects them. The first time, it
+uses the current prompts. The second time, it uses the neutral baseline prompt (`BASELINE_SYSTEM`).
+A word of a category's prompt leaks when its share of the vibes and descriptions under the current
+prompt is at least 5 points higher than under the baseline, and at least two times the baseline
+share. The baseline share counts as at least one work. The job writes the leaked words of each
+category, with both shares, to `curated/leak_block.jsonl`. Each row also keeps its sample and a
+digest of the category's prompt, the baseline prompt, the leak rule, and the decoding settings.
+A category keeps its block list while that digest stays the same, so refine drops and refills do
+not change it. When the digest changes, the job draws a new sample for that category.
+
+The items job discourages the words on its category's block list, and their plural and -ly forms.
+If a vibe or description uses one, the first answer and the first retry fail with a message that
+names the word. The last retry accepts the word, so a work keeps it when no other word fits, and the
+block list never stops the job. The log gives the number of works that kept a blocked word. The
+block list is part of the key of each item, so a change to a category's list labels that category
+again.
+
+Each category has its own items prompt in `ITEM_SYSTEMS` in `profile.py`, as a pilot selected
+them. Art and film prompts also list broad words to avoid; book and song prompts do not. The poem
+prompt adds the avoid list and has an `{examples}` slot in place of the fixed examples. The labeler
+fills the slot with `EXAMPLE_COUNT` phrases from the poem pool in `ITEM_EXAMPLES`. A seed from a
+hash of the work id selects the phrases, so a work always gets the same phrases.
+
+The items job asks for at most 10 words in a vibe. The grammar and the parser also allow at most 10
+words. Words use ASCII letters, digits, apostrophes, and hyphens, with at most 14
 characters. The parser rejects a vibe that ends with a function word or comma. Descriptions and
 example feelings use the same word rule, with ordinary punctuation. Each example feeling has 6 to
 30 words.
@@ -173,7 +200,10 @@ texts and eval feelings are excluded from distillation.
 
 An answer that fails its checks gets one retry. Each job keeps its answers in `data/llm/<job>.jsonl`.
 The key of each answer is a hash of its exact prompt. So a rerun only asks for what is new or
-changed, and a change to a prompt or the model redoes only the answers it affects.
+changed, and a change to a prompt or the model redoes only the answers it affects. The key also
+covers the decoding settings of the job: the generation grammar with its property order, the
+sampler, thinking, and the retries. For the items job, the key also covers the work's system
+prompt and seed.
 
 ## refine
 
@@ -182,7 +212,7 @@ It needs `OPENAI_API_KEY` and the download keys, because a refill downloads new 
 
 One round:
 
-1. Run facts, themes, and items for works that do not have a description yet.
+1. Run facts, themes, leaks, and items for works that do not have a description yet.
 2. GPT-6.1 Sol grades each description that `curated/ledger.jsonl` does not have yet, one at a
    time, with the source facts and, for art, the image. It gives the work's real emotion in a few
    words and grades the description: factual 0-2, emotion 0-3, specific 0-2, and good queries
@@ -212,29 +242,54 @@ descriptions.
 
 `train` runs these steps and stops at the first failure.
 
-1. **train-teacher.** The frozen Qwen3-Embedding-8B encodes every text once. Small heads learn
+1. **audit** checks the work profiles for words that the labeler overuses. For each category, it
+   counts the share of works whose vibe contains a word, and the share whose vibe and description
+   contain it. It skips function words and words about the form of a work, such as "film" or
+   "narrator". A word gets a warning when its share is above 25% in the vibes or above 40% in the
+   vibes and descriptions. The warning also gives the word's share in the other categories, so you
+   can see a habit of one category ("quiet" in art) apart from a general one. The step writes
+   `out/data_audit.json`. It only warns; it never stops the run. A change to the profiles runs it
+   again. To run it alone, use `uv run python -m mise_ml.audit`. It needs no GPU.
+2. **train-teacher.** The frozen Qwen3-Embedding-8B encodes every text once. Small heads learn
    to rank works for a feeling (InfoNCE: the matching work must score above the other works in the
-   batch), and to predict the palette, light, and typeface. 6 epochs at a learning rate of
-   3e-4, with warmup and a cosine decay. The run keeps the epoch with the best validation score.
-2. **train-student.** MiniLM learns from the teacher. For each feeling it copies the teacher's
-   ranking of works inside each category (the teacher's top 4 per category, with a strong KL
-   weight of 16), its palette, and its label choices. The distillation feelings from `label`
+   batch), and to predict the palette, light, and typeface, with warmup and a cosine decay. The
+   teacher's score for a feeling and a work mixes the cosine of the head vectors with the cosine
+   of the raw Qwen vectors (`raw_weight`, 0.5 by default), so the heads learn what the raw
+   vectors miss. Before training, the step drops each train, val, and distill text whose Qwen
+   query cosine to any line of `eval_feelings.jsonl` is 0.88 or higher (`near_eval_cosine`), so
+   rewordings of the rated feelings do not train either model. The log gives the count. The run
+   keeps the epoch with the best tuning objective (see "The rated sets"
+   below). `teacher_params.json` holds the learning rate, weight decay, dropout, epochs, hidden
+   size, batch size, temperature, label smoothing, warmup, and raw weight. Without that file, the
+   step first runs an Optuna search of 50 trials (about 20 minutes). Each trial trains the heads,
+   and the search keeps the trial with the best tuning objective. The step writes the settings of
+   that trial to the file. Git tracks the file.
+   `uv run train --tune` runs a new search and replaces the file. A change to the file runs
+   train-teacher and the steps after it again.
+3. **train-student.** MiniLM learns from the teacher. The student encodes feelings only. The
+   work vectors are fixed: the teacher's work vectors on their top 384 singular vectors (the
+   384-dim space that best keeps the teacher's work-to-work scores). On the tuning set, the
+   teacher scores 0.630 in this space and 0.641 in its full space. The step saves these vectors
+   as `items.npy`, and export ships them as `vectors.bin`. For each feeling the student copies the
+   teacher's ranking of works inside each category (the teacher's top 4 per category, with a
+   strong KL weight of 16), the teacher's feeling vector in the fixed space, its palette, and its
+   label choices. The distillation feelings from `label`
    have no answers of their own. They only teach the student to rank the way the teacher does, on
    a wider range of writing. In each epoch, 30% of the training feelings get typing noise (casual
    spellings such as "im" and "wanna", and one or two letter slips); the teacher's target stays
-   the one for the clean text. The run keeps the epoch whose rankings agree best with the
-   teacher's top 10 per category on validation feelings (fidelity), for up to 16 epochs.
-3. **export** writes one ONNX file with the encoder and all heads, then quantizes it to int8 (8-bit
+   the one for the clean text. The run trains for up to 40 epochs and keeps the epoch with the
+   best tuning objective. It stops early after 10 epochs without a better tuning objective.
+4. **export** writes one ONNX file with the encoder and all heads, then quantizes it to int8 (8-bit
    weights instead of 32-bit). It tries a few quantization recipes and keeps the one with the best
-   validation score under 24 MiB. It also writes the item vectors as 16-bit floats and the name
+   tuning objective under 24 MiB. It also writes the fixed item vectors as 16-bit floats and the name
    data for the "in the key of" matcher. Last, it runs `../scripts/build-samples.ts` on the
    finished bundle. That script runs each sample feeling of the app (`../src/lib/examples.ts`)
    through the browser's engine and ONNX Runtime Web. It writes `samples/<code>.json` for each
    sample: the mood, and the world behind each of its tiles. `samples/index.json` gives the file
    and the palette of each sample. The page shows a sample's room from its file before the model
    loads. A change to the samples or to the app's search code runs export again.
-4. **eval-judge** and **eval** score the models (see below).
-5. **install** copies the bundle to `../static/bundle/`, but only when the ship gate passes.
+5. **eval** scores the models and applies the ship gate (see below).
+6. **install** copies the bundle to `../static/bundle/`, but only when the ship gate passes.
 
 `train` never uploads anything.
 
@@ -244,39 +299,86 @@ largest correction strength from 0, 0.25, 0.5, and 0.75 that loses at most two p
 of choice accuracy on validation feelings. The browser subtracts `tau * log(prior)` from each
 score before it chooses the highest. Bundles without priors use the raw scores.
 
+### The rated sets
+
+Two files hold rated pairs. Each pair is an eval feeling, a work, and a rating from 0 to 3. The
+rating is the mean of two independent Claude Opus raters that read the work's source facts and the
+rubric. A pair fits when its rating is 2 or higher.
+
+- `tuning_set.jsonl` holds 14,360 pairs over 1,061 feelings. It selects the settings.
+- `gold_set.jsonl` holds 12,202 pairs over 941 other feelings. It is the final check only. No step
+  selects by it, and the ship gate does not read it.
+
+No feeling is in both files. Training drops every text within a Qwen cosine of 0.88 of any eval
+feeling, so near-copies of rated feelings never train.
+
+A model's score on a set has two parts:
+
+- **Within-feeling AUC.** For each feeling, take every pair of one fit and one non-fit. The AUC is
+  the share of those pairs that the model ranks in the correct order.
+- **Spearman.** The rank correlation between the ratings and the model's scores over all pairs.
+
+The **objective** is the mean of the AUC and the Spearman. The tuning objective selects these:
+
+- the Optuna trial and the epoch of the teacher,
+- the epoch of the student, and the early stop,
+- the int8 quantization recipe.
+
 ### How the model is scored
 
-There are two tests.
+`eval` writes `out/eval_report.json`. For the teacher, the student, and the untrained MiniLM, the
+report gives these numbers:
 
 - **Held-out recall@10.** 10% of the item feelings never go into training. For each one, the test
   asks whether its source work lands in the top 10 of its category.
-- **Judged recall@10.** For the 540 feelings in `eval_feelings.jsonl`, the teacher, the student, and
-  the untrained MiniLM each return their top 20 works per category. The LLM marks each work in that
-  pool as a fit or not. A model's score is the fits in its top 10, divided by the fits it could
-  have found (at most 10).
+- **Tuning and gold scores.** The AUC, the Spearman, and the objective on each rated set.
+- **Label scores.** The palette error and the light and typeface accuracy against the LLM labels.
+  Only the teacher and the student get them, because the baseline has no palette or choice heads.
 
-The judge reads the generated profile alongside source facts: film overviews, book descriptions,
-tags, poem text, and song albums. It interprets slang, idioms, sarcasm, and mixed feelings. A pick
-that matches only a surface word must fail.
+For the student only, the report also gives the fidelity, the latency, and the room usage. The
+fidelity is the share of the teacher's top 10 per category that the student also ranks in its
+top 10. The latency is the time for one feeling on one CPU thread. The room usage is the number of
+distinct student lights and typefaces, and the share of each head's most common choice on eval
+feelings. The world fidelity copies the app's "world" of a work: its 2 nearest works in its own
+category and 2 in each other category, by the similarity of the work vectors. The rule skips the
+work itself, works with the same creator or title, and a second work by one creator in a category.
+For 1,000 works from a fixed sample, the world fidelity is the share of the teacher's world
+neighbors that the student's world also holds. The student's work vectors are the fixed vectors
+in `vectors.bin`, so the world fidelity measures only the loss of the 384-dim space. These numbers
+are for the report only. The ship
+gate does not use them.
 
-The ship gate needs all of these to pass:
+Eval also writes `out/eval_failures.md`, a list for a person to read. It gives the student's 25
+worst tuning pairs of two kinds:
 
-- The student is no more than 5 points below the teacher on both tests.
-- The student is at least 10 points above the untrained MiniLM on held-out recall.
-- At least 100 eval feelings have complete judgments.
+- **Missed fits:** pairs with a rating of 2 or more that the student ranks lowest among the rated
+  pairs of their feeling.
+- **False fits:** pairs with a rating of 0.5 or less that the student ranks highest in their
+  feeling.
 
-The report gives a 95% confidence interval for each gap. It reports judged recall for each set
-for all three models. The ship gate uses all eval feelings together. The report also gives the
-number of distinct student lights and typefaces, and the share of each head's most
-common choice on eval feelings.
+Each entry gives the feeling, the work, the rating, the student's similarity and its rank, and the
+work's vibe and description. Use it to see if a bad description causes the error.
+
+The ship gate reads the tuning set only. It needs these checks to pass:
+
+- The student's tuning objective is at least 0.10 above the tuning objective of the untrained
+  MiniLM.
+- The student's tuning objective is no more than 0.01 below the installed bundle in
+  `../static/bundle/`. Eval runs the installed bundle the same way as the new student. This check
+  uses only the tuning pairs whose works are in both the installed bundle and the current
+  catalog. When no installed bundle exists, eval skips this check and the report says so.
+
+The report gives the result, the reason for each failed check, and the numbers of each check. A
+change to the installed bundle runs eval again.
 
 `eval_feelings.jsonl` holds one JSON object per line, like
 `{ "text": "a snowy december and i just made warm hot chocolate", "set": "scene" }`.
 It has 290 scene feelings, 80 casual first-person feelings, and 70 each of idioms and metaphors,
 sarcasm and irony lines, slang and typo lines, mixed feelings, and heavy feelings such as grief,
 envy, and shame. The report also gives the student's fidelity for each set: the share of the
-teacher's top 10 per category that the student also ranks in its top 10. These feelings never go into training. If you add some, run `uv run label` again
-to label the new lines, then `uv run train` to update the judgments and report.
+teacher's top 10 per category that the student also ranks in its top 10. These feelings never go
+into training. If you add some, run `uv run label` again to label the new lines, then
+`uv run train` to update the report.
 
 ## publish
 
@@ -332,6 +434,8 @@ and a table of step times at the end. Each command also writes a full debug log 
 | `data/models/`         | the teacher, the student, and the step records                   |
 | `out/bundle/`          | the exported bundle                                              |
 | `out/eval_report.json` | the scores and the ship decision                                 |
+| `out/eval_failures.md` | the student's worst tuning pairs                                 |
+| `out/data_audit.json`  | the word shares per category and the overused words              |
 | `out/run.json`         | the seeds, package versions, GPU, model revisions, and file hashes |
 
 Git ignores `data/` and `out/`.

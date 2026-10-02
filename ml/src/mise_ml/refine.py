@@ -225,7 +225,7 @@ def loop(step: Callable[[str], Any]) -> None:
         drop(leftover)
     step("resolve")
     for attempt in range(cfg.rounds):
-        for name in ("facts", "themes", "items"):
+        for name in ("facts", "themes", "leaks", "items"):
             step(name)
         report(grade_round(grader, round_), round_)
         failed = pending_drops(grader)

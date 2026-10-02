@@ -36,6 +36,21 @@ log = get(__name__)
 LLM_CACHE = DATA / "llm"
 # A multiple of the 64-token Gated DeltaNet block, so chunks keep its block boundaries.
 PREFILL_CHUNK = 512
+# Decoding settings. Every job signature includes them, so a change regenerates the answers.
+# Seeded requests and all retries sample with TEMPERATURE and TOP_P.
+TEMPERATURE = 0.7
+TOP_P = 0.95
+THINKING = False
+ANY_WHITESPACE = False
+# A failed answer gets one sampled retry per seed prefix, with more tokens and this feedback.
+RETRY_ATTEMPTS = ("retry:", "retry2:")
+RETRY_TOKEN_FACTOR = 2
+RETRY_NOTE = (
+    "\n\nThe previous answer failed validation: {error}. "
+    "Return complete JSON. Keep text concise and follow the requested counts "
+    "and word limits. Ignore unrelated source text; use the relevant facts "
+    "and mood hints. Do not copy lists of metadata into the answer."
+)
 
 
 @dataclass(frozen=True)
@@ -45,9 +60,11 @@ class Request:
     schema: dict[str, Any]
     max_new_tokens: int
     image: Path | None = None
-    # Extra decoding constraints do not invalidate cached answers that pass the parser.
+    # Constrains decoding in place of schema. The signature includes it.
     generation_schema: dict[str, Any] | None = None
     seed: int | None = None
+    # The system prompt differs by key. The key fingerprint covers it; the signature does not.
+    per_key_system: bool = False
 
 
 @dataclass
@@ -71,10 +88,19 @@ class JobSpec:
     fingerprint: Fingerprint
     fields: Fields
     project: Callable[[list[Record]], list[Record]] | None = None
+    # A stricter parse for new answers. The last retry and cached answers use parse.
+    strict: Parse | None = None
 
     def run(self, llm: Callable[[], "LocalLLM"]) -> None:
         self.job.run(
-            self.keys, self.build, self.parse, self.fingerprint, llm, self.fields, self.project
+            self.keys,
+            self.build,
+            self.parse,
+            self.fingerprint,
+            llm,
+            self.fields,
+            self.project,
+            self.strict,
         )
 
 
@@ -124,8 +150,8 @@ class SeededSamplingProcessor(LogitsProcessor):
 
     def __init__(self, seeds: list[int]) -> None:
         self.generators = [torch.Generator(device="cuda").manual_seed(seed) for seed in seeds]
-        self.temperature = TemperatureLogitsWarper(0.7)
-        self.top_p = TopPLogitsWarper(0.95)
+        self.temperature = TemperatureLogitsWarper(TEMPERATURE)
+        self.top_p = TopPLogitsWarper(TOP_P)
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor) -> torch.Tensor:
         scores = self.top_p(input_ids, self.temperature(input_ids, scores))
@@ -174,7 +200,9 @@ class LocalLLM:
         # Preserve property order so numbered answers identify the input before its labels.
         key = json.dumps(schema)
         if key not in self.grammars:
-            self.grammars[key] = self.compiler.compile_json_schema(key, any_whitespace=False)
+            self.grammars[key] = self.compiler.compile_json_schema(
+                key, any_whitespace=ANY_WHITESPACE
+            )
         return self.grammars[key]
 
     @staticmethod
@@ -264,7 +292,7 @@ class LocalLLM:
             return_tensors="pt",
             # Transformers 5 takes processor options here; template variables stay in kwargs.
             processor_kwargs={"padding": True},
-            enable_thinking=False,
+            enable_thinking=THINKING,
         ).to("cuda")
         grammars = [self.grammar(r.generation_schema or r.schema) for r in requests]
         prefill: dict[str, Any] = {}
@@ -285,8 +313,8 @@ class LocalLLM:
             **prefill,
             max_new_tokens=max_new_tokens,
             do_sample=sample and not seeded,
-            temperature=0.7 if sample and not seeded else None,
-            top_p=0.95 if sample and not seeded else None,
+            temperature=TEMPERATURE if sample and not seeded else None,
+            top_p=TOP_P if sample and not seeded else None,
             top_k=None,
             eos_token_id=self.eos,
             pad_token_id=self.processor.tokenizer.pad_token_id,
@@ -329,7 +357,9 @@ class Job:
     """A resumable labeling job.
 
     Store one cache line per answered request.
-    The signature identifies the model, revision, system prompt, schema, and token limit.
+    The signature identifies the model, revision, system prompt, schema, token limit, and the
+    decoding settings: the generation grammar, the sampler, thinking, and the retries.
+    Schemas keep their property order, because the grammar follows it.
     Each key has a fingerprint of its own prompt content.
     Reuse accepted records only when both the signature and fingerprint match.
     Keep accepted rows from a partly rejected numbered answer and retry the remaining keys.
@@ -340,26 +370,19 @@ class Job:
         self.output = output
         self.cfg = cfg
         self.cache = LLM_CACHE / f"{name}.jsonl"
+        self.strict: Parse | None = None
 
     def signature(self, r: Request) -> str:
-        parts = [self.cfg.model, self.cfg.revision, r.system, r.schema, r.max_new_tokens]
-        if r.seed is not None:
-            parts.append("per-key-sampling:temperature=0.7,top_p=0.95")
-        return sha(
-            json.dumps(
-                parts,
-                sort_keys=True,
-            )
-        )
+        return sha(json.dumps(self.signature_parts(r), sort_keys=True))
 
     def signature_parts(self, r: Request) -> dict[str, Any]:
         return {
             "model": self.cfg.model,
             "revision": self.cfg.revision,
-            "prompt": sha(r.system),
-            "schema": sha(json.dumps(r.schema, sort_keys=True)),
+            "prompt": "per-key" if r.per_key_system else sha(r.system),
+            "schema": sha(json.dumps(r.schema)),
             "max_new_tokens": r.max_new_tokens,
-            **({"sampling": "per-key:temperature=0.7,top_p=0.95"} if r.seed is not None else {}),
+            "decoding": decoding(r),
         }
 
     def run(
@@ -371,7 +394,9 @@ class Job:
         llm: Callable[[], LocalLLM],
         fields: Fields,
         project: Callable[[list[Record]], list[Record]] | None = None,
+        strict: Parse | None = None,
     ) -> None:
+        self.strict = strict
         keys = sorted(set(keys))
         prints = {k: fingerprint(k) for k in keys}
         # Use a one-key request for stable identity across chunk sizes. Cached answers are
@@ -407,6 +432,11 @@ class Job:
                 f"{num(stats['valid'])} valid, {num(stats['retried'])} retried, "
                 f"{num(stats['skipped'])} skipped, {rate:.0f} tokens/s"
             )
+            if strict:
+                log.info(
+                    f"{self.name}: {num(stats['kept'])} answers pass only the lenient check "
+                    "on the last retry, and stay"
+                )
             if stats["skipped"]:
                 log.warning(
                     f"{self.name}: {num(stats['skipped'])} requests failed validation after a "
@@ -476,6 +506,13 @@ class Job:
                         bar.refresh()
         return stats
 
+    def _lenient(self, text: str, unit: Unit, parse: Parse) -> tuple[str, dict[str, Any]] | None:
+        """The answer and its data when only the strict check rejects it, else None."""
+        if self.strict is None:
+            return None
+        data, error = parse_answer(text, unit, parse)
+        return (text, data) if not error and data is not None else None
+
     def _run_batch(
         self,
         batch: list[Unit],
@@ -488,24 +525,27 @@ class Job:
         limit = max(u.request.max_new_tokens for u in batch)
         texts, tokens = llm.generate([u.request for u in batch], limit)
         stats["tokens"] += tokens
+        strict = self.strict or parse
         answers = [
-            (unit, text, *parse_answer(text, unit, parse))
+            (unit, text, *parse_answer(text, unit, strict))
             for unit, text in zip(batch, texts, strict=True)
         ]
         # Save and count completed answers before starting the slower retries.
         answers.sort(key=lambda answer: answer[3] is not None)
         for unit, text, data, error in answers:
             if error:
+                # The latest answer that fails only the strict check, for when no retry passes.
+                fallback = self._lenient(text, unit, parse)
                 # Give the model validation feedback, rather than repeat the same failed answer.
                 stats["retried"] += 1
                 log.info(
                     f"{self.name}: retrying {unit.keys[0]!r}: {error} "
-                    f"(up to {2 * unit.request.max_new_tokens} tokens)"
+                    f"(up to {RETRY_TOKEN_FACTOR * unit.request.max_new_tokens} tokens)"
                 )
                 log.debug(f"{self.name}: retry {unit.keys[0]!r}: {text[-200:]!r}")
                 # Two sampled retries, each with its own seed: one key that fails every attempt
                 # stops the whole command, so a second try is cheap insurance on long jobs.
-                for attempt in ("retry:", "retry2:"):
+                for attempt in RETRY_ATTEMPTS:
                     retry_request = replace(
                         unit.request,
                         seed=(
@@ -513,23 +553,37 @@ class Job:
                             if unit.request.seed is not None
                             else None
                         ),
-                        user=unit.request.user
-                        + f"\n\nThe previous answer failed validation: {error}. "
-                        "Return complete JSON. Keep text concise and follow the requested counts "
-                        "and word limits. Ignore unrelated source text; use the relevant facts "
-                        "and mood hints. Do not copy lists of metadata into the answer.",
+                        user=unit.request.user + RETRY_NOTE.format(error=error),
                     )
                     # Sample the retry: greedy decoding often repeats the failed answer. A seed
                     # from the key keeps each retry repeatable.
                     torch.manual_seed(int(sha(attempt + unit.keys[0])[:8], 16))
                     retry, tokens = llm.generate(
-                        [retry_request], 2 * unit.request.max_new_tokens, sample=True
+                        [retry_request],
+                        RETRY_TOKEN_FACTOR * unit.request.max_new_tokens,
+                        sample=True,
                     )
                     stats["tokens"] += tokens
                     text = retry[0]
-                    data, error = parse_answer(text, unit, parse)
+                    # The last retry uses the lenient parse, so the strict check alone never
+                    # fails a key.
+                    last = attempt == RETRY_ATTEMPTS[-1]
+                    data, error = parse_answer(text, unit, parse if last else strict)
+                    if not error and last and parse_answer(text, unit, strict)[1]:
+                        stats["kept"] += 1
+                        log.info(f"{self.name}: kept {unit.keys[0]!r} on the lenient check")
                     if not error:
                         break
+                    if not last:
+                        fallback = self._lenient(text, unit, parse) or fallback
+                if error and fallback:
+                    text, data = fallback
+                    error = None
+                    stats["kept"] += 1
+                    log.info(
+                        f"{self.name}: kept {unit.keys[0]!r} on the lenient check, from an "
+                        "earlier attempt"
+                    )
                 if error:
                     stats["skipped"] += 1
                     log.warning(f"{self.name}: failed {unit.keys}: {error}")
@@ -551,6 +605,21 @@ class Job:
                     ],
                 )
             yield None
+
+
+def decoding(r: Request) -> dict[str, Any]:
+    """The settings besides the prompt that decide a request's answers, retries included."""
+    return {
+        # Seeded requests sample the first answer; other requests decode it greedily.
+        "sampled": r.seed is not None,
+        "temperature": TEMPERATURE,
+        "top_p": TOP_P,
+        "thinking": THINKING,
+        # The grammar follows the property order, so keep it: no sort_keys.
+        "grammar": sha(json.dumps(r.generation_schema or r.schema)),
+        "any_whitespace": ANY_WHITESPACE,
+        "retries": [list(RETRY_ATTEMPTS), RETRY_TOKEN_FACTOR, sha(RETRY_NOTE)],
+    }
 
 
 def field_digests(fields: dict[str, Any]) -> dict[str, str]:
