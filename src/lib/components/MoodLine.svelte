@@ -81,6 +81,17 @@
 		if (settled) ref?.select();
 	}
 
+	/**
+	 * Restart the caret's blink, as a native caret does on each key: it stays solid while the user
+	 * types and starts to fade a moment after the last key.
+	 */
+	let moving = $state(false);
+	function still() {
+		moving = true;
+		// One frame without the animation, so it starts again from the visible part.
+		requestAnimationFrame(() => requestAnimationFrame(() => (moving = false)));
+	}
+
 	function onkeydown(e: KeyboardEvent) {
 		// Keep Tab in the field while an edit is not submitted. Shift+Tab always leaves.
 		if (e.key === 'Tab' && !e.shiftKey && !empty && !settled) {
@@ -119,6 +130,7 @@
 	class="line"
 	class:empty
 	class:boxed
+	class:moving
 	onfocusin={() => (focused = true)}
 	onfocusout={() => (focused = false)}
 >
@@ -136,11 +148,22 @@
 			autocapitalize="off"
 			spellcheck="false"
 			enterkeyhint="go"
-			placeholder={PLACEHOLDER}
-			{onmousedown}
+			aria-describedby="{id}-hint"
+			onmousedown={(e) => {
+				still();
+				onmousedown(e);
+			}}
 			{onfocus}
-			{onkeydown}
-			oninput={() => (notice = '')}></textarea>
+			onkeydown={(e) => {
+				still();
+				onkeydown(e);
+			}}
+			oninput={() => {
+				notice = '';
+				still();
+			}}></textarea>
+		<!-- Read out for assistive tech. A native placeholder would join a page selection and copy. -->
+		<span id="{id}-hint" hidden>{PLACEHOLDER}</span>
 		{#if empty}
 			<div class="ghost" aria-hidden="true"><span><i class="caret"></i>{PLACEHOLDER}</span></div>
 		{/if}
@@ -234,14 +257,21 @@
 		color: var(--ink);
 	}
 
-	/* The ghost is the visible placeholder; the native one stays for assistive tech only. */
-	textarea::placeholder {
-		color: transparent;
-	}
-
 	/* The drawn caret stands in for the real one while the line is empty. */
 	.empty textarea {
 		caret-color: transparent;
+	}
+
+	/* Where the browser lets the page drive the caret, the real one fades like the drawn one. */
+	@supports (caret-animation: manual) {
+		.line:not(.empty) textarea {
+			caret-animation: manual;
+			animation: caret 1.4s ease-in-out infinite;
+		}
+
+		.line.moving textarea {
+			animation: none;
+		}
 	}
 
 	textarea:focus-visible {
@@ -262,13 +292,14 @@
 		margin-right: 0.14em;
 		vertical-align: -0.17em;
 		background: var(--ink);
-		opacity: 0.55;
-		animation: blink 1.1s steps(1) infinite;
-		transition: opacity 300ms var(--ease);
+		/* The caret's full strength, which the blink fades from and back to. */
+		--on: 0.55;
+		opacity: var(--on);
+		animation: blink 1.4s ease-in-out infinite;
 	}
 
 	.line:focus-within .caret {
-		opacity: 1;
+		--on: 1;
 	}
 
 	.edge {
@@ -376,14 +407,34 @@
 		cursor: auto;
 	}
 
+	/* A soft blink: a short hold, then long fades out and back in. The real caret uses the same. */
 	@keyframes blink {
-		50% {
+		0%,
+		25%,
+		100% {
+			opacity: var(--on);
+		}
+		50%,
+		70% {
 			opacity: 0;
 		}
 	}
 
+	@keyframes caret {
+		0%,
+		25%,
+		100% {
+			caret-color: var(--ink);
+		}
+		50%,
+		70% {
+			caret-color: transparent;
+		}
+	}
+
 	@media (prefers-reduced-motion: reduce) {
-		.caret {
+		.caret,
+		.line textarea {
 			animation: none;
 		}
 	}

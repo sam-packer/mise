@@ -8,6 +8,7 @@
 		label,
 		leaving,
 		active,
+		returned,
 		onopen
 	}: {
 		items: Item[];
@@ -16,13 +17,15 @@
 		leaving: boolean;
 		/** The id of the tile that a world grows from or returns to. */
 		active: string | null;
+		/** The id of the tile that the path went on through, after a step back over several worlds. */
+		returned: string | null;
 		onopen: (item: Item, el: HTMLButtonElement) => void;
 	} = $props();
 </script>
 
 <section class="wall" class:leaving aria-label={label}>
 	{#each items as item, i (item.id)}
-		<Tile {item} index={i} active={active === item.id} {onopen} />
+		<Tile {item} index={i} active={active === item.id} returned={returned === item.id} {onopen} />
 	{/each}
 	<div class="spacer" aria-hidden="true"></div>
 </section>

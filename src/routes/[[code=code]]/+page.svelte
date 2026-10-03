@@ -52,6 +52,10 @@
 	let pending = $state<string | null>(null);
 	/** The item whose world the user left last, so that its tile takes the transition name back. */
 	let left = $state<string | null>(null);
+	/** The tile that the path went on through, which a step back over several worlds shows briefly. */
+	let returned = $state<string | null>(null);
+	/** A move over several worlds: the new view names no work, so the old one recedes. */
+	let still = $state(false);
 	/**
 	 * The path to keep on screen while the browser's own Back or Forward starts a view transition. The
 	 * router sets the new state before the transition captures the old view, so the page holds it.
@@ -228,6 +232,7 @@
 		if (!world) void tweenTokens(paletteToTokens(m.palette, m.light), 900);
 		pending = null;
 		left = null;
+		still = false;
 		leaving = false;
 		mood = m;
 		loadFace(my, m, m.picks.map((p) => p.text ?? '').join(''));
@@ -407,6 +412,8 @@
 		if (f) faces.set(item.id, f);
 		scrolls.set(from, scrollY);
 		left = null;
+		returned = null;
+		still = false;
 		pending = item.id;
 		await tick();
 		await viewTransition(() => {
@@ -429,14 +436,23 @@
 		const ids = trail.slice(0, trail.length - count);
 		scrolls.set(key, scrollY);
 		const y = scrolls.get(pathKey(ids)) ?? 0;
+		// The work on screen keeps the transition name. A step back over several worlds clears the
+		// focus in the new view, so the work has no partner there and recedes (layout.css) instead of
+		// morphing into a tile of another work.
 		left = world.item.id;
 		pending = null;
+		returned = null;
+		still = false;
 		if (ids.length < floor) {
 			const code = await share(ids);
 			if (trail !== before) return;
 			await viewTransition(async () => {
 				pushState(resolve('/[[code=code]]', { code }), { trail: ids, floor: ids.length });
 				shownTrail = ids;
+				if (count > 1) {
+					left = null;
+					still = true;
+				}
 				await tick();
 				scrollTo(0, y);
 			});
@@ -462,9 +478,13 @@
 		);
 	}
 
-	/** After a step back on the path, focus the work on this wall that the path went on through. */
+	/**
+	 * After a step back on the path, focus the work on this wall that the path went on through. After
+	 * a step back over several worlds no morph lands on it, so it shows briefly.
+	 */
 	function refocus(before: string[], after: string[]) {
 		const next = after.length < before.length ? before[after.length] : null;
+		if (before.length - after.length > 1) returned = next;
 		const tile = next
 			? [...document.querySelectorAll<HTMLElement>(`[data-item="${CSS.escape(next)}"]`)].find(
 					(el) => !el.closest('[inert]')
@@ -494,11 +514,15 @@
 			const own = ownMove;
 			const before = shownTrail;
 			const next = entry.trail;
+			returned = null;
+			still = false;
 			const settle = async () => {
 				hold = null;
 				const after = trail;
 				shownTrail = after;
-				if (after.length < before.length) left = before[before.length - 1];
+				// Only a move of one world has a tile to morph with. See back().
+				still = Math.abs(after.length - before.length) > 1;
+				if (after.length < before.length) left = still ? null : before[after.length];
 				pending = null;
 				await tick();
 				scrollTo(0, saved.get(pathKey(after)) ?? 0);
@@ -518,7 +542,8 @@
 				if (next.length < before.length) left = before[before.length - 1];
 				else if (next.length > before.length) {
 					left = null;
-					pending = next[before.length] ?? null;
+					// Over several worlds, the tile and the work at the end differ, so nothing morphs.
+					pending = next.length === before.length + 1 ? next[before.length] : null;
 				}
 				// The router scrolls at once. Show the old view again in the frame that captures it.
 				requestAnimationFrame(() => {
@@ -579,6 +604,7 @@
 								type="button"
 								class="work"
 								data-item={anchor.id}
+								class:returned={!shown && returned === anchor.id}
 								style:view-transition-name={!shown && focus === anchor.id ? 'mood-tile' : null}
 								onclick={() => travel(anchor)}
 								>{work(anchor)} <span class="dash">—</span> {anchor.creator}</button
@@ -600,6 +626,7 @@
 					label="picks"
 					{leaving}
 					active={shown ? null : focus}
+					returned={shown ? null : returned}
 					onopen={travel}
 				/>
 			{/key}
@@ -616,6 +643,8 @@
 				path={layer.path}
 				live={top}
 				focus={top ? focus : null}
+				still={top && still}
+				returned={top ? returned : null}
 				leaving={top && leaving && held !== null}
 				face={faces.get(layer.world.item.id) ?? null}
 				note={top ? error : null}
@@ -844,6 +873,13 @@
 	.anchor .work:hover::after,
 	.anchor .work:focus-visible::after {
 		background: var(--ink);
+	}
+
+	/* The same brief ring as a tile's, after a step back over several worlds. */
+	.anchor .work.returned {
+		outline: 1px solid transparent;
+		outline-offset: 2px;
+		animation: mood-returned 1200ms var(--ease) 120ms;
 	}
 
 	.anchor .work:focus-visible {

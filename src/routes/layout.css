@@ -94,6 +94,48 @@
 		overflow: clip;
 	}
 
+	/* A snapshot without a partner has no geometry to morph, and must not freeze. The work on screen
+	   recedes, for example on a step back over several worlds; a lone new one fades in. */
+	::view-transition-old(mood-tile):only-child {
+		animation: mood-recede 460ms var(--ease) both;
+	}
+
+	::view-transition-new(mood-tile):only-child {
+		animation: mood-appear 320ms var(--ease) both;
+	}
+
+	@keyframes mood-recede {
+		to {
+			opacity: 0;
+			transform: scale(0.94);
+		}
+	}
+
+	@keyframes mood-appear {
+		from {
+			opacity: 0;
+		}
+	}
+
+	/* The work that the path went on through, after a step back over several worlds. */
+	@keyframes mood-returned {
+		35% {
+			outline-color: color-mix(in oklab, var(--ink) 60%, transparent);
+		}
+	}
+
+	@keyframes mood-fade {
+		to {
+			opacity: 0;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		::view-transition-old(mood-tile):only-child {
+			animation-name: mood-fade;
+		}
+	}
+
 	::view-transition-old(root),
 	::view-transition-new(root) {
 		animation-duration: 320ms;

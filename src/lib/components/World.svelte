@@ -13,6 +13,8 @@
 		path,
 		live,
 		focus,
+		still,
+		returned,
 		leaving,
 		face,
 		note,
@@ -30,6 +32,10 @@
 		live: boolean;
 		/** The id of the neighbor that the next or the last world grows from. */
 		focus: string | null;
+		/** A move over several worlds: nothing morphs into the work on screen. */
+		still: boolean;
+		/** The id of the neighbor that the path went on through, after a step back over several worlds. */
+		returned: string | null;
 		/** Fade the world out before the page starts over. */
 		leaving: boolean;
 		face: LoadedFace | null;
@@ -44,8 +50,9 @@
 
 	const id = $props.id();
 	const item = $derived(world.item);
-	// The work on screen carries the transition name unless a neighbor on its wall carries it.
-	const named = $derived(live && !world.neighbors.some((n) => n.id === focus));
+	// The work on screen carries the transition name unless the focus tile is on its own wall, or the
+	// move spans several worlds and no tile morphs into it.
+	const named = $derived(live && !still && !world.neighbors.some((n) => n.id === focus));
 	const canPlay = $derived(item.category === 'song' && !!item.preview);
 	const tone = $derived(
 		item.image
@@ -174,6 +181,7 @@
 			label="works that share the feeling of {item.title}"
 			leaving={false}
 			active={focus}
+			{returned}
 			onopen={ontravel}
 		/>
 	</section>

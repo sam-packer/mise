@@ -6,12 +6,15 @@
 		item,
 		index,
 		active,
+		returned,
 		onopen
 	}: {
 		item: Item;
 		index: number;
 		/** The tile that a world grows from or returns to. */
 		active: boolean;
+		/** The tile that the path went on through, after a step back over several worlds. */
+		returned: boolean;
 		onopen: (item: Item, el: HTMLButtonElement) => void;
 	} = $props();
 
@@ -37,6 +40,7 @@
 >
 	<div
 		class="face"
+		class:returned
 		style:background={tone}
 		style:view-transition-name={active ? 'mood-tile' : null}
 	>
@@ -98,6 +102,13 @@
 		transition:
 			transform 500ms var(--ease),
 			box-shadow 500ms var(--ease);
+	}
+
+	/* A brief ring shows where the user came back to. Focus, which comes after, keeps its ring. */
+	.face.returned {
+		outline: 2px solid transparent;
+		outline-offset: 4px;
+		animation: mood-returned 1200ms var(--ease) 120ms;
 	}
 
 	.tile:hover .face,
