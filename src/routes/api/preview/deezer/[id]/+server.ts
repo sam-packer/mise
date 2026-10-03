@@ -13,5 +13,6 @@ export const GET: RequestHandler = async ({ params, fetch, setHeaders }) => {
 
 	// Shorter than the link's lifetime, so a cached redirect never points at an expired link.
 	setHeaders({ 'cache-control': 'public, max-age=300' });
-	redirect(302, track.preview);
+	// The link comes from Deezer's API, and its CDN host can change, so allow any external host.
+	redirect(302, track.preview, { external: true });
 };
