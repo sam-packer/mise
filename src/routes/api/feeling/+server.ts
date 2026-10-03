@@ -1,6 +1,7 @@
 // Store feeling text, or a path through the worlds of a feeling, under a code derived here, not
 // supplied by the client. Keep the first value stored under each code so shared URLs retain their meaning.
-import { error, json } from '@sveltejs/kit';
+import { error } from '@sveltejs/kit';
+import { env } from 'cloudflare:workers';
 import {
 	MAX_FEELING,
 	MAX_TRAIL,
@@ -9,10 +10,10 @@ import {
 	isItemId,
 	normalize,
 	pathCode
-} from '$lib/code';
+} from '#lib/code.js';
 import type { RequestHandler } from './$types';
 
-export const POST: RequestHandler = async ({ request, platform }) => {
+export const POST: RequestHandler = async ({ request }) => {
 	const body = (await request.json().catch(() => null)) as {
 		text?: unknown;
 		trail?: unknown;
@@ -33,16 +34,15 @@ export const POST: RequestHandler = async ({ request, platform }) => {
 	const bundle = body?.bundle;
 	if (trail !== undefined && !isBundle(bundle)) error(400, 'bad bundle');
 
-	const store = trail === undefined ? platform?.env.MOODS : platform?.env.PATHS;
-	if (!store) error(503, 'no feeling store');
+	const store = trail === undefined ? env.MOODS : env.PATHS;
 
 	if (trail === undefined) {
 		const code = await feelingCode(text);
 		if ((await store.get(code)) === null) await store.put(code, text);
-		return json({ code });
+		return Response.json({ code });
 	}
 	const code = await pathCode(text, trail, bundle as string);
 	if ((await store.get(code)) === null)
 		await store.put(code, JSON.stringify({ text, trail, bundle }));
-	return json({ code });
+	return Response.json({ code });
 };

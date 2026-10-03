@@ -1,8 +1,8 @@
 <script lang="ts">
 	// Layer the selected light and grain behind the mood wall.
 	import { fade } from 'svelte/transition';
-	import { cssLight, LIGHTS } from '$lib/color/oklab';
-	import type { Light } from '$lib/mood/types';
+	import { cssLight, LIGHTS } from '#lib/color/oklab.js';
+	import type { Light } from '#lib/mood/types.js';
 
 	let {
 		light,

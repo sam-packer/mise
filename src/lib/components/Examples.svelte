@@ -3,7 +3,7 @@
 	// wider screen, and a button for other ones.
 	import { onMount } from 'svelte';
 	import { fade } from 'svelte/transition';
-	import { sample } from '$lib/mood/samples';
+	import { sample } from '#lib/mood/samples.js';
 
 	let {
 		examples,

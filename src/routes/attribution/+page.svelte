@@ -9,7 +9,7 @@
 
 <main class="page">
 	<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- external link -->
-	<a class="back" href={resolve('/')}>back to mise</a>
+	<a class="back" href={resolve('/[[code=code]]', {})}>back to mise</a>
 
 	<h1>attribution</h1>
 	<p class="intro">mise uses data and images from these sources.</p>

@@ -4,24 +4,29 @@
 	import { onMount, tick, untrack } from 'svelte';
 	import { fade } from 'svelte/transition';
 	import { SvelteMap } from 'svelte/reactivity';
-	import { env } from '$env/dynamic/public';
+	import { PUBLIC_BUNDLE_URL } from '$app/env/public';
 	import { page } from '$app/state';
-	import { afterNavigate, goto, pushState, replaceState } from '$app/navigation';
+	import { afterNavigate, beforeNavigate, goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { BUNDLE_URL } from '$lib/bundle';
-	import { BUNDLE, feelingCode, normalize, pathCode, shared } from '$lib/code';
-	import type { Item, Mood, OKLab, Palette, World } from '$lib/mood/types';
-	import { infer, ready, start, world as requestWorld } from '$lib/mood/client';
-	import { loadSamples, sample } from '$lib/mood/samples';
-	import { lightStrength, neutralTokens, paletteFavicon, paletteToTokens } from '$lib/color/oklab';
-	import { applyTokens, tweenTokens } from '$lib/color/tween';
-	import { loadTypeface, type LoadedFace } from '$lib/components/typeface';
-	import { EXAMPLES } from '$lib/examples';
-	import MoodLine from '$lib/components/MoodLine.svelte';
-	import Wall from '$lib/components/Wall.svelte';
-	import WorldView from '$lib/components/World.svelte';
-	import RoomLight from '$lib/components/RoomLight.svelte';
-	import Tagline from '$lib/components/Tagline.svelte';
+	import { BUNDLE_URL } from '#lib/bundle.js';
+	import { BUNDLE, feelingCode, normalize, pathCode, shared } from '#lib/code.js';
+	import type { Item, Mood, OKLab, Palette, World } from '#lib/mood/types.js';
+	import { infer, ready, start, world as requestWorld } from '#lib/mood/client.js';
+	import { loadSamples, sample } from '#lib/mood/samples.js';
+	import {
+		lightStrength,
+		neutralTokens,
+		paletteFavicon,
+		paletteToTokens
+	} from '#lib/color/oklab.js';
+	import { applyTokens, tweenTokens } from '#lib/color/tween.js';
+	import { loadTypeface, type LoadedFace } from '#lib/components/typeface.js';
+	import { EXAMPLES } from '#lib/examples.js';
+	import MoodLine from '#lib/components/MoodLine.svelte';
+	import Wall from '#lib/components/Wall.svelte';
+	import WorldView from '#lib/components/World.svelte';
+	import RoomLight from '#lib/components/RoomLight.svelte';
+	import Tagline from '#lib/components/Tagline.svelte';
 
 	const NEUTRAL: OKLab[] = [
 		[0.97, 0, 0],
@@ -145,7 +150,7 @@
 	const work = (item: Item) => (item.category === 'song' ? (item.album ?? item.title) : item.title);
 
 	// Allow a local bundle through PUBLIC_BUNDLE_URL.
-	const bundleOverride = env.PUBLIC_BUNDLE_URL?.trim();
+	const bundleOverride = PUBLIC_BUNDLE_URL.trim();
 	const bundleUrl = bundleOverride || BUNDLE_URL;
 	const bundleBase = bundleUrl.endsWith('/') ? bundleUrl : `${bundleUrl}/`;
 
@@ -172,12 +177,21 @@
 		lineRef?.focus({ preventScroll: true });
 	}
 
+	/** Counts history moves and other navigations, so a history move that a newer one overtakes stops. */
+	let pops = 0;
+	// The router drops a history move when another navigation starts before it resolves the route.
+	beforeNavigate((nav) => {
+		if (nav.type !== 'popstate') pops++;
+	});
+
 	// Run inference after full navigation, including the initial page load.
 	afterNavigate((nav) => {
+		// A shallow navigation changes only the history entry, so the feeling stays.
+		if (nav.shallow) return;
 		// The router does not apply a history entry's state on the first page load, so the page shows
 		// the path of the URL. Clear the state left in the entry, which may name another floor.
-		// The router accepts replaceState only after it starts, just after this callback.
-		if (nav.type === 'enter') queueMicrotask(() => replaceState('', {}));
+		// The router accepts shallow navigation only after it starts, just after this callback.
+		if (nav.type === 'enter') queueMicrotask(() => void goto('', { shallow: true, replace: true }));
 		shownTrail = page.state.trail ?? data.trail;
 		void show(data.text);
 		if (data.note) error = data.note;
@@ -283,16 +297,23 @@
 			}).catch(() => {})
 		);
 		// Navigate to the feeling so afterNavigate starts inference.
-		void goto(resolve('/[[code=code]]', { code }), { keepFocus: true, noScroll: true });
+		void goto(resolve('/[[code=code]]', { code }), { reset: false });
 	}
 
-	function viewTransition(update: () => void | Promise<void>): Promise<void> {
+	/** Run a page change as a view transition. The type, into a world or out of one, sets the shadow (layout.css). */
+	function viewTransition(
+		type: 'enter' | 'leave',
+		update: () => void | Promise<void>
+	): Promise<void> {
 		if (reduced || !document.startViewTransition) {
 			return Promise.resolve(update()).then(() => {});
 		}
-		const vt = document.startViewTransition(async () => {
-			await update();
-			await tick();
+		const vt = document.startViewTransition({
+			update: async () => {
+				await update();
+				await tick();
+			},
+			types: [type]
 		});
 		// A hidden tab or a newer transition aborts this one. The update still runs.
 		vt.ready.catch(() => {});
@@ -355,11 +376,12 @@
 		const code = await share(ids);
 		// Another cut or a history move changed the path meanwhile.
 		if (target !== before || !ids.every((id, i) => before[i] === id)) return;
-		shownTrail = ids;
-		replaceState(resolve('/[[code=code]]', { code }), {
-			trail: ids,
-			floor: Math.min(floor, ids.length)
+		await goto(resolve('/[[code=code]]', { code }), {
+			shallow: true,
+			replace: true,
+			state: { trail: ids, floor: Math.min(floor, ids.length) }
 		});
+		shownTrail = ids;
 	}
 
 	// Retint the page when a world opens or closes. show() tints the page for a new mood.
@@ -416,8 +438,12 @@
 		still = false;
 		pending = item.id;
 		await tick();
-		await viewTransition(() => {
-			pushState(resolve('/[[code=code]]', { code }), { trail: ids, floor: base });
+		await viewTransition('enter', async () => {
+			// Wait for page.state, so the scroll below records under the new path, not this wall.
+			await goto(resolve('/[[code=code]]', { code }), {
+				shallow: true,
+				state: { trail: ids, floor: base }
+			});
 			shownTrail = ids;
 			pending = null;
 			scrollTo(0, 0);
@@ -446,8 +472,12 @@
 		if (ids.length < floor) {
 			const code = await share(ids);
 			if (trail !== before) return;
-			await viewTransition(async () => {
-				pushState(resolve('/[[code=code]]', { code }), { trail: ids, floor: ids.length });
+			await viewTransition('leave', async () => {
+				// Wait for page.state, as in travel().
+				await goto(resolve('/[[code=code]]', { code }), {
+					shallow: true,
+					state: { trail: ids, floor: ids.length }
+				});
 				shownTrail = ids;
 				if (count > 1) {
 					left = null;
@@ -459,23 +489,32 @@
 			refocus(before, ids);
 			return;
 		}
-		await viewTransition(() =>
-			new Promise<void>((resolve) => {
-				ownMove = true;
-				addEventListener(
-					'popstate',
-					() => {
-						ownMove = false;
-						resolve();
-					},
-					{ once: true }
-				);
-				history.go(-count);
-			}).then(async () => {
-				await tick();
-				scrollTo(0, y);
-			})
-		);
+		await viewTransition('leave', async () => {
+			const routed = nextState();
+			ownMove = true;
+			addEventListener('popstate', () => (ownMove = false), { once: true });
+			history.go(-count);
+			await routed;
+			await tick();
+			scrollTo(0, y);
+		});
+	}
+
+	/**
+	 * Resolve when the router next sets page.state. After a history move the router sets it only
+	 * after it resolves the route, some time after the popstate event.
+	 */
+	function nextState(): Promise<void> {
+		const from = page.state;
+		return new Promise((resolve) => {
+			const stop = $effect.root(() => {
+				$effect(() => {
+					if (page.state === from) return;
+					resolve();
+					queueMicrotask(stop);
+				});
+			});
+		});
 	}
 
 	/**
@@ -508,6 +547,8 @@
 			// of this feeling in history has its code in the session cache, with the path it names.
 			const entry = shared.get(location.pathname.slice(1));
 			if (entry?.text !== urlMood) return;
+			const my = ++pops;
+			const routed = nextState();
 			// This listener runs before the router's, which sets page.state and scrolls. Copy the scroll
 			// positions first: the scroll event that follows would record the router's position.
 			const saved = new Map(scrolls);
@@ -530,8 +571,8 @@
 			};
 			let after: string[];
 			if (own || reduced || !document.startViewTransition) {
-				// Wait for the rest of the event, so the router has set page.state.
-				await new Promise((resolve) => setTimeout(resolve));
+				await routed;
+				if (my !== pops) return;
 				if (!own && next.length > before.length) left = null;
 				after = await settle();
 			} else {
@@ -550,11 +591,16 @@
 					if (hold) scrollTo(0, y);
 				});
 				let done: string[] = [];
-				const vt = document.startViewTransition(async () => {
-					done = await settle();
+				const vt = document.startViewTransition({
+					update: async () => {
+						await routed;
+						if (my === pops) done = await settle();
+					},
+					types: [next.length > before.length ? 'enter' : 'leave']
 				});
 				vt.ready.catch(() => {});
 				await vt.updateCallbackDone.catch(() => {});
+				if (my !== pops) return;
 				after = done;
 			}
 			refocus(before, after);
@@ -657,7 +703,12 @@
 	{/each}
 
 	<!-- Place the mark after the field so users reach the field first when they press Tab. -->
-	<a class="mark" href={resolve('/')} aria-label="mise, start over" onclick={startOver}>
+	<a
+		class="mark"
+		href={resolve('/[[code=code]]', {})}
+		aria-label="mise, start over"
+		onclick={startOver}
+	>
 		<span class="swatch" aria-hidden="true">
 			<i style:--k={0} style:background="var(--ground)"></i>
 			<i style:--k={1} style:background="var(--mid-1)"></i>

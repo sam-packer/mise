@@ -1,6 +1,6 @@
 // Check and store the palette of a feeling's mood for its link preview image.
-import { fromHex } from '$lib/color/oklab';
-import type { OKLab, Palette } from '$lib/mood/types';
+import { fromHex } from '#lib/color/oklab.js';
+import type { OKLab, Palette } from '#lib/mood/types.js';
 
 /** The PALETTES key of a feeling's palette under one bundle. A new model gives the feeling new colors. */
 export const paletteKey = (bundle: string, code: string) => `${bundle}:${code}`;

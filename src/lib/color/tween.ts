@@ -1,6 +1,6 @@
 // Tween the palette tokens in OKLCH and write them as CSS variables on <html>.
 
-import type { OKLab } from '$lib/mood/types';
+import type { OKLab } from '#lib/mood/types.js';
 import { cssLch, labToLch, toGamut, type OKLCH, type Tokens } from './oklab';
 
 const KEYS = [

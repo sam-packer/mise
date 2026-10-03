@@ -1,6 +1,6 @@
 <script lang="ts">
 	// Render one wall item and name its image for the transition into its world.
-	import type { Item } from '$lib/mood/types';
+	import type { Item } from '#lib/mood/types.js';
 
 	let {
 		item,

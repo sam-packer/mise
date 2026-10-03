@@ -2,7 +2,7 @@
 	// Collect feeling text, and offer sample feelings under the line before the page shows a mood.
 	import { onMount } from 'svelte';
 	import { fade } from 'svelte/transition';
-	import { MAX_FEELING } from '$lib/code';
+	import { MAX_FEELING } from '#lib/code.js';
 	import Examples from './Examples.svelte';
 
 	let {

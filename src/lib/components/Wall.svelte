@@ -1,6 +1,6 @@
 <script lang="ts">
 	// Arrange items as tiles and coordinate their exit before the next mood or world appears.
-	import type { Item } from '$lib/mood/types';
+	import type { Item } from '#lib/mood/types.js';
 	import Tile from './Tile.svelte';
 
 	let {

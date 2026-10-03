@@ -2,7 +2,7 @@
 	// Show a missing page or a failed page in the voice of mise, with one way back to the start.
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
-	import Chevron from '$lib/components/Chevron.svelte';
+	import Chevron from '#lib/components/Chevron.svelte';
 
 	const missing = $derived(page.status === 404);
 	const line = $derived(
@@ -20,11 +20,11 @@
 	<div class="center">
 		<p class="kicker">{label}</p>
 		<h1>{line}</h1>
-		<a class="home" href={resolve('/')}>start over<Chevron /></a>
+		<a class="home" href={resolve('/[[code=code]]', {})}>start over<Chevron /></a>
 	</div>
 
 	<!-- Place the mark after the message so users reach the way home first when they press Tab. -->
-	<a class="mark" href={resolve('/')} aria-label="mise, start over">
+	<a class="mark" href={resolve('/[[code=code]]', {})} aria-label="mise, start over">
 		<span class="swatch" aria-hidden="true">
 			<i style:--k={0} style:background="var(--ground)"></i>
 			<i style:--k={1} style:background="var(--mid-1)"></i>

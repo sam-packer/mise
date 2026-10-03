@@ -1,6 +1,6 @@
 <script lang="ts">
 	// Link a song to each music service that has it. Each name opens that service directly.
-	import type { Item } from '$lib/mood/types';
+	import type { Item } from '#lib/mood/types.js';
 	import Chevron from './Chevron.svelte';
 
 	type Platform = 'spotify' | 'apple' | 'deezer' | 'youtube';

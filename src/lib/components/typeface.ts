@@ -1,6 +1,6 @@
 // Load a Google Font with only the glyphs the page needs (CSS2 `&text=`).
 
-import type { Typeface } from '$lib/mood/types';
+import type { Typeface } from '#lib/mood/types.js';
 
 export type LoadedFace = { family: string; style: 'italic' | 'normal' };
 

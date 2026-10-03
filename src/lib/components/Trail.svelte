@@ -1,6 +1,6 @@
 <script lang="ts">
 	// Show the path from the feeling to the world on screen. A long path folds its middle steps.
-	import type { Item } from '$lib/mood/types';
+	import type { Item } from '#lib/mood/types.js';
 	import Chevron from './Chevron.svelte';
 
 	let {

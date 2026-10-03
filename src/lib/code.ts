@@ -1,6 +1,6 @@
 // Derive share codes from feeling text and paths in both the browser and the Cloudflare Worker.
 // Encode the first 48 hash bits as seven base62 characters.
-import { BUNDLE_URL } from './bundle';
+import { BUNDLE_URL } from './bundle.ts';
 
 const ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 const LENGTH = 7;

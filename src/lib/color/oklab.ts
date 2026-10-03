@@ -1,6 +1,6 @@
 // Convert model palettes to display colors, readable text colors, and the tab icon.
 
-import type { Light, OKLab, Palette } from '$lib/mood/types';
+import type { Light, OKLab, Palette } from '#lib/mood/types.js';
 
 export type OKLCH = [L: number, C: number, H: number];
 type RGB = [r: number, g: number, b: number];

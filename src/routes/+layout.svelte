@@ -2,7 +2,7 @@
 	// Apply shared styles to every route, and give every page its link preview tags.
 	import './layout.css';
 	import { page } from '$app/state';
-	import { BUNDLE } from '$lib/code';
+	import { BUNDLE } from '#lib/code.js';
 
 	let { children } = $props();
 

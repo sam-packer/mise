@@ -1,8 +1,8 @@
 // Render the link preview image of a feeling: the feeling in quotes, set in the colors of its mood.
 // Satori lays the card out as SVG, and resvg draws it as a PNG. Both run in WebAssembly.
 import { render } from '@cf-wasm/og';
-import { hex, paletteToTokens } from '$lib/color/oklab';
-import type { Palette } from '$lib/mood/types';
+import { hex, paletteToTokens } from '#lib/color/oklab.js';
+import type { Palette } from '#lib/mood/types.js';
 import garamond from './fonts/EBGaramond-Italic.ttf?inline';
 import brandCard from '../../../static/brand/og.svg?raw';
 

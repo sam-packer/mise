@@ -1,6 +1,6 @@
 <script lang="ts">
 	// Show one work as its own world: the work in the middle, its path above, its neighbors below.
-	import type { Item, World } from '$lib/mood/types';
+	import type { Item, World } from '#lib/mood/types.js';
 	import type { LoadedFace } from './typeface';
 	import Chevron from './Chevron.svelte';
 	import SongLinks from './SongLinks.svelte';

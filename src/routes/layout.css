@@ -94,6 +94,34 @@
 		overflow: clip;
 	}
 
+	/* The snapshots clip the shadow of the work (World.svelte), so the pair draws it as it morphs:
+	   the shadow grows as a tile becomes the work, and fades as the work becomes a tile. */
+	:root:active-view-transition-type(enter)::view-transition-image-pair(mood-tile) {
+		animation: mood-shadow 520ms var(--ease) both;
+	}
+
+	:root:active-view-transition-type(leave)::view-transition-image-pair(mood-tile) {
+		animation: mood-unshadow 520ms var(--ease) both;
+	}
+
+	@keyframes mood-shadow {
+		from {
+			box-shadow: 0 30px 80px -24px transparent;
+		}
+		to {
+			box-shadow: 0 30px 80px -24px oklch(0 0 0 / 0.45);
+		}
+	}
+
+	@keyframes mood-unshadow {
+		from {
+			box-shadow: 0 30px 80px -24px oklch(0 0 0 / 0.45);
+		}
+		to {
+			box-shadow: 0 30px 80px -24px transparent;
+		}
+	}
+
 	/* A snapshot without a partner has no geometry to morph, and must not freeze. The work on screen
 	   recedes, for example on a step back over several worlds; a lone new one fades in. */
 	::view-transition-old(mood-tile):only-child {

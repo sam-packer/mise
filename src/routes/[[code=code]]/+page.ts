@@ -1,7 +1,7 @@
 // Resolve share codes, of a feeling or of a path through its worlds, from the browser session or the
 // feeling API before rendering the page.
-import { browser } from '$app/environment';
-import { BUNDLE, feelingCode, shared, type Shared } from '$lib/code';
+import { browser } from '$app/env';
+import { BUNDLE, feelingCode, shared, type Shared } from '#lib/code.js';
 import type { PageLoad } from './$types';
 
 type Data = Shared & {

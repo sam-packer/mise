@@ -2,9 +2,9 @@
 	// Show the brand line under the mark. Each word sits on one color of a palette: the palette of
 	// the example feeling in the field, from the bundle's sample rooms.
 	import { onMount } from 'svelte';
-	import { fromHex, hex, textOn } from '$lib/color/oklab';
-	import { samplePalettes } from '$lib/mood/samples';
-	import type { Palette } from '$lib/mood/types';
+	import { fromHex, hex, textOn } from '#lib/color/oklab.js';
+	import { samplePalettes } from '#lib/mood/samples.js';
+	import type { Palette } from '#lib/mood/types.js';
 
 	let {
 		example = '',
