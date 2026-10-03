@@ -40,6 +40,8 @@ export type Manifest = {
 	files: {
 		items: { path: string; format: 'json' };
 		vectors: { path: string; format: 'fp16-le' };
+		/** One score penalty per item, in item order. Feeling picks subtract it to show fewer of the same works. */
+		penalty?: { path: string; format: 'fp16-le' };
 		names: { path: string; format: 'json' };
 		vocab: { path: string; format: 'json' };
 		anchors?: { path: string; format: 'json' };

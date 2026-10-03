@@ -78,7 +78,8 @@ class Student(nn.Module):
 def item_space(item_emb: torch.Tensor, dims: int) -> torch.Tensor:
     """The (teacher dims x dims) map onto the top right singular vectors of the teacher's item
     vectors: the subspace that best keeps the teacher's item inner products. On the tuning set the
-    teacher scored 0.630 in it and 0.641 in full; raw Qwen vectors cut to 384 dims scored 0.577."""
+    teacher scored 0.701 in it and 0.704 in full; raw Qwen vectors cut to their first 384 dims
+    scored 0.596."""
     _, _, v = torch.linalg.svd(item_emb.double().cpu(), full_matrices=False)
     return v[:dims].T.float()
 

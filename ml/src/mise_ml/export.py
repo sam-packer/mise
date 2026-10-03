@@ -37,6 +37,7 @@ from mise_ml.inference import encode_batches
 from mise_ml.log import elapsed, get, num, progress
 from mise_ml.rated import RatedSet, brief, load_rated, rated_scores
 from mise_ml.student import OUTPUT_NAMES, STUDENT_DIR, Student, load_student
+from mise_ml.teacher import OUTPUTS as TEACHER_OUTPUTS
 from mise_ml.teacher import drop_near_eval, query_store
 from mise_ml.util import make_deterministic, sha256_file, write_json
 from mise_ml.vocab import Vocab, load_vocab
@@ -269,6 +270,80 @@ def select_quantization(
     return measurements
 
 
+def wall_wins(
+    queries: torch.Tensor, items: torch.Tensor, rows: list[torch.Tensor], penalty: torch.Tensor
+) -> np.ndarray:
+    """Count how often each work is in its category's top 2 (the app's PICKS_EACH) for the queries.
+
+    The score is query . item - penalty. The count leaves out the app's one-per-creator rule, as the
+    rated test did.
+    """
+    wins = torch.zeros(len(items), device=items.device)
+    for s in range(0, len(queries), 4096):
+        scores = queries[s : s + 4096] @ items.T - penalty
+        for r in rows:
+            top = r[scores[:, r].topk(2, dim=1).indices].flatten()
+            wins.index_add_(0, top, torch.ones_like(top, dtype=torch.float32))
+    return wins.cpu().numpy()
+
+
+def log_exposure(label: str, wins: np.ndarray, rows: list[np.ndarray]) -> None:
+    top = np.mean([np.sort(wins[r])[::-1][: len(r) // 100].sum() / wins[r].sum() for r in rows])
+    log.info(
+        f"exposure {label}: the top 1% of works take {top:.1%} of the top-2 places, "
+        f"max {num(int(wins.max()))}"
+    )
+
+
+def exposure_penalty(
+    model_path: Path,
+    tokenizer: PreTrainedTokenizerBase,
+    catalog: Catalog,
+    vectors: np.ndarray,
+    student_cfg: StudentConfig,
+    cfg: ExportConfig,
+) -> np.ndarray:
+    """Fit a per-work penalty that lowers the score of works that win too many feeling walls.
+
+    The queries are the training texts of teacher_outputs.pt. Each round counts the top-2 wins of
+    each work, then moves the penalty halfway to beta * log(share). The share is the work's wins
+    over its category's mean wins, each plus one. A work at or below the mean gets no penalty.
+    """
+    texts = torch.load(TEACHER_OUTPUTS, weights_only=False)["texts"]
+    session = onnx_session(model_path)
+    # Browser queries run alone; dynamic int8 ranges depend on the other rows in a batch.
+    queries = np.concatenate(
+        [
+            onnx_run(session, tokenizer, [text], student_cfg.max_length)["embedding"]
+            for text in progress(texts, desc="exposure queries", unit="text")
+        ]
+    )
+    q = torch.tensor(queries, dtype=torch.float32, device="cuda")
+    v = torch.tensor(vectors, dtype=torch.float32, device="cuda")
+    category = np.array([it["category"] for it in catalog.items])
+    rows = [np.flatnonzero(category == c) for c in sorted(set(category))]
+    rows_cuda = [torch.tensor(r, device="cuda") for r in rows]
+
+    def wins(penalty: np.ndarray) -> np.ndarray:
+        return wall_wins(q, v, rows_cuda, torch.tensor(penalty, device="cuda"))
+
+    penalty = np.zeros(len(vectors), dtype=np.float32)
+    log_exposure(f"on {num(len(texts))} training texts, before", wins(penalty), rows)
+    for _ in range(cfg.exposure_rounds):
+        counts = wins(penalty)
+        step = np.zeros_like(penalty)
+        for r in rows:
+            share = (counts[r] + 1) / (counts[r].sum() / len(r) + 1)
+            step[r] = cfg.exposure_beta * np.log(np.maximum(share, 1.0))
+        penalty = 0.5 * penalty + 0.5 * step
+    # penalty.bin holds fp16 values; measure exactly those.
+    penalty = penalty.astype(np.float16).astype(np.float32)
+    log_exposure(
+        f"after (beta {cfg.exposure_beta}, max penalty {penalty.max():.3f})", wins(penalty), rows
+    )
+    return penalty
+
+
 def bundle_item(item: dict[str, Any]) -> dict[str, Any]:
     out = {k: item[k] for k in ITEM_FIELDS if item.get(k) is not None or k in ("year", "image")}
     out["links"] = {k: v for k, v in item["links"].items() if v}
@@ -403,10 +478,12 @@ def write_bundle(
     catalog: Catalog,
     student_cfg: StudentConfig,
     vectors: np.ndarray,
+    penalty: np.ndarray,
     bundle: Path = BUNDLE,
     images: bool = True,
 ) -> None:
-    """Write the public bundle. `vectors` are the catalog's fixed item vectors from training.
+    """Write the public bundle. `vectors` are the catalog's fixed item vectors from training, and
+    `penalty` the exposure penalty of each item.
 
     Without `images`, the bundle has no img folder; it is then only for scoring.
     """
@@ -432,6 +509,7 @@ def write_bundle(
 
     session = onnx_session(model_path)
     (bundle / "vectors.bin").write_bytes(vectors.astype("<f2").tobytes())
+    (bundle / "penalty.bin").write_bytes(penalty.astype("<f2").tobytes())
     (bundle / "items.json").write_text(
         json.dumps(items, ensure_ascii=False, separators=(",", ":")), encoding="utf-8", newline="\n"
     )
@@ -460,6 +538,7 @@ def write_bundle(
         "files": {
             "items": {"path": "items.json", "format": "json"},
             "vectors": {"path": "vectors.bin", "format": "fp16-le"},
+            "penalty": {"path": "penalty.bin", "format": "fp16-le"},
             "names": {"path": "search-index.json", "format": "json"},
             "vocab": {"path": "vocab.json", "format": "json"},
         },
@@ -552,7 +631,16 @@ def run(
     if cosine.min() < 0.9:
         log.warning("some int8 embeddings differ a lot from fp32 (cosine below 0.9)")
 
+    penalty = exposure_penalty(int8, tokenizer, catalog, vectors, student_cfg, cfg)
     write_bundle(
-        int8, tokenizer, student_dir / "encoder", catalog, student_cfg, vectors, bundle, images
+        int8,
+        tokenizer,
+        student_dir / "encoder",
+        catalog,
+        student_cfg,
+        vectors,
+        penalty,
+        bundle,
+        images,
     )
     log.info(f"done in {elapsed(start)}")

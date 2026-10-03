@@ -1,2 +1,2 @@
 // Run `uv run publish` to set the public bundle URL.
-export const BUNDLE_URL = 'https://cdn.mise.art/bundles/2026-10-02-de815ed0/';
+export const BUNDLE_URL = 'https://cdn.mise.art/bundles/2026-10-03-ef72b0a0/';

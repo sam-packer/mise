@@ -124,11 +124,13 @@ export async function createEncoder(io: EncoderIO, manifest: Manifest): Promise<
 export async function createMoodEngine(io: EngineIO): Promise<MoodEngine> {
 	const manifest = await io.fetchJson<Manifest>('manifest.json');
 	const { files } = manifest;
-	const [encoder, vocab, items, bytes, names, anchors, anchorBytes] = await Promise.all([
+	const [encoder, vocab, items, bytes, penalty, names, anchors, anchorBytes] = await Promise.all([
 		createEncoder(io, manifest),
 		io.fetchJson<Vocab>(files.vocab.path),
 		io.fetchJson<Item[]>(files.items.path),
 		io.fetchBytes(files.vectors.path),
+		// Older bundles have no penalty file; search then uses a penalty of zero.
+		files.penalty ? io.fetchBytes(files.penalty.path).then(decodeFp16) : undefined,
 		io.fetchJson<NameData>(files.names.path),
 		files.anchors ? io.fetchJson<Anchor[]>(files.anchors.path) : [],
 		files.anchorVectors ? io.fetchBytes(files.anchorVectors.path) : new ArrayBuffer(0)
@@ -137,6 +139,7 @@ export async function createMoodEngine(io: EngineIO): Promise<MoodEngine> {
 		{ ...manifest, dims: manifest.encoder.dims, words: names.words },
 		items,
 		decodeFp16(bytes),
+		penalty,
 		anchors,
 		new Float32Array(anchorBytes),
 		names.representatives

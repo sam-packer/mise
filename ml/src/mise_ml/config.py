@@ -20,6 +20,9 @@ EVAL_FEELINGS = ML_ROOT / "eval_feelings.jsonl"
 # Rated pairs over eval feelings. The tuning set selects settings; the gold set only reports.
 TUNING_SET = ML_ROOT / "tuning_set.jsonl"
 GOLD_SET = ML_ROOT / "gold_set.jsonl"
+# A judge's 0-3 fit ratings of the teacher's top 10 per category for training feelings. The
+# teacher learns to order each top 10 by them. No eval feeling has a fit rating.
+FIT_LABELS = ML_ROOT / "fit_labels.jsonl"
 MET_CSV = RAW / "met" / "MetObjects.csv"
 
 CATALOG = CURATED / "catalog.jsonl"
@@ -234,6 +237,15 @@ class TeacherConfig:
     lightness_weight: float = 0.5
     choice_weight: float = 0.5
     label_smoothing: float = 0.1
+    # The fit loss: the weight, and the temperature that turns the fit ratings into a target
+    # distribution over each rated top 10. With ratings for 2,000 feelings and teacher_params.json,
+    # weights 0, 12, 32, 64, 128, 256 gave tuning objectives 0.625, 0.687, 0.699, 0.704, 0.704,
+    # 0.700; tau 0.5 and 2 scored lower than 1.
+    fit_weight: float = 64.0
+    fit_tau: float = 1.0
+    # Rated groups per step, drawn at random. All groups in each step made an epoch twice as slow
+    # for a tuning objective only 0.001 higher.
+    fit_groups: int = 256
     val_fraction: float = 0.05
     heldout_paraphrase_fraction: float = 0.1
     # Training texts at or above this Qwen query cosine to an eval feeling are dropped. A read of
@@ -294,3 +306,8 @@ class ExportConfig:
     opset: int = 18
     max_model_bytes: int = 24 * 1024 * 1024
     max_tokens: int = 96
+    # The exposure penalty of feeling walls. Beta 0.02 cut the share of the top 1% of works from
+    # 26.5% to 16.9% of the walls of the tuning feelings, with no loss in blind ratings of the walls
+    # (paired mean change -0.011, interval -0.026 to +0.005). Damped rounds let the counts settle.
+    exposure_beta: float = 0.02
+    exposure_rounds: int = 6

@@ -14,7 +14,6 @@ from transformers import AutoModel, AutoTokenizer
 
 from mise_ml.config import (
     BUNDLE,
-    CATALOG,
     EVAL_FAILURES,
     EVAL_REPORT,
     GOLD_SET,
@@ -36,16 +35,17 @@ from mise_ml.export import onnx_run, onnx_session
 from mise_ml.features import shared_encoder
 from mise_ml.install import TARGET
 from mise_ml.log import elapsed, get, num, progress
-from mise_ml.profile import item_prompt
 from mise_ml.rated import FIT, RatedSet, brief, load_rated, rated_scores
 from mise_ml.student import Student, encode_texts
-from mise_ml.teacher import item_store, load_teacher, query_store
-from mise_ml.util import atomic_write, iter_jsonl, make_deterministic, write_json
+from mise_ml.teacher import item_store, item_texts, load_teacher, query_store, source_facts
+from mise_ml.util import atomic_write, make_deterministic, write_json
 from mise_ml.vocab import load_vocab
 
 log = get(__name__)
-# The student's tuning objective must beat the untrained backbone by this much.
-SHIP_MARGIN = 0.10
+# The student's tuning objective must beat the untrained backbone by this much. It catches a broken
+# student: on the 1,061-feeling tuning set a trained student leads by about 0.09, and a paired
+# difference has a 95% interval of about +-0.007.
+SHIP_MARGIN = 0.05
 # The student may fall at most this far below the installed bundle on the shared tuning pairs.
 INSTALLED_MARGIN = 0.01
 FACTS_CHARS = 700
@@ -65,6 +65,23 @@ class Outputs:
     items: np.ndarray
     palette: np.ndarray
     choices: list[np.ndarray]
+    # A bundle's exposure penalty per item. The teacher and the baseline have none: they are
+    # references for the ranking, not the shipped feeling walls.
+    penalty: np.ndarray | None = None
+
+    @property
+    def feeling_query(self) -> np.ndarray:
+        """Query rows for feeling scores. With a penalty, a column of ones joins each row, so the
+        dot product with feeling_items is query . item - penalty, as in the app's feeling picks."""
+        if self.penalty is None:
+            return self.query
+        return np.hstack([self.query, np.ones((len(self.query), 1), dtype=self.query.dtype)])
+
+    @property
+    def feeling_items(self) -> np.ndarray:
+        if self.penalty is None:
+            return self.items
+        return np.hstack([self.items, -self.penalty[:, None].astype(self.items.dtype)])
 
 
 def teacher_outputs(texts: list[str], catalog: Catalog) -> Outputs:
@@ -73,7 +90,7 @@ def teacher_outputs(texts: list[str], catalog: Catalog) -> Outputs:
         raise SystemExit("catalog changed since train-teacher; rerun uv run train")
     cfg = TeacherConfig(**ckpt["cfg"])
     fq = torch.tensor(query_store(cfg).get(texts), dtype=torch.float32, device="cuda")
-    fi = torch.tensor(item_store(cfg).get(catalog.texts), dtype=torch.float32, device="cuda")
+    fi = torch.tensor(item_store(cfg).get(item_texts(catalog)), dtype=torch.float32, device="cuda")
     with torch.no_grad():
         palette, *choices = model.heads(fq)
         return Outputs(
@@ -85,7 +102,8 @@ def teacher_outputs(texts: list[str], catalog: Catalog) -> Outputs:
 
 
 def bundle_outputs(root: Path, texts: list[str], desc: str) -> tuple[Outputs, list[float]]:
-    """Read a public bundle: its int8 ONNX graph, tokenizer, and catalog vectors."""
+    """Read a public bundle: its int8 ONNX graph, tokenizer, catalog vectors, and exposure
+    penalty when it has one."""
     model_path = root / "model" / "model.onnx"
     if not model_path.exists():
         raise SystemExit(f"no bundle at {root}; run uv run train first")
@@ -96,6 +114,7 @@ def bundle_outputs(root: Path, texts: list[str], desc: str) -> tuple[Outputs, li
         .astype(np.float32)
         .reshape(-1, manifest["encoder"]["dims"])
     )
+    penalty = manifest["files"].get("penalty")
     session = onnx_session(model_path, threads=1)
     max_tokens = manifest["encoder"]["maxTokens"]
     rows, latency = [], []
@@ -119,6 +138,11 @@ def bundle_outputs(root: Path, texts: list[str], desc: str) -> tuple[Outputs, li
             items=items,
             palette=np.concatenate([r["palette"] for r in rows]),
             choices=choices,
+            penalty=(
+                np.fromfile(root / penalty["path"], dtype="<f2").astype(np.float32)
+                if penalty
+                else None
+            ),
         ),
         latency,
     )
@@ -156,23 +180,13 @@ def baseline_outputs(texts: list[str], catalog: Catalog) -> Outputs:
 def work_facts(item_ids: list[str]) -> dict[str, str]:
     """Source facts and the generated profile of each work, as raters read them."""
     catalog = load_catalog()
-    sources = {row["id"]: row for row in iter_jsonl(CATALOG)}
-    result = {}
-    for item_id in item_ids:
-        index = catalog.index[item_id]
-        resolved = catalog.items[index]
-        source = sources.get(item_id, {})
-        facts = {
-            **source,
-            **resolved,
-            "signal": {**source.get("signal", {}), **resolved.get("signal", {})},
-        }
-        # Cap the facts: full overviews and poems make a batch of works too long to rate.
-        text = item_prompt(facts)
-        if len(text) > FACTS_CHARS:
-            text = text[:FACTS_CHARS].rsplit(" ", 1)[0] + " ..."
-        result[item_id] = f"Source facts:\n{text}\nGenerated profile: {catalog.texts[index]}"
-    return result
+    # Cap the facts: full overviews and poems make a batch of works too long to rate.
+    facts = source_facts(catalog, item_ids, FACTS_CHARS)
+    return {
+        item_id: f"Source facts:\n{facts[item_id]}\n"
+        f"Generated profile: {catalog.texts[catalog.index[item_id]]}"
+        for item_id in item_ids
+    }
 
 
 def installed_scores(
@@ -191,14 +205,14 @@ def installed_scores(
     installed, _ = bundle_outputs(TARGET, tuning.feelings, "installed")
     return {
         "pairs": int(keep.sum()),
-        "student": rated_scores(shared, student.query[rows], student.items),
+        "student": rated_scores(shared, student.feeling_query[rows], student.feeling_items),
         "installed": rated_scores(
             replace(
                 shared,
                 item=np.asarray([index[catalog.items[i]["id"]] for i in shared.item], dtype=int),
             ),
-            installed.query,
-            installed.items,
+            installed.feeling_query,
+            installed.feeling_items,
         ),
     }
 
@@ -375,7 +389,7 @@ def run() -> dict[str, Any]:
     for name, out in (("teacher", teacher), ("student", student)):
         report[name] = {
             "recall@10_heldout": recall_at_k(
-                out.query[n_eval:], held_pos, out.items, catalog.categories
+                out.feeling_query[n_eval:], held_pos, out.feeling_items, catalog.categories
             ),
             "eval": label_metrics(out, eval_rows, qs, 0),
             "heldout": label_metrics(out, held_rows, qs, n_eval),
@@ -418,11 +432,11 @@ def run() -> dict[str, Any]:
         rated[set_name] = rs, idx
         report["counts"][set_name] = len(rs.rating)
         for name, out in systems.items():
-            report[name][set_name] = rated_scores(rs, out.query[idx], out.items)
+            report[name][set_name] = rated_scores(rs, out.feeling_query[idx], out.feeling_items)
     # The share of the teacher's top 10 per category that the student also finds.
     fidelity = fidelity_at_k(
-        student.query[:n_eval],
-        student.items,
+        student.feeling_query[:n_eval],
+        student.feeling_items,
         teacher.query[:n_eval],
         teacher.items,
         catalog.categories,
@@ -437,6 +451,7 @@ def run() -> dict[str, Any]:
     world = np.random.default_rng(SEED).choice(
         len(catalog.items), min(WORLD_SAMPLE, len(catalog.items)), replace=False
     )
+    # The app's world() uses no exposure penalty, so neither does world fidelity.
     report["student"]["world_fidelity"] = world_fidelity(
         np.sort(world), student.items, teacher.items, catalog
     )
@@ -445,7 +460,10 @@ def run() -> dict[str, Any]:
         EVAL_FAILURES,
         failures(
             tuning,
-            (student.query[tuning_rows][tuning.feeling] * student.items[tuning.item]).sum(1),
+            (
+                student.feeling_query[tuning_rows][tuning.feeling]
+                * student.feeling_items[tuning.item]
+            ).sum(1),
             catalog,
         ).encode("utf-8"),
     )

@@ -89,6 +89,17 @@ def catalog_inputs(queries: bool = True) -> list[StampInput]:
     ]
 
 
+def teacher_item_inputs() -> list[StampInput]:
+    """The text that the teacher embeds for each work: source facts and profile."""
+    from mise_ml.data import load_catalog
+    from mise_ml.teacher import item_texts
+
+    paths = [c.CATALOG, c.RESOLVED, c.PROFILES]
+    if not all(p.is_file() for p in paths):
+        return paths
+    return [content(c.CATALOG, item_texts(load_catalog()), "teacher item texts")]
+
+
 def labels() -> Path:
     from mise_ml.vocab import labels_path, load_vocab
 
@@ -206,6 +217,7 @@ def bundle_files(root: Path = c.BUNDLE) -> list[Path]:
             "items.json",
             "vocab.json",
             "vectors.bin",
+            "penalty.bin",
             "search-index.json",
             "model/model.onnx",
             "model/config.json",
@@ -218,17 +230,18 @@ def bundle_files(root: Path = c.BUNDLE) -> list[Path]:
 
 def gate_files(root: Path) -> list[Path]:
     """The bundle files that eval reads to run the graph and rank the catalog."""
-    return [
-        root / name
-        for name in (
-            "manifest.json",
-            "vectors.bin",
-            "model/model.onnx",
-            "model/config.json",
-            "model/tokenizer.json",
-            "model/tokenizer_config.json",
-        )
+    names = [
+        "manifest.json",
+        "vectors.bin",
+        "model/model.onnx",
+        "model/config.json",
+        "model/tokenizer.json",
+        "model/tokenizer_config.json",
     ]
+    # An older installed bundle has no penalty; its manifest says so, and eval ranks without one.
+    if (root / "penalty.bin").is_file():
+        names.append("penalty.bin")
+    return [root / name for name in names]
 
 
 def source_outputs() -> list[Path]:
@@ -442,7 +455,9 @@ STEPS = {
             "train",
             lambda: [
                 *query_inputs(),
+                *teacher_item_inputs(),
                 selected(c.DISTILL, "text"),
+                c.FIT_LABELS,
                 c.TUNING_SET,
                 constants("SEED", "CATEGORIES"),
             ],
@@ -476,6 +491,8 @@ STEPS = {
             "train",
             lambda: [
                 *student_files(),
+                # The exposure penalty counts wins over the training texts in this file.
+                c.MODELS / "teacher_outputs.pt",
                 *query_inputs(),
                 *images(),
                 c.REPO_ROOT / "scripts" / "build-name-data.ts",
@@ -510,6 +527,8 @@ STEPS = {
             "train",
             lambda: [
                 *query_inputs(),
+                # The teacher's item vectors come from these texts.
+                *teacher_item_inputs(),
                 c.MODELS / "teacher.pt",
                 *student_files(),
                 *gate_files(c.BUNDLE),
@@ -521,7 +540,8 @@ STEPS = {
                 c.GOLD_SET,
                 constants("SEED", "CATEGORIES"),
             ],
-            c.TeacherConfig,
+            # The export settings set the exposure penalty that eval subtracts.
+            lambda: settings(c.TeacherConfig, c.ExportConfig),
             (*COMMON, "evaluate", "export", "student", "teacher", "features"),
             lambda: [c.EVAL_REPORT, c.EVAL_FAILURES],
             "evaluate:run",

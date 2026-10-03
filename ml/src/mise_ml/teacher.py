@@ -5,6 +5,7 @@ import gc
 import json
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -12,23 +13,37 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from mise_ml.config import ML_ROOT, MODELS, SEED, TEACHER_PARAMS, TUNING_SET, TeacherConfig
-from mise_ml.data import QuerySet, load_catalog, load_queries, recall_at_k
+from mise_ml.config import (
+    CATALOG,
+    FIT_LABELS,
+    ML_ROOT,
+    MODELS,
+    SEED,
+    TEACHER_PARAMS,
+    TUNING_SET,
+    TeacherConfig,
+)
+from mise_ml.data import Catalog, QuerySet, load_catalog, load_queries, recall_at_k
 from mise_ml.features import ITEM_TEMPLATE, QUERY_TEMPLATE, FeatureStore, shared_encoder
 from mise_ml.heads import ChoiceHeads, Mlp, palette_loss
 from mise_ml.log import elapsed, get, num, progress
+from mise_ml.profile import item_prompt
 from mise_ml.rated import brief as rated_brief
 from mise_ml.rated import load_rated, rated_scores
 from mise_ml.training import cosine_schedule
-from mise_ml.util import make_deterministic, write_json
+from mise_ml.util import iter_jsonl, make_deterministic, write_json
 from mise_ml.vocab import load_vocab
 
 log = get(__name__)
 CHECKPOINT = MODELS / "teacher.pt"
 OUTPUTS = MODELS / "teacher_outputs.pt"
-# On an RTX 5090 an epoch takes about 0.6 s at batch 1024, 1.0 s at 512, and 1.9 s at 256.
-# With 21.5 epochs on average, a trial takes about 25 s, so 50 trials take about 21 min.
-TRIAL_SECONDS = 25
+# The teacher embeds each work's source facts before its profile; facts and profile together
+# score higher on the tuning set than either alone. The cap keeps a long overview or poem from
+# pushing the profile past max_length.
+FACTS_CHARS = 700
+# On an RTX 5090 with the fit loss, an epoch takes about 1.6 s at batch 512. The last search of
+# 50 trials took 24 min, about 28 s a trial.
+TRIAL_SECONDS = 28
 TRIALS = 50
 
 
@@ -53,6 +68,33 @@ class Teacher(nn.Module):
 
     def embed_items(self, x: torch.Tensor) -> torch.Tensor:
         return self.embed(self.item, x)
+
+
+def source_facts(catalog: Catalog, item_ids: list[str], chars: int) -> dict[str, str]:
+    """The source facts of each work as the raters read them, cut to about `chars` characters."""
+    sources = {row["id"]: row for row in iter_jsonl(CATALOG)}
+    result = {}
+    for item_id in item_ids:
+        resolved = catalog.items[catalog.index[item_id]]
+        source = sources.get(item_id, {})
+        facts = {
+            **source,
+            **resolved,
+            "signal": {**source.get("signal", {}), **resolved.get("signal", {})},
+        }
+        text = item_prompt(facts)
+        if len(text) > chars:
+            text = text[:chars].rsplit(" ", 1)[0] + " ..."
+        result[item_id] = text
+    return result
+
+
+def item_texts(catalog: Catalog) -> list[str]:
+    """What the teacher embeds for each work: its source facts, then its profile."""
+    facts = source_facts(catalog, [it["id"] for it in catalog.items], FACTS_CHARS)
+    return [
+        f"{facts[it['id']]}\n{text}" for it, text in zip(catalog.items, catalog.texts, strict=True)
+    ]
 
 
 def query_store(cfg: TeacherConfig) -> FeatureStore:
@@ -100,6 +142,45 @@ def drop_near_eval(qs: QuerySet, fq: torch.Tensor, threshold: float) -> None:
     qs.split = np.where(near, "dropped", qs.split)
 
 
+def load_fit_groups(
+    path: Path, catalog: Catalog, qs: QuerySet
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The fit ratings as groups of one feeling and the rated works of one category: the qs row
+    of each group, its catalog rows (-1 pads a short group), and their ratings.
+
+    Only feelings in the train split count, so a feeling that drop_near_eval dropped, or a val or
+    eval feeling, never trains. A group whose works all share one rating has no order to learn.
+    """
+    row = {text: i for i, text in enumerate(qs.texts)}
+    train = set(qs.where("train").tolist())
+    groups: dict[tuple[int, int], list[tuple[int, float]]] = {}
+    outside, missing = set(), 0
+    for r in iter_jsonl(path):
+        q = row.get(r["feeling"], -1)
+        if q not in train:
+            outside.add(r["feeling"])
+            continue
+        if r["item_id"] not in catalog.index:
+            missing += 1
+            continue
+        item = catalog.index[r["item_id"]]
+        groups.setdefault((q, int(catalog.categories[item])), []).append((item, r["rating"]))
+    kept = [(k, g) for k, g in sorted(groups.items()) if len({rating for _, rating in g}) > 1]
+    width = max((len(g) for _, g in kept), default=1)
+    items = np.full((len(kept), width), -1, dtype=np.int64)
+    ratings = np.zeros((len(kept), width), dtype=np.float32)
+    for i, (_, g) in enumerate(kept):
+        items[i, : len(g)] = [item for item, _ in g]
+        ratings[i, : len(g)] = [rating for _, rating in g]
+    log.info(
+        f"fit ratings: {num(len(kept))} groups over {num(len({q for (q, _), _ in kept}))} train "
+        f"feelings; skipped {num(len(groups) - len(kept))} groups with one rating, "
+        f"{num(len(outside))} feelings outside the train split, and {num(missing)} pairs with a "
+        "work not in the catalog"
+    )
+    return np.array([q for (q, _), _ in kept], dtype=np.int64), items, ratings
+
+
 class Trainer:
     """Load the queries and cached features once, then train heads for one config or many."""
 
@@ -117,7 +198,7 @@ class Trainer:
         )
         dev = "cuda"
         self.fi = torch.tensor(
-            item_store(cfg).get(self.catalog.texts), dtype=torch.float32, device=dev
+            item_store(cfg).get(item_texts(self.catalog)), dtype=torch.float32, device=dev
         )
         self.fq = torch.tensor(query_store(cfg).get(self.qs.texts), dtype=torch.float32, device=dev)
         drop_near_eval(self.qs, self.fq, cfg.near_eval_cosine)
@@ -136,6 +217,13 @@ class Trainer:
         self.palette = t(self.qs.palette)
         self.has_palette = t(self.qs.has_palette)
         self.choices = [t(self.qs.light), t(self.qs.typeface)]
+        fit_query, fit_items, fit_rating = load_fit_groups(FIT_LABELS, self.catalog, self.qs)
+        self.fit_query, self.fit_items, self.fit_rating, self.fit_pad = (
+            t(fit_query),
+            t(np.maximum(fit_items, 0)),
+            t(fit_rating),
+            t(fit_items < 0),
+        )
         self.build(cfg)
 
     def build(self, cfg: TeacherConfig) -> None:
@@ -173,6 +261,26 @@ class Trainer:
                     logits[m], y[m], label_smoothing=smoothing
                 )
         return out
+
+    def fit_loss(self, groups: torch.Tensor) -> torch.Tensor:
+        """Teach the teacher to order each rated top 10 by the judge's fit ratings.
+
+        ListNet: a softmax cross-entropy from the teacher's scores to targets proportional to
+        exp(rating / fit_tau). One listwise term per group uses the whole graded order of the 10
+        works, which is what picks the best 2 on a wall. The softmax ignores a shift of all
+        ratings in a group, so a lenient judge does not matter. The scores keep the retrieval
+        temperature.
+        """
+        cfg = self.cfg
+        pad = self.fit_pad[groups]
+        q = self.model.embed_queries(self.fq[self.fit_query[groups]])
+        # Embed each rated work once; inverse maps the groups back to those rows.
+        unique, inverse = self.fit_items[groups].unique(return_inverse=True)
+        items = self.model.embed_items(self.fi[unique])[inverse]
+        logits = (q[:, None] * items).sum(-1) / cfg.temperature
+        target = (self.fit_rating[groups] / cfg.fit_tau).masked_fill(pad, -torch.inf).softmax(-1)
+        log_p = logits.masked_fill(pad, -torch.inf).log_softmax(-1)
+        return cfg.fit_weight * -(target * log_p.masked_fill(pad, 0)).sum(-1).mean()
 
     @torch.no_grad()
     def validate(self, rows: torch.Tensor) -> dict[str, float]:
@@ -227,6 +335,9 @@ class Trainer:
             total = 0.0
             for i, step in enumerate(bar, 1):
                 loss = sum(self.losses(perm[step : step + cfg.batch_size]).values())
+                if cfg.fit_weight and len(self.fit_query):
+                    groups = torch.randperm(len(self.fit_query), device="cuda", generator=gen)
+                    loss = loss + self.fit_loss(groups[: cfg.fit_groups])
                 opt.zero_grad(set_to_none=True)
                 loss.backward()
                 opt.step()

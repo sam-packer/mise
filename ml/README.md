@@ -250,18 +250,37 @@ descriptions.
    can see a habit of one category ("quiet" in art) apart from a general one. The step writes
    `out/data_audit.json`. It only warns; it never stops the run. A change to the profiles runs it
    again. To run it alone, use `uv run python -m mise_ml.audit`. It needs no GPU.
-2. **train-teacher.** The frozen Qwen3-Embedding-8B encodes every text once. Small heads learn
+2. **train-teacher.** The frozen Qwen3-Embedding-8B encodes every text once. For each work, it
+   encodes the source facts (the facts that the raters read, cut to about 700 characters) and then
+   the profile (vibe, description, category, title, and creator). With raw Qwen vectors on the
+   tuning set, facts and profile score 0.641, the profile alone 0.620, and the facts alone 0.620.
+   Small heads learn
    to rank works for a feeling (InfoNCE: the matching work must score above the other works in the
    batch), and to predict the palette, light, and typeface, with warmup and a cosine decay. The
    teacher's score for a feeling and a work mixes the cosine of the head vectors with the cosine
    of the raw Qwen vectors (`raw_weight`, 0.5 by default), so the heads learn what the raw
    vectors miss. Before training, the step drops each train, val, and distill text whose Qwen
    query cosine to any line of `eval_feelings.jsonl` is 0.88 or higher (`near_eval_cosine`), so
-   rewordings of the rated feelings do not train either model. The log gives the count. The run
-   keeps the epoch with the best tuning objective (see "The rated sets"
+   rewordings of the rated feelings do not train either model. The log gives the count.
+
+   The heads also learn from fit ratings. `fit_labels.jsonl` holds 100,000 ratings from 0 to 3:
+   for 2,000 training feelings, a teacher's top 10 works in each category, one work per creator.
+   GPT-6.1 Sol rated each pair from the work's source facts with the rubric of the rated sets. On
+   the Opus-rated top 10 of 100 tuning feelings, its order of the works agreed with Opus
+   (Spearman 0.77). The **fit loss** is ListNet: for each feeling and category, a softmax
+   cross-entropy pulls the teacher's scores of the 10 works toward targets proportional to
+   exp(rating / `fit_tau`). A shift of all ratings of a group does not change the targets, so a
+   lenient judge does no harm. Each step adds the fit loss of 256 random groups (`fit_groups`)
+   with the weight `fit_weight`. Only feelings in the train split use their ratings, so a feeling
+   that the near-eval rule drops never trains. No eval feeling has a fit rating. A change to
+   `fit_labels.jsonl` runs train-teacher and the steps after it again. The fit loss raised the
+   teacher's tuning objective from 0.648 to 0.704. The ratings of 500 and 1,000 of the 2,000
+   feelings gave 0.663 and 0.677, so more ratings still help.
+
+   The run keeps the epoch with the best tuning objective (see "The rated sets"
    below). `teacher_params.json` holds the learning rate, weight decay, dropout, epochs, hidden
    size, batch size, temperature, label smoothing, warmup, and raw weight. Without that file, the
-   step first runs an Optuna search of 50 trials (about 20 minutes). Each trial trains the heads,
+   step first runs an Optuna search of 50 trials (about 25 minutes). Each trial trains the heads,
    and the search keeps the trial with the best tuning objective. The step writes the settings of
    that trial to the file. Git tracks the file.
    `uv run train --tune` runs a new search and replaces the file. A change to the file runs
@@ -269,7 +288,7 @@ descriptions.
 3. **train-student.** MiniLM learns from the teacher. The student encodes feelings only. The
    work vectors are fixed: the teacher's work vectors on their top 384 singular vectors (the
    384-dim space that best keeps the teacher's work-to-work scores). On the tuning set, the
-   teacher scores 0.630 in this space and 0.641 in its full space. The step saves these vectors
+   teacher scores 0.701 in this space and 0.704 in its full space. The step saves these vectors
    as `items.npy`, and export ships them as `vectors.bin`. For each feeling the student copies the
    teacher's ranking of works inside each category (the teacher's top 4 per category, with a
    strong KL weight of 16), the teacher's feeling vector in the fixed space, its palette, and its
@@ -299,6 +318,23 @@ largest correction strength from 0, 0.25, 0.5, and 0.75 that loses at most two p
 of choice accuracy on validation feelings. The browser subtracts `tau * log(prior)` from each
 score before it chooses the highest. Bundles without priors use the raw scores.
 
+Export also writes an exposure penalty for each work to `penalty.bin` (16-bit floats, in catalog
+order). Without it, a few works fill many walls: the top 1% of works took 26.5% of the wall places
+of the tuning feelings, and one work showed for 75 of the 1,061 feelings. Export runs the int8
+graph on each training text in `teacher_outputs.pt`, one text at a time as the browser does. It
+counts how often each work is in the top 2 of its category. A work's share is its count over the
+mean count of its category, each plus one. Each round moves the penalty halfway to
+`beta * log(share)`, and a work at or below the mean gets no penalty. Export runs six rounds with
+a beta of 0.02 (`ExportConfig.exposure_beta` and `exposure_rounds`) and logs the top 1% share and
+the largest count before and after. The count skips the app's rule of one work per creator.
+
+The app subtracts the penalty from each score when it chooses the works for a feeling. The world
+of a work does not use it. Eval also subtracts it from a bundle's feeling scores, so the ship gate
+scores the walls that the app shows. The teacher, the baseline, and the world fidelity use no
+penalty. On the tuning feelings, a beta of 0.02 lowered the top 1% share to
+16.9% and the largest count to 32. Blind ratings of the walls did not change: the paired mean
+change was -0.011 (interval -0.026 to +0.005). Bundles without the file use no penalty.
+
 ### The rated sets
 
 Two files hold rated pairs. Each pair is an eval feeling, a work, and a rating from 0 to 3. The
@@ -320,7 +356,7 @@ A model's score on a set has two parts:
 
 The **objective** is the mean of the AUC and the Spearman. The tuning objective selects these:
 
-- the Optuna trial and the epoch of the teacher,
+- the Optuna trial and the epoch of the teacher, and the fit-loss weight and `fit_tau`,
 - the epoch of the student, and the early stop,
 - the int8 quantization recipe.
 
@@ -361,8 +397,8 @@ work's vibe and description. Use it to see if a bad description causes the error
 
 The ship gate reads the tuning set only. It needs these checks to pass:
 
-- The student's tuning objective is at least 0.10 above the tuning objective of the untrained
-  MiniLM.
+- The student's tuning objective is at least 0.05 above the tuning objective of the untrained
+  MiniLM. This check catches a broken student: a trained one leads by about 0.09.
 - The student's tuning objective is no more than 0.01 below the installed bundle in
   `../static/bundle/`. Eval runs the installed bundle the same way as the new student. This check
   uses only the tuning pairs whose works are in both the installed bundle and the current

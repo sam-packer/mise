@@ -90,6 +90,7 @@ export function createSearch(
 	info: CatalogInfo,
 	items: Item[],
 	vectors: Float32Array,
+	penalty: Float32Array = new Float32Array(items.length),
 	anchors: Anchor[] = [],
 	anchorVectors = new Float32Array(0),
 	representatives: Record<string, number> = {}
@@ -97,6 +98,7 @@ export function createSearch(
 	const dims = info.dims;
 	if (items.length !== info.counts.items || vectors.length !== items.length * dims)
 		throw new Error('vectors.bin does not match items');
+	if (penalty.length !== items.length) throw new Error('penalty.bin does not match items');
 	if (anchorVectors.length !== anchors.length * dims)
 		throw new Error('anchors.bin does not match anchors');
 	const byCategory = new Map<Category, number[]>(CATEGORIES.map((c) => [c, []]));
@@ -111,16 +113,20 @@ export function createSearch(
 
 	/**
 	 * Return the `count(category)` items closest to `q` in each category, best first.
-	 * Skip rows that `skip` rejects. Take one item per creator in a category.
+	 * Skip rows that `skip` rejects. Take one item per creator in a category. With `penalized`,
+	 * subtract each item's exposure penalty from its score.
 	 */
 	function nearest(
 		q: Float32Array,
 		count: (category: Category) => number,
-		skip: (i: number) => boolean
+		skip: (i: number) => boolean,
+		penalized = false
 	): Record<Category, Item[]> {
 		const found = {} as Record<Category, Item[]>;
 		for (const [category, rows] of byCategory) {
-			const scored = rows.filter((i) => !skip(i)).map((i) => ({ i, s: dot(q, vectors, i * dims) }));
+			const scored = rows
+				.filter((i) => !skip(i))
+				.map((i) => ({ i, s: dot(q, vectors, i * dims) - (penalized ? penalty[i] : 0) }));
 			// A stable sort keeps catalog order for equal scores, so the first best row wins a tie.
 			scored.sort((a, b) => b.s - a.s);
 			const creators = new Set<string>();
@@ -140,7 +146,8 @@ export function createSearch(
 			q,
 			() => PICKS_EACH,
 			(i) =>
-				anchor !== null && (items[i].creator === anchor.creator || items[i].title === anchor.title)
+				anchor !== null && (items[i].creator === anchor.creator || items[i].title === anchor.title),
+			true
 		);
 		return shuffle(
 			CATEGORIES.flatMap((c) => near[c]),
@@ -176,6 +183,7 @@ export function createSearch(
 			if (row === undefined) throw new Error('that work is not in the catalog');
 			const item = items[row];
 			const skip = new Set(exclude);
+			// No exposure penalty: it was only measured on feeling walls.
 			const near = nearest(
 				vectors.subarray(row * dims, (row + 1) * dims),
 				(c) => (c === item.category ? WORLD_SAME : WORLD_OTHER),
