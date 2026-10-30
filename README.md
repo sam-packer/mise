@@ -45,7 +45,7 @@ preview hides the play button.
 
 | Part             | What I used                                                                                     |
 | ---------------- | ----------------------------------------------------------------------------------------------- |
-| Front end        | SvelteKit 2 and Svelte 5 (runes), TypeScript, Tailwind CSS 4                                    |
+| Front end        | SvelteKit 3 and Svelte 5 (runes), TypeScript, Tailwind CSS 4                                    |
 | In-browser model | ONNX Runtime Web and Hugging Face tokenizers, in a web worker                                   |
 | Hosting          | Cloudflare Workers, with Workers KV for share links and R2 for the model and images             |
 | Model training   | Python with uv, PyTorch, Hugging Face Transformers, and ONNX (see [ml/README.md](ml/README.md)) |
