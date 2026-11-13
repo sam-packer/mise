@@ -1,5 +1,5 @@
-// Run every sample feeling in src/lib/examples.ts through a bundle with the browser worker's engine,
-// and write the rooms into the bundle: samples/<code>.json holds the mood and the world behind each of
+// Run the sample feelings of every season in src/lib/examples.ts through a bundle with the browser
+// worker's engine, and write the rooms into the bundle: samples/<code>.json holds the mood and the world behind each of
 // its tiles, and samples/index.json names the file and the palette of each sample. The page shows a
 // sample's room from its file while the model loads. The ML export runs this for each new bundle.
 // Run: bun scripts/build-samples.ts <bundle folder>
@@ -28,7 +28,7 @@ export async function writeSamples(bundle: string) {
 	const engine = await createMoodEngine(io);
 	const index: SampleIndex = {};
 	const files = new Map<string, Sample>();
-	for (const text of EXAMPLES) {
+	for (const text of Object.values(EXAMPLES).flat()) {
 		// A fixed time keeps the files the same from run to run.
 		const mood = { ...(await engine.infer(text)), ms: 0 };
 		const worlds: Sample['worlds'] = {};

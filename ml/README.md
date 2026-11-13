@@ -302,8 +302,8 @@ descriptions.
    weights instead of 32-bit). It tries a few quantization recipes and keeps the one with the best
    tuning objective under 24 MiB. It also writes the fixed item vectors as 16-bit floats and the name
    data for the "in the key of" matcher. Last, it runs `../scripts/build-samples.ts` on the
-   finished bundle. That script runs each sample feeling of the app (`../src/lib/examples.ts`)
-   through the browser's engine and ONNX Runtime Web. It writes `samples/<code>.json` for each
+   finished bundle. That script runs each sample feeling of the app, of every season
+   (`../src/lib/examples.ts`), through the browser's engine and ONNX Runtime Web. It writes `samples/<code>.json` for each
    sample: the mood, and the world behind each of its tiles. `samples/index.json` gives the file
    and the palette of each sample. The page shows a sample's room from its file before the model
    loads. A change to the samples or to the app's search code runs export again.

@@ -20,7 +20,7 @@ You can describe that feeling in a sentence, and mise gives you a place to start
 ## How it works for the user
 
 1. Open the site. Type a feeling in the text box, or click one of the sample feelings under it.
-   Click the refresh button to see other samples.
+   Click the refresh button to see other samples. The samples change with the season where you are.
 2. Press Enter. A soft pulse shows while the model loads. The page fades to the new palette, ten
    tiles rise in (two of each: artworks, films, songs, poems, and books). A sample feeling does not
    wait for the model. Its room is ready before the model loads.
@@ -96,8 +96,14 @@ The search runs in your browser. A small language model (23 MB) turns your sente
 numbers and compares it with the numbers for each work in the catalog. The same model also picks the
 palette, the light, and the typeface. After the first load, a search takes a fraction of a second. The server only stores the sentence and its palette for the share link.
 
-The sample feelings under the text box do not need the model. When the pipeline exports a bundle,
-`scripts/build-samples.ts` runs each sample through the same engine and runtime as the browser. It
+The sample feelings under the text box come in four sets of 100, one for each season
+(`src/lib/examples.ts`). Each season lasts three whole months, and winter starts in December in the
+north and in June in the south. Cloudflare gives the Worker your latitude, and its sign tells the
+hemisphere. Some samples belong to their season, like the first snow or a heatwave. They name no
+month and no dated holiday, so they fit both hemispheres.
+
+The samples do not need the model. When the pipeline exports a bundle, `scripts/build-samples.ts`
+runs each sample of every season through the same engine and runtime as the browser. It
 writes one small file per sample into the bundle's `samples/` folder: the mood, and the world behind
 each of its ten tiles. While the page is idle, it downloads the file of each sample on screen (about
 16 KB). A click on a sample, or the same text typed in, shows the room from that file at once. A

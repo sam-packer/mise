@@ -21,7 +21,7 @@
 	} from '#lib/color/oklab.js';
 	import { applyTokens, tweenTokens } from '#lib/color/tween.js';
 	import { loadTypeface, type LoadedFace } from '#lib/components/typeface.js';
-	import { EXAMPLES } from '#lib/examples.js';
+	import { EXAMPLES, seasonOn } from '#lib/examples.js';
 	import MoodLine from '#lib/components/MoodLine.svelte';
 	import Wall from '#lib/components/Wall.svelte';
 	import WorldView from '#lib/components/World.svelte';
@@ -44,6 +44,8 @@
 	let text = $state(untrack(() => data.text));
 	let mood = $state<Mood | null>(null);
 	let waiting = $state(false);
+	/** The sample feelings of the season where the visitor is. */
+	const examples = $derived(EXAMPLES[seasonOn(new Date(), data.south)]);
 	/** The example feeling that the empty line shows. */
 	let example = $state('');
 	let traveling = $state(false);
@@ -191,6 +193,7 @@
 		// The router does not apply a history entry's state on the first page load, so the page shows
 		// the path of the URL. Clear the state left in the entry, which may name another floor.
 		// The router accepts shallow navigation only after it starts, just after this callback.
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- the empty URL is the current one
 		if (nav.type === 'enter') queueMicrotask(() => void goto('', { shallow: true, replace: true }));
 		shownTrail = page.state.trail ?? data.trail;
 		void show(data.text);
@@ -632,7 +635,7 @@
 			<MoodLine
 				bind:value={text}
 				bind:ref={lineRef}
-				examples={EXAMPLES}
+				{examples}
 				boxed={mood !== null}
 				{settled}
 				{waiting}
